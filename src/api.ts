@@ -126,7 +126,7 @@ async function handleAccount(req: IncomingMessage, res: ServerResponse, adapters
 
   if (action === 'browser') {
     try {
-      send(res, 200, { brand, ...adapter.startBrowserLogin() })
+      send(res, 200, { brand, ...(await adapter.startBrowserLogin()) })
     } catch (error) {
       send(res, 400, { error: error instanceof Error ? error.message : String(error) })
     }
@@ -134,7 +134,7 @@ async function handleAccount(req: IncomingMessage, res: ServerResponse, adapters
   }
 
   if (action === 'browser-cancel') {
-    adapter.cancelBrowserLogin()
+    await adapter.cancelBrowserLogin()
     send(res, 200, { brand, ...adapter.browserLoginStatus() })
     return
   }

@@ -11,10 +11,13 @@ src/
   api.ts             /models、/status、/account/browser、/account
   auth.ts            凭据优先级、桌面文件读取、小浣熊刷新与回写
   account-store.ts   插件自己的凭据文件（原子写、0600、串行读改写）
-  browser-login.ts   Chromium 启动、DevTools 连接、登录轮询与凭据提取
+  login-page.ts      本地登录页：随机端口/路径、二维码下发、状态轮询、可选绑手机
+  qr.ts              零依赖二维码（byte 模式、纠错 M、版本 1–10）
+  loomy-login.ts     Loomy 微信扫码：uuid、长轮询、讯飞账号 HMAC 接口
+  raccoon-login.ts   小浣熊扫码：本地 code、扫码页 URL、2 秒轮询
   account-profile.ts 小浣熊账号展示字段
-  loomy.ts           Loomy 目录 / 积分 / 流式调用 / 浏览器登录
-  raccoon.ts         小浣熊目录 / 余额 / 流式调用 / 浏览器登录
+  loomy.ts           Loomy 目录 / 积分 / 流式调用
+  raccoon.ts         小浣熊目录 / 余额 / 流式调用
   catalog.ts         目录解析、模型缓存
   wire.ts            OpenAI 兼容 SSE、工具调用、usage
   config.ts          volatile 配置与 live 读取
@@ -22,55 +25,60 @@ client.js            设置页（ModuleLoader bundle，无构建步骤）
 test/                vitest，不访问真实上游
 ```
 
-## 浏览器登录
+## 扫码登录
 
-### 启动与连接
+两条链路都**没有回调地址**，也不读取日常浏览器的 Cookie。宿主在 `127.0.0.1` 起一个临时
+登录页，页面只显示二维码与状态；凭据由宿主侧轮询拿到，不经过页面脚本。
 
-`BrowserLoginFlow.start()` 同步返回状态，后台执行：
+### 本地登录页（`login-page.ts`）
 
-1. 按 `DSH_LLM_ADAPTERS_BROWSER` → Edge → Chrome → Brave → Chromium 的顺序查找可执行文件。
-2. 用 `mkdtemp()` 建临时用户目录，启动
-   `--remote-debugging-port=0 --user-data-dir=<tmp> --disable-extensions --new-window <loginUrl>`。
-3. 轮询 `<tmp>/DevToolsActivePort`，拿到端口与浏览器级 WebSocket 路径后用全局 `WebSocket` 连接。
-4. 通过 `Target.getTargets` 找页面，`Target.attachToTarget(flatten: true)` 建会话，启用
-   `Runtime` 与 `Network`。
+`startLoginPage()` 在 `127.0.0.1:0` 上监听，路径带 32 位随机前缀，**先返回 URL**，二维码在
+后台准备（Loomy 需要先拉微信授权页与图片）。返回后：
 
-要求 Node 22+（全局 WebSocket）。浏览器窗口必须是 Chromium 内核；Firefox/Safari 没有这套协议。
+- `GET /<nonce>/login` 返回单文件页面；二维码可能在准备中，页面每 1.2 秒轮询状态。
+- `GET /<nonce>/status` 触发一次 provider 轮询。同一时刻只允许一个轮询在飞；Loomy 的长轮询
+  可能占用 40 秒，第二个请求直接返回当前状态。二维码只下发一次，之后页面自己保留。
+- 可选绑手机：`POST /<nonce>/send`、`POST /<nonce>/verify`。手机号与验证码只在宿主内存里，
+  页面拿不到 `rcode` / `msgid` / `session`。
+- 5 分钟超时；成功后页面保持 60 秒再关服务器，用户可以读到「登录成功」。
+- `close()` 关闭监听并 `closeAllConnections()`，不会因为一个挂起的长轮询卡住取消。
 
-### 轮询与“回调”
+`POST /account` 的 `browser` 动作只负责启动页面并返回 URL；设置页在点击手势里
+`window.open(url)`，被拦截时卡片上的「重新打开登录页」仍可用。设置页轮询
+`GET /account/browser?brand=...`，收到 `running:false, signedIn:true` 后重读 `/status`。
 
-没有 localhost 回调地址。每 1.5 秒：
+### Loomy（`loomy-login.ts`）
 
-- 对 URL 命中 `hosts` 的页面执行 provider 的 `probe`（读取 localStorage / document.cookie，
-  Loomy 还会请求 `/api/workspace/auth/me`）。
-- 用 `Storage.getCookies` 收集 `cookieDomains` 域下的 Cookie。
-- 从 `Network.responseReceived` + `loadingFinished` + `getResponseBody` 收集登录接口返回的
-  JSON（URL 匹配 auth/login/token/session，最多 20 条）。
+1. 生成 `state`，请求 `open.weixin.qq.com/connect/qrconnect`（`appid` / 官方
+   `redirect_uri` / `scope=snsapi_login`），从 HTML 里提取二维码 `uuid`。
+2. 下载 `connect/qrcode/<uuid>`（JPEG）并内联成 data URL。
+3. 长轮询 `long.open.weixin.qq.com/connect/l/qrconnect`：`408` 待扫码、`404` 已扫码待确认、
+   `405` 已确认（这一帧带 `wx_code`）、`403` 取消、`402` 失效。
+4. `wx_code` → `/login/thirdAccount/bind/auth` 换 `rcode` 与 `bind`。`bind=1` 走
+   `/bind/skip` 直接换 `session`；`bind=0` 显示绑手机表单，走 `/bind/sendMsg` +
+   `/bind/checkCode`。
+5. 讯飞账号接口用 HMAC-SHA1 的 9 段签名，认证头是 `account {ak}:{sig}`。请求体**只序列化
+   一次**，签名与发送共用同一字符串；`base.ua` 固定为 `Loomy|Desktop|Electron|macOS`。
 
-所有候选去重后交给 `resolve()`：逐个向模型网关验证，第一个通过的就是登录凭据。只有
-`resolve()` 返回账号时才调用 `save()` 写入存储；随后关闭浏览器、删除临时目录，状态变为
-`done`。设置页轮询 `GET /account/browser?brand=...` 收到 `running:false, signedIn:true`
-后再拉一次 `/status`。
+`redirect_uri` 指向的官方回调页本身是 404，但链路不加载它：`code` 来自长轮询。不要把它改成
+`127.0.0.1`，微信会校验域名白名单。
+
+### 小浣熊（`raccoon-login.ts`）
+
+1. 生成 32 位 hex `code`（官方网页版是时间戳 + 随机串，服务端接受任意自造值）。
+2. 二维码内容是 `https://xiaohuanxiong.com/login/mp?code=<code>&appname=小浣熊官网`。
+3. 每 2 秒 `POST /api/web/auth/v1/login_with_qrcode_code`（`qrcode_code`）；`pending` /
+   `logging` / `canceled` / `success`，成功后拿 `access_token` + `refresh_token`。
+4. 刷新令牌由 `RaccoonAuth` 正常轮换；本流程只负责首次登录。
+
+不走官方桌面端的 `office-raccoon://auth/callback`，也不改网页里写死的回调地址。
 
 ### 失败与清理
 
-- 默认 5 分钟超时。窗口被用户关闭、浏览器退出、没有端口文件都会进入 `failed`。
-- `cancel()` 立即把状态置为 `cancelled`，关闭驱动；后台循环检查 `cancelled` 后退出。
-- 结束时先 `Browser.close`，再 `child.kill()`，临时目录最多重试删除 8 次（Windows 句柄释放慢，
-  一次 `rm` 会留下登录 Cookie）。
-- 插件卸载时 `LocalAdapter.close()` 会取消仍在运行的流程。
-
-### Provider 的提取与校验
-
-- **Loomy**：扫描 localStorage、Cookie；`resolve` 用 `loomyGatewaySessionValid()` 请求
-  `/models`，要求返回模型数组。网关对无效 token 常回 200 + 业务错误码，所以不能只看 HTTP 状态。
-  通过后用 `/userinfo/query/baseInfo` 补昵称（失败忽略）。
-- **小浣熊**：只接受 JWT 形状的值；`raccoonAccessTokenValid()` 请求 `model_catalog` 且要求
-  `code === 0`。refresh token 取另一个 JWT、过期时间最远的那个
-  （`raccoonRefreshCandidate()`），写入插件存储后由 `RaccoonAuth` 正常轮换。
-
-Loomy 网页登录可能只产生网页会话，网关不接受。此时 `resolve` 全部失败，流程以
-`timeout`/「没有拿到可用的模型调用凭据」结束，不写入任何凭据。
+- 超时、二维码失效、用户取消都会终止页面轮询并把状态写进 `LoginStatus`；设置页显示原因。
+- 取消/插件卸载时 `close()` 关闭服务器；正在进行的 provider 轮询即使稍后返回，也不会再写入
+  凭据（`advance()` 在落定前检查 `terminal`）。
+- 登录页的 QR 与状态接口不带任何令牌；账号写入仍走 `AccountStore`。
 
 ## 凭据与刷新
 
@@ -95,7 +103,7 @@ Loomy 没有 refresh token；插件存储里按登录时间 + 14 天估算到期
 | --- | --- |
 | `GET /api/llm-adapters/models?brand=` | 实时目录 + 开关 / 窗口，`fresh=1` 清缓存 |
 | `GET /api/llm-adapters/status?brand=` | 登录状态、到期时间、额度 |
-| `GET /api/llm-adapters/account/browser?brand=` | 浏览器登录进度 |
+| `GET /api/llm-adapters/account/browser?brand=` | 扫码登录进度（含本地登录页 URL） |
 | `POST /api/llm-adapters/account` | `browser` / `browser-cancel` / `logout` |
 
 写操作在 body 里带 `brand`，URL 不承载写目标。配置写入仍走宿主 `configForms` 的修订栅栏，
@@ -120,16 +128,17 @@ npm test
 npm run build
 ```
 
-`vitest` 覆盖目录解析、浏览器流程（假驱动）、凭据存储与并发、凭据优先级、刷新回写、SSE 与
-工具调用、设置 API。浏览器登录的单元测试不启动真实浏览器；需要真机验证时，手动点一次
-「打开浏览器登录」，确认窗口、接回、模型列表与一次对话。
+`vitest` 覆盖目录解析、登录页状态机、Loomy 长轮询与扫码绑定、小浣熊扫码轮询、凭据存储与
+并发、凭据优先级、刷新回写、SSE 与工具调用、设置 API。登录相关的测试全部注入假 `fetch`，
+不访问真实上游，也不启动浏览器。需要真机验证时，手动点一次「打开扫码登录」，确认二维码、
+手机确认后的接回、模型列表与一次对话。
 
 ## 易变点
 
-- 浏览器登录依赖官方页面的登录实现：localStorage 键名、Cookie 名、登录接口路径。页面改版后
-  先检查 `browser-login.ts` 的两个 probe 与 auth 响应过滤。
-- Loomy 账号服务的签名常量（若将来改回账号密码/短信路径）与网页会话格式；当前代码只校验
-  网关，不解析网页会话。
-- 小浣熊 `auth.json` 字段名与 refresh 单次使用语义。
+- Loomy 依赖微信授权页的 HTML 里仍内嵌 `/connect/qrcode/<uuid>`，以及讯飞账号端点的签名规则
+  和 `accessKeyId` / `accessKeySecret` / `appId` 常量。页面改版先看 `extractWechatUuid()`。
+- 小浣熊依赖扫码页 URL 形态、`login_with_qrcode_code` 的状态值与 `auth.json` 字段名；扫码页
+  或状态值改名会使二维码扫不出结果。
+- 小浣熊 refresh 仍是单次使用；Rotated pair 必须原子回写。
 - 目录字段：Loomy 的倍率在展示名称里，小浣熊的 `billing_*` / `params.*` 可能改名。
 - 图片能力不能只信标签；小浣熊使用 `RACCOON_MEASURED_VISION`，Loomy 以目录 capabilities 为准。

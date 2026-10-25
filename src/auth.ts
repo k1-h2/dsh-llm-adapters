@@ -186,7 +186,7 @@ export class LoomyAuth {
     const explicit = explicitPath(this.configuredPath()) ?? explicitPath(process.env.LOOMY_AUTH_FILE)
     const file = explicit ?? await discoverLoomySession()
     if (file === undefined) {
-      return { error: '未找到 Loomy 登录态。请在设置页点「打开浏览器登录」，或启动 Loomy 客户端并完成登录；若客户端装在非标准位置，可在高级设置里填写 auth-session.json 的路径。' }
+      return { error: '未找到 Loomy 登录态。请在设置页点「打开扫码登录」，或启动 Loomy 客户端并完成登录；若客户端装在非标准位置，可在高级设置里填写 auth-session.json 的路径。' }
     }
     const raw = await readJson(file)
     if (raw === undefined) return { path: file, kind: 'file', error: `无法读取 Loomy 登录态文件：${file}` }
@@ -340,7 +340,7 @@ export class RaccoonAuth {
     }
     const file = this.path()
     if (!(await exists(file))) {
-      return { path: file, kind: 'file', error: '未登录小浣熊。请用浏览器登录，或启动小浣熊桌面端完成登录。' }
+      return { path: file, kind: 'file', error: '未登录小浣熊。请用浏览器扫码登录，或启动小浣熊桌面端完成登录。' }
     }
     const raw = await readJson(file)
     if (raw === undefined) return { path: file, kind: 'file', error: `无法读取小浣熊登录态文件：${file}` }
@@ -378,7 +378,7 @@ export class RaccoonAuth {
     const now = Date.now()
     const accessValid = accessFacts.expiresAt !== undefined && accessFacts.expiresAt > now + 30_000
     const refreshValid = refreshFacts.expiresAt !== undefined && refreshFacts.expiresAt > now + 30_000
-    // A browser-login token is opaque to us (no JWT claims) but the gateway
+    // A QR-login token is opaque to us (no JWT claims) but the gateway
     // already accepted it when the flow stored it, so it counts as signed in.
     const opaqueAccess = token.access !== undefined && accessFacts.expiresAt === undefined
     const signedIn = opaqueAccess && loaded.kind === 'account'
@@ -407,7 +407,7 @@ export class RaccoonAuth {
         ? {}
         : {
             error: sourceKind === 'account'
-              ? '小浣熊登录已过期，请重新用浏览器登录。'
+              ? '小浣熊登录已过期，请重新用浏览器扫码登录。'
               : '小浣熊登录态已过期。请打开小浣熊桌面端重新登录。',
           },
     }
