@@ -254,7 +254,7 @@ window.__ModuleLoader__.load({
       intro: { margin: '0', opacity: 0.72, lineHeight: 1.55, fontSize: '0.92em' },
       bar: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' },
       btn: { padding: '6px 12px', borderRadius: '7px', border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.35))', background: 'transparent', color: 'inherit', cursor: 'pointer', font: 'inherit', fontSize: '0.88em' },
-      btnPrimary: { borderColor: 'var(--dsw-alias-brand-primary, #4c6ef5)', background: 'var(--dsw-alias-brand-primary, #4c6ef5)', color: '#fff' },
+      btnPrimary: { border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.45))', background: '#0b0b0b', color: '#fff', fontWeight: 500 },
       btnAlert: { border: '1px solid var(--dsw-alias-label-danger, #e03131)', color: 'var(--dsw-alias-label-danger, #e03131)' },
       loginBox: { display: 'flex', flexDirection: 'column', gap: '10px', padding: '12px 14px', borderRadius: '10px', border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.25))' },
       h4: { margin: 0, fontSize: '0.92em' },
@@ -576,7 +576,7 @@ window.__ModuleLoader__.load({
         h('div', { style: css.note }, brand.id === 'loomy' ? t('loomyHint') : t('raccoonHint')),
         h('div', { style: css.line },
           h('span', { style: css.label }, t('source')),
-          h('span', { style: css.value }, sourceLabel ?? t('sourceAuto')),
+          h('span', { style: css.value }, sourceLabel ?? (signedIn ? t('sourceAuto') : t('notLoggedIn'))),
           source !== undefined && sourceKind === 'file' ? h('span', { style: css.mono }, source) : null,
         ),
         signedIn
@@ -1140,7 +1140,7 @@ window.__ModuleLoader__.load({
     exports.inject = inject
     exports.name = 'dsh-llm-adapters'
     exports.__test = {
-      BRANDS, FIELDS, zh, en, windowLabel, creditsOf, ownerLabel, priceText, dateLabel, readCache, writeCache,
+      BRANDS, FIELDS, zh, en, css, windowLabel, creditsOf, ownerLabel, priceText, dateLabel, readCache, writeCache,
       AccountCard, SettingsPage, BundleSettings,
     }
     return module.exports

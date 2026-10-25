@@ -186,7 +186,7 @@ export class LoomyAuth {
     const explicit = explicitPath(this.configuredPath()) ?? explicitPath(process.env.LOOMY_AUTH_FILE)
     const file = explicit ?? await discoverLoomySession()
     if (file === undefined) {
-      return { error: '未找到 Loomy 登录态。请在下方用手机号登录，或启动 Loomy 客户端并完成登录；若客户端装在非标准位置，可在高级设置里填写 auth-session.json 的路径。' }
+      return { error: '未找到 Loomy 登录态。请在设置页点「打开浏览器登录」，或启动 Loomy 客户端并完成登录；若客户端装在非标准位置，可在高级设置里填写 auth-session.json 的路径。' }
     }
     const raw = await readJson(file)
     if (raw === undefined) return { path: file, kind: 'file', error: `无法读取 Loomy 登录态文件：${file}` }

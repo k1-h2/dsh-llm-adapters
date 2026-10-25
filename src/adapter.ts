@@ -161,7 +161,7 @@ export abstract class LocalAdapter extends LlmAdapter {
   async *stream(options: GenerateOptions): AsyncGenerator<StreamChunk> {
     if (!(await this.client.signedIn())) {
       const status = await this.client.status()
-      throw new Error(status.error ?? '尚未登录。请在设置页用手机号登录，或先打开对应桌面应用完成登录。')
+      throw new Error(status.error ?? '尚未登录。请在设置页用浏览器登录，或先打开对应桌面应用完成登录。')
     }
     const model = resolveModelId(options.model, this.options.modelAliases())
     const live = (await this.client.models()).find(entry => entry.id === model)

@@ -11,6 +11,7 @@ interface ClientExports {
     FIELDS: Record<string, Record<string, string>>
     zh: Record<string, unknown>
     en: Record<string, unknown>
+    css: Record<string, Record<string, unknown>>
     windowLabel: (value: number) => string
     creditsOf: (value: number) => string
     priceText: (t: (key: string) => string, factor: number) => string
@@ -65,6 +66,10 @@ describe('client bundle', () => {
     expect(exports.__test.en.browserOpen).toBe('Open browser to sign in')
     expect(exports.__test.en.sourceAccount).toBe('Plugin account')
     expect(exports.__test.zh.loginSubmit).toBeUndefined()
+  })
+
+  it('keeps the primary button dark with white text on both themes', () => {
+    expect(exports.__test.css.btnPrimary).toMatchObject({ background: '#0b0b0b', color: '#fff' })
   })
 
   it('formats windows, credits and prices for the cards', () => {

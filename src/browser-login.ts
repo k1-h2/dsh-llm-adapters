@@ -689,7 +689,7 @@ export class BrowserLoginFlow {
           phase: 'timeout',
           finishedAt: Date.now(),
           error: sawReady
-            ? '网页里已经登录成功，但没有拿到可用的模型调用凭据。请改用手机号登录继续。'
+            ? '网页里已经登录成功，但没有拿到可用的模型调用凭据。请改用桌面客户端登录态，或稍后重试。'
             : '等待登录超时，请重试。',
         }
       }
