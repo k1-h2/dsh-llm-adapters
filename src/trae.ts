@@ -22,7 +22,7 @@
  * @module dsh-llm-adapters/trae
  */
 
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { GenerateOptions, StreamChunk, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { AccountStore } from './account-store.ts'
 import { TraeAuth } from './auth.ts'
@@ -74,6 +74,21 @@ export const TRAE_DIRECTORY_FUNCTIONS: readonly string[] = [
 
 export const TRAE_DEFAULT_FUNCTION = 'solo_work_lite'
 
+/**
+ * The channels Trae's own chat picker draws from.
+ *
+ * `solo_coder`, `chat_v3`, `inline_chat` and `solo_agent*` still answer with
+ * configs, but they also carry retired models (GLM 4.6/4.7, MiniMax M2,
+ * Kimi K2.0905, Qwen3 Coder, the plain DeepSeek-V4-Flash/Pro). Those rows are
+ * not in the client's list, so a wire config alone does not make a model
+ * current. Restricting the catalog to the two work functions reproduces the
+ * client's picker (21 models on a live CN account).
+ */
+export const TRAE_PRIMARY_FUNCTIONS: readonly string[] = [
+  'solo_work_remote',
+  'solo_work_lite',
+]
+
 const EFFORT_ALIASES: Readonly<Record<string, string>> = {
   none: 'none',
   minimal: 'minimal',
@@ -116,6 +131,12 @@ export interface TraeRemoteModel {
   multimodal: boolean
   efforts: string[]
   function?: string
+  /**
+   * Listed by the normal chat channels (`solo_work_remote` / `solo_work_lite`).
+   * The specialist rosters also carry legacy entries the Trae client no longer
+   * offers, so only these rows may become models.
+   */
+  primary: boolean
 }
 
 export interface TraeWireModel {
@@ -180,6 +201,23 @@ function epochMs(value: unknown): number | undefined {
   return value < 1e12 ? Math.round(value * 1_000) : Math.round(value)
 }
 
+/**
+ * The device id Trae's check-in API expects.
+ *
+ * The endpoint only accepts a 16-digit decimal device id; a UUID (what the web
+ * session's `__msuuid__` looks like) is rejected with `9074` even though every
+ * other Trae call accepts it. Live matrix (same account, same minute):
+ * UUID -> `9074`, 16-digit number -> `code: 0`. The number is derived from the
+ * web session's device id, so it still comes from this login and not from a
+ * desktop install, and it stays stable for that session.
+ */
+export function checkinDeviceId(deviceId: string): string {
+  const hex = createHash('sha256').update(`trae-checkin\0${deviceId}`).digest('hex')
+  // 1e15..1e16-1 keeps exactly 16 digits and never starts with 0.
+  const value = BigInt(`0x${hex.slice(0, 16)}`) % 9_000_000_000_000_000n + 1_000_000_000_000_000n
+  return value.toString()
+}
+
 /** Map one upstream effort name to our id, dropping names we do not know. */
 export function normalizeEffort(value: unknown): string | undefined {
   return typeof value === 'string' ? EFFORT_ALIASES[value.trim()] : undefined
@@ -242,6 +280,7 @@ export function parseTraeRemoteModels(payload: unknown): TraeRemoteModel[] {
     const chatFunction = groupFunction !== undefined && TRAE_CHAT_FUNCTIONS.includes(groupFunction)
       ? groupFunction
       : undefined
+    const primary = groupFunction !== undefined && TRAE_PRIMARY_FUNCTIONS.includes(groupFunction)
     for (const raw of models) {
       const model = record(raw)
       const id = text(model?.name)
@@ -258,6 +297,7 @@ export function parseTraeRemoteModels(payload: unknown): TraeRemoteModel[] {
         id,
         name: display !== undefined && display !== '-' ? display : id,
         multimodal: model?.multimodal === true,
+        primary,
         efforts,
         ...dev === undefined ? {} : { contextWindow: dev },
         ...max === undefined ? {} : { maxContextWindow: max },
@@ -283,6 +323,7 @@ export function parseTraeRemoteModels(payload: unknown): TraeRemoteModel[] {
       const merged = {
         ...candidate,
         function: candidate.function ?? existing.function,
+        primary: candidate.primary || existing.primary,
         multimodal: candidate.multimodal || existing.multimodal,
         efforts: [...new Set([...candidate.efforts, ...existing.efforts])],
         ...candidate.creditMultiplier === undefined && existing.creditMultiplier !== undefined
@@ -297,6 +338,7 @@ export function parseTraeRemoteModels(payload: unknown): TraeRemoteModel[] {
         byId.set(key, {
           ...existing,
           function: existing.function ?? candidate.function,
+          primary: existing.primary || candidate.primary,
           multimodal: existing.multimodal || candidate.multimodal,
           efforts: merged.efforts,
           ...existing.creditMultiplier === undefined && candidate.creditMultiplier !== undefined
@@ -358,32 +400,14 @@ export function parseTraeWireModels(payload: unknown, functionName: string): Tra
 }
 
 /**
- * Whether a wire-only row is a real chat model.
- *
- * `get_detail_param` also lists Trae's internal configurations: `custom_model_*`
- * (usage `custom_model`), `summary`, helper agents and subagents. They are not
- * models a user can pick in Trae, and DSH rejects a provider that carries them
- * as ordinary entries. The reference plugin filters on `usage`/`config_source`
- * plus an internal-looking name, and the same rule is applied here.
- */
-export function isPromotableTraeWireModel(model: TraeWireModel): boolean {
-  if (model.usage !== 'chat_completion') return false
-  if (model.configSource !== 1) return false
-  const name = model.name.trim()
-  if (name === '' || name === '-') return false
-  if (name === model.configName.trim()) return false
-  if (!name.includes(' ') && name.includes('_')) return false
-  return true
-}
-
-/**
  * Merge the two sources into the rows DSH sees plus the call metadata.
  *
- * Remote wins the display name (it matches the IDE's own picker); wire wins the
- * config name, the output cap and the post-discount multiplier. A remote row
- * without a wire config is skipped: there is no callable route for it, so
- * offering it only produces a `4001`. Wire-only rows are promoted only when
- * they look like a real chat model, never an internal helper config.
+ * Only directory rows that the Trae client itself lists in its normal chat
+ * picker (`solo_work_*`) are candidates, and each must resolve to a wire
+ * `config_name` because that is the only id the chat endpoint accepts. Rows
+ * that share a display name collapse to the wider one instead of being
+ * decorated with their id: the shared naming rule keeps bracket contents as
+ * labels, so synthesizing `(id)` in the name is not allowed.
  */
 export function mergeTraeModels(
   remote: readonly TraeRemoteModel[],
@@ -396,87 +420,35 @@ export function mergeTraeModels(
     if (!wireById.has(model.configName.toLowerCase())) wireById.set(model.configName.toLowerCase(), model)
     if (!wireByName.has(model.name.toLowerCase())) wireByName.set(model.name.toLowerCase(), model)
   }
-  const usedNames = new Set<string>()
-  // DSH refuses a provider whose list contains two models with one id, so ids
-  // are deduped case-insensitively here rather than left to the picker.
-  const usedIds = new Set<string>()
-  const models: ProviderModel[] = []
-  const meta = new Map<string, TraeModelMeta>()
 
-  const push = (input: {
+  interface Candidate {
     id: string
     name: string
     contextWindow?: number
+    maxContextWindow?: number
     maxTokens?: number
     creditMultiplier?: number
     multimodal: boolean
-    maxContextWindow?: number
     efforts: readonly string[]
     configName: string
     function?: string
-    labels?: readonly string[]
-    /** Appended to the display name to tell two equally named rows apart. */
-    disambiguate?: string
-  }): void => {
-    const parsed = parseModelName(input.name)
-    const base = parsed.name.length > 0 ? parsed.name : input.id
-    const name = input.disambiguate === undefined ? base : `${base} (${input.disambiguate})`
-    // The shared capability rule, exactly as Loomy and Raccoon use it: the
-    // router's live list wins, the directory is the fallback, and when neither
-    // names a level every level is exposed.
-    const live = openRouter?.match(base, input.id)
-    const resolved = resolveCapabilities({
-      live,
-      upstreamEfforts: input.efforts,
-      upstreamModalities: input.multimodal ? ALL_INPUT_MODALITIES : ['text'],
-    })
-    const efforts = resolved.efforts.filter(effort => WIRE_EFFORTS[effort] !== undefined)
-    const defaultEffort = resolved.defaultEffort
-    const price = input.creditMultiplier
-    const labels = [...new Set([...(input.labels ?? []), ...parsed.labels])]
-    models.push({
-      id: input.id,
-      name,
-      ...labels.length === 0 ? {} : { labels },
-      contextWindow: input.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
-      ...input.maxContextWindow === undefined || input.maxContextWindow <= (input.contextWindow ?? 0)
-        ? {}
-        : { maxContextWindow: input.maxContextWindow },
-      ...input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens },
-      vision: resolved.modalities.some(mode => mode.toLowerCase() === 'image'),
-      reasoning: efforts.length > 0,
-      ...efforts.length === 0 ? {} : { reasoningEfforts: efforts },
-      ...defaultEffort === undefined ? {} : { defaultReasoningEffort: defaultEffort },
-      ...price === undefined ? {} : { priceFactor: price },
-    })
-    meta.set(input.id, {
-      configName: input.configName,
-      function: input.function ?? TRAE_DEFAULT_FUNCTION,
-      wireEfforts: Object.fromEntries(efforts.flatMap(effort => {
-        const mapped = WIRE_EFFORTS[effort]
-        return mapped === undefined ? [] : [[effort, mapped]]
-      })),
-    })
   }
 
+  const candidates: Candidate[] = []
+  const usedIds = new Set<string>()
   for (const model of remote) {
+    // Specialist rosters still answer with configs for retired models (GLM
+    // 4.6/4.7, MiniMax M2, Kimi K2.0905, Qwen3 Coder, the plain
+    // DeepSeek-V4-Flash/Pro). The client no longer shows them, so a callable
+    // config alone is not evidence that a model is current.
+    if (model.primary !== true) continue
     if (usedIds.has(model.id.toLowerCase())) continue
     const wireModel = wireById.get(model.id.toLowerCase()) ?? wireByName.get(model.name.toLowerCase())
-    // Trae lists client-only models (Qwen3.8-Flash, Kimi-K2.8-Preview) that
-    // have no config in any chat roster. Calling one can only answer 4001, so
-    // it is not offered at all.
     if (wireModel === undefined) continue
     usedIds.add(model.id.toLowerCase())
-    // Two directory rows can normalize to one display name (the `-Official`
-    // and plain variants of one model). Append the id to the later row so the
-    // picker does not show two identical entries.
-    const remoteNameKey = model.name.toLowerCase()
-    const collides = usedNames.has(remoteNameKey)
-    usedNames.add(remoteNameKey)
-    push({
+    candidates.push({
       id: model.id,
       name: model.name,
-      ...collides ? { disambiguate: model.id } : {},
       ...model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow },
       ...model.maxContextWindow === undefined ? {} : { maxContextWindow: model.maxContextWindow },
       ...wireModel.maxTokens === undefined ? {} : { maxTokens: wireModel.maxTokens },
@@ -492,41 +464,61 @@ export function mergeTraeModels(
     })
   }
 
-  const remoteIds = new Set(remote.map(model => model.id.toLowerCase()))
-  // Names already claimed by the remote skeleton, with their best context. A
-  // dated snapshot sharing a display name is real only when it is WIDER than
-  // the row already shown under that name (Kimi-K2-0905 168K behind Kimi-K2
-  // 28K); an equally named, equally sized duplicate is skipped.
-  const claimedNames = new Map<string, number>()
-  for (const model of remote) {
-    const key = model.name.toLowerCase()
-    claimedNames.set(key, Math.max(claimedNames.get(key) ?? 0, model.contextWindow ?? 0))
+  const stronger = (left: Candidate, right: Candidate): boolean => {
+    const leftMax = left.maxContextWindow ?? 0
+    const rightMax = right.maxContextWindow ?? 0
+    if (leftMax !== rightMax) return leftMax > rightMax
+    return (left.contextWindow ?? 0) > (right.contextWindow ?? 0)
   }
-  for (const model of wire) {
-    const id = model.configName.toLowerCase()
-    // A wire roster lists one config under several functions with different
-    // display names (`custom_model_gemini`); only the first is a real row.
-    if (remoteIds.has(id) || usedIds.has(id)) continue
-    // `custom_model_*`, `summary`, helper agents and subagents are internal
-    // configurations, not user-selectable models.
-    if (!isPromotableTraeWireModel(model)) continue
-    const key = model.name.toLowerCase()
-    const claimed = claimedNames.get(key)
-    if (claimed !== undefined && (model.contextWindow ?? 0) <= claimed) continue
-    usedIds.add(id)
-    usedNames.add(key)
-    claimedNames.set(key, Math.max(claimed ?? 0, model.contextWindow ?? 0))
-    push({
-      id: model.configName,
-      name: model.name,
-      ...claimed === undefined ? {} : { disambiguate: model.configName },
-      ...model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow },
-      ...model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens },
-      ...model.creditMultiplier === undefined ? {} : { creditMultiplier: model.creditMultiplier },
-      multimodal: model.multimodal === true,
-      efforts: model.efforts,
-      configName: model.configName,
-      function: model.function,
+
+  const chosen = new Map<string, Candidate>()
+  for (const candidate of candidates) {
+    // Two rows that normalize to the same printed name are one model; keeping
+    // both would show the same entry twice, and the wider row is the one the
+    // client offers.
+    const key = parseModelName(candidate.name).name.toLowerCase() || candidate.id.toLowerCase()
+    const existing = chosen.get(key)
+    if (existing === undefined || stronger(candidate, existing)) chosen.set(key, candidate)
+  }
+
+  const models: ProviderModel[] = []
+  const meta = new Map<string, TraeModelMeta>()
+  for (const input of chosen.values()) {
+    const parsed = parseModelName(input.name)
+    const name = parsed.name.length > 0 ? parsed.name : input.id
+    // The shared capability rule, exactly as Loomy and Raccoon use it: the
+    // router's live list wins, the directory is the fallback, and when neither
+    // names a level every level is exposed.
+    const live = openRouter?.match(name, input.id)
+    const resolved = resolveCapabilities({
+      live,
+      upstreamEfforts: input.efforts,
+      upstreamModalities: input.multimodal ? ALL_INPUT_MODALITIES : ['text'],
+    })
+    const efforts = resolved.efforts.filter(effort => WIRE_EFFORTS[effort] !== undefined)
+    const labels = [...new Set(parsed.labels)]
+    models.push({
+      id: input.id,
+      name,
+      ...labels.length === 0 ? {} : { labels },
+      contextWindow: input.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+      ...input.maxContextWindow === undefined || input.maxContextWindow <= (input.contextWindow ?? 0)
+        ? {}
+        : { maxContextWindow: input.maxContextWindow },
+      ...input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens },
+      vision: resolved.modalities.some(mode => mode.toLowerCase() === 'image'),
+      reasoning: efforts.length > 0,
+      ...efforts.length === 0 ? {} : { reasoningEfforts: efforts },
+      ...resolved.defaultEffort === undefined ? {} : { defaultReasoningEffort: resolved.defaultEffort },
+      ...input.creditMultiplier === undefined ? {} : { priceFactor: input.creditMultiplier },
+    })
+    meta.set(input.id, {
+      configName: input.configName,
+      function: input.function ?? TRAE_DEFAULT_FUNCTION,
+      wireEfforts: Object.fromEntries(efforts.flatMap(effort => {
+        const mapped = WIRE_EFFORTS[effort]
+        return mapped === undefined ? [] : [[effort, mapped]]
+      })),
     })
   }
 
@@ -1139,7 +1131,9 @@ export class TraeProvider {
       method: 'POST',
       headers: {
         ...this.headers(token, profile),
-        'x-device-id': identity.deviceId,
+        // Check-in is the one endpoint that insists on a 16-digit decimal id;
+        // the web session's UUID would be answered with 9074.
+        'x-device-id': checkinDeviceId(identity.deviceId),
         'x-machine-id': identity.machineId,
       },
       body: '{}',
@@ -1160,7 +1154,7 @@ export class TraeProvider {
       method: 'POST',
       headers: {
         ...this.headers(token, profile),
-        'x-device-id': identity.deviceId,
+        'x-device-id': checkinDeviceId(identity.deviceId),
         'x-machine-id': identity.machineId,
       },
       body: '{}',

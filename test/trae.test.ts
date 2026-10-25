@@ -9,8 +9,8 @@ import { normalizeTraeRegion } from '../src/brand.ts'
 import { ALL_REASONING_EFFORTS } from '../src/catalog.ts'
 import { EMPTY_OPENROUTER_INDEX, buildOpenRouterIndex } from '../src/openrouter.ts'
 import {
-  TraeProvider, mergeTraeModels, normalizeEffort, openTraeStream, parseTraeCheckin, parseTraePlan,
-  parseTraeRemoteModels, parseTraeUsage, parseTraeWireModels, traeMessages, traeTools,
+  TraeProvider, checkinDeviceId, mergeTraeModels, normalizeEffort, openTraeStream, parseTraeCheckin,
+  parseTraePlan, parseTraeRemoteModels, parseTraeUsage, parseTraeWireModels, traeMessages, traeTools,
 } from '../src/trae.ts'
 import { ProviderHttpError } from '../src/wire.ts'
 
@@ -40,16 +40,7 @@ const remotePayload = {
       {
         function: 'solo_agent',
         models: [
-          {
-            name: 'claude-4.5-sonnet',
-            display_name: 'Claude 4.5 Sonnet',
-            multimodal: true,
-            context_window_tokens: { dev: 200_000, max: 1_000_000 },
-            max_mode: true,
-            features: JSON.stringify({ consumption_rate: { enable: true, data: { rate: 1.2 } } }),
-            reasoning_effort_config: { options: ['light', 'medium', 'high', 'extra_high', 'max'] },
-          },
-          // A weaker duplicate inside an IDE-only group must not win.
+          // A weaker duplicate inside a specialist group must not win.
           { name: 'gpt-5', display_name: 'GPT-5', context_window_tokens: { dev: 128_000 } },
         ],
       },
@@ -61,6 +52,15 @@ const remotePayload = {
             display_name: 'GPT-5',
             context_window_tokens: { dev: 272_000 },
             reasoning_effort_config: { options: ['low', 'medium', 'high', 'extra_high'] },
+          },
+          {
+            name: 'claude-4.5-sonnet',
+            display_name: 'Claude 4.5 Sonnet',
+            multimodal: true,
+            context_window_tokens: { dev: 200_000, max: 1_000_000 },
+            max_mode: true,
+            features: JSON.stringify({ consumption_rate: { enable: true, data: { rate: 1.2 } } }),
+            reasoning_effort_config: { options: ['light', 'medium', 'high', 'extra_high', 'max'] },
           },
           { name: 'kimi-k2', display_name: '-' },
         ],
@@ -109,19 +109,25 @@ describe('Trae catalog', () => {
 
   it('reads the remote directory in chat-function order and keeps the stronger duplicate', () => {
     const models = parseTraeRemoteModels(remotePayload)
-    expect(models.map(model => model.id)).toEqual(['gpt-5', 'kimi-k2', 'claude-4.5-sonnet'])
+    expect(models.map(model => model.id)).toEqual(['gpt-5', 'claude-4.5-sonnet', 'kimi-k2'])
     const gpt = models.find(model => model.id === 'gpt-5')!
-    expect(gpt).toMatchObject({ name: 'GPT-5', contextWindow: 272_000, function: 'solo_work_remote' })
+    expect(gpt).toMatchObject({
+      name: 'GPT-5', contextWindow: 272_000, function: 'solo_work_remote', primary: true,
+    })
     // Exactly what the directory advertises; `max` is not invented here.
     expect(gpt.efforts).toEqual(['low', 'medium', 'high', 'xhigh'])
     const claude = models.find(model => model.id === 'claude-4.5-sonnet')!
     expect(claude).toMatchObject({
       multimodal: true, contextWindow: 200_000, maxContextWindow: 1_000_000, creditMultiplier: 1.2,
+      primary: true,
     })
-    // Only IDE-only groups listed it, so it carries no chat function.
-    expect(claude.function).toBeUndefined()
     // A missing display name falls back to the id instead of showing "-".
     expect(models.find(model => model.id === 'kimi-k2')?.name).toBe('kimi-k2')
+    // A row that only a specialist roster lists is not a primary model.
+    const specialist = parseTraeRemoteModels({
+      data: { list: [{ function: 'solo_coder', models: [{ name: 'glm-4.6', display_name: 'GLM-4.6' }] }] },
+    })
+    expect(specialist[0]?.primary).toBe(false)
   })
 
   it('reads the wire roster, including the post-discount multiplier', () => {
@@ -145,9 +151,10 @@ describe('Trae catalog', () => {
     const wire = parseTraeWireModels(wirePayload, 'solo_work_remote')
     const { models, meta } = mergeTraeModels(remote, wire)
 
-    // `kimi-k2` has no config in any chat roster in this fixture, so it is not
-    // offered; `gemini-3-pro` is a real wire-only model and is promoted.
-    expect(models.map(model => model.id)).toEqual(['gpt-5', 'claude-4.5-sonnet', 'gemini-3-pro'])
+    // `kimi-k2` has no config in any chat roster in this fixture, and
+    // `gemini-3-pro` exists only in the wire roster; neither is a model the
+    // client's picker offers, so both are absent.
+    expect(models.map(model => model.id)).toEqual(['gpt-5', 'claude-4.5-sonnet'])
     const gpt = models[0]!
     // Remote owns the display name and the window; wire owns the config name,
     // the output cap and the multiplier.
@@ -183,45 +190,35 @@ describe('Trae catalog', () => {
       function: 'solo_work_remote',
     })
 
-    const gemini = models.find(model => model.id === 'gemini-3-pro')!
-    expect(gemini).toMatchObject({ name: 'Gemini 3 Pro', maxTokens: 32_000, vision: false })
-    expect(meta.get('gemini-3-pro')).toMatchObject({ configName: 'gemini-3-pro' })
+    expect(meta.has('gemini-3-pro')).toBe(false)
   })
 
   it('never emits two rows with one id', () => {
-    // Live case: the gateway lists `custom_model_gemini` under several functions
-    // with different display names, and spells ids in both cases. DSH rejects
-    // the whole provider when an id repeats.
+    // The gateway can spell one config in both cases across groups, and DSH
+    // rejects the whole provider when an id repeats.
     const remote = parseTraeRemoteModels({
       data: {
         list: [
-          { function: 'solo_work_remote', models: [{ name: 'custom_model_gemini', display_name: 'Gemini 3.1 Pro Preview' }] },
-          { function: 'chat_v3', models: [{ name: 'Custom_Model_Gemini', display_name: 'Gemini 3 Pro Preview' }] },
+          {
+            function: 'solo_work_remote',
+            models: [{ name: 'glm-5.3', display_name: 'GLM-5.3' }],
+          },
+          {
+            function: 'solo_work_lite',
+            models: [{ name: 'GLM-5.3', display_name: 'GLM-5.3' }],
+          },
         ],
       },
     })
     expect(remote).toHaveLength(1)
-    expect(remote[0]!.function).toBe('solo_work_remote')
 
-    const wire = [
-      {
-        configName: 'custom_model_gemini', name: 'Gemini 3.1 Pro Preview',
-        usage: 'chat_completion', configSource: 1, function: 'solo_work_remote', efforts: [],
-      },
-      {
-        configName: 'custom_model_gemini', name: 'Gemini 3 Pro Preview',
-        usage: 'chat_completion', configSource: 1, function: 'chat_v3', efforts: [],
-      },
-    ]
+    const wire = [{
+      configName: 'glm-5.3', name: 'GLM-5.3',
+      usage: 'chat_completion', configSource: 1, function: 'solo_work_remote', efforts: [],
+    }]
     const merged = mergeTraeModels(remote, wire)
     expect(merged.models).toHaveLength(1)
-    expect(merged.models[0]).toMatchObject({ id: 'custom_model_gemini', name: 'Gemini 3.1 Pro Preview' })
-
-    // The same config only in the wire roster must still collapse to one row,
-    // keeping the function the priority order prefers.
-    const wireOnly = mergeTraeModels([], wire)
-    expect(wireOnly.models).toHaveLength(1)
-    expect(wireOnly.meta.get('custom_model_gemini')).toMatchObject({ function: 'solo_work_remote' })
+    expect(merged.models[0]).toMatchObject({ id: 'glm-5.3', name: 'GLM 5.3' })
   })
 
   it('unions efforts from every group for one model', () => {
@@ -263,43 +260,17 @@ describe('Trae catalog', () => {
     })
   })
 
-  it('promotes a wider snapshot that shares a display name', () => {
-    const remote = [{
-      id: 'kimi-k2', name: 'Kimi-K2', contextWindow: 28_000, multimodal: false, efforts: [],
-    }]
-    const wire = [
-      {
-        configName: 'kimi-k2-0905', name: 'Kimi-K2', contextWindow: 168_000,
-        usage: 'chat_completion', configSource: 1, function: 'chat_v3', efforts: [],
-      },
-      {
-        configName: 'glm-4.7', name: 'GLM-4.7', contextWindow: 100_000,
-        usage: 'chat_completion', configSource: 1, function: 'solo_work_remote', efforts: [],
-      },
-      {
-        configName: 'glm-4.7-auto', name: 'GLM-4.7', contextWindow: 100_000,
-        usage: 'chat_completion', configSource: 1, function: 'chat_v3', efforts: [],
-      },
-    ]
-    const { models } = mergeTraeModels(remote, wire)
-    expect(models.map(model => model.id)).toEqual(['kimi-k2', 'kimi-k2-0905', 'glm-4.7'])
-    // The promoted snapshot keeps its id in the name so the two rows differ.
-    expect(models[1]).toMatchObject({
-      name: 'Kimi K2 (kimi-k2-0905)',
-      contextWindow: 168_000,
-    })
-  })
-
-  it('disambiguates two directory rows that share a display name', () => {
+  it('collapses two rows with one display name to the wider one', () => {
     // Live case: the plain and `-Official` variants both normalize to
-    // `DeepSeek V4 Flash`; showing the same name twice is a picker that lies.
+    // `DeepSeek V4 Flash`. The picker prints the name once, so the wider row
+    // wins and no id is appended to the name.
     const remote = parseTraeRemoteModels({
       data: {
         list: [{
           function: 'solo_work_remote',
           models: [
-            { name: 'DeepSeek-V4-Flash-Official', display_name: 'DeepSeek-V4-Flash' },
-            { name: 'DeepSeek-V4-Flash', display_name: 'DeepSeek-V4-Flash' },
+            { name: 'DeepSeek-V4-Flash-Official', display_name: 'DeepSeek-V4-Flash', context_window_tokens: { dev: 200_000 } },
+            { name: 'DeepSeek-V4-Flash', display_name: 'DeepSeek-V4-Flash', context_window_tokens: { dev: 116_000 } },
           ],
         }],
       },
@@ -315,17 +286,22 @@ describe('Trae catalog', () => {
       },
     ]
     const { models } = mergeTraeModels(remote, wire)
-    expect(models.map(model => model.name)).toEqual([
-      'DeepSeek V4 Flash',
-      'DeepSeek V4 Flash (DeepSeek-V4-Flash)',
-    ])
+    expect(models).toHaveLength(1)
+    expect(models[0]).toMatchObject({
+      name: 'DeepSeek V4 Flash',
+      contextWindow: 200_000,
+    })
+    // The shared naming rule never synthesizes brackets of its own.
+    expect(models[0]!.name).not.toContain('(')
   })
 
-  it('keeps a wire-only model out of the list when its name already exists', () => {
+  it('never promotes a model that only the wire roster lists', () => {
     const remote = parseTraeRemoteModels(remotePayload)
     const wire = parseTraeWireModels(wirePayload, 'solo_work_remote')
     const { models } = mergeTraeModels(remote, wire)
-    expect(models.filter(model => model.name === 'Claude 4.5 Sonnet')).toHaveLength(1)
+    // `gemini-3-pro` has a config but no directory row on a primary channel;
+    // promoting it would resurface the legacy entries the client retired.
+    expect(models.map(model => model.id)).not.toContain('gemini-3-pro')
   })
 
   it('hides a directory model with no callable config', () => {
@@ -359,7 +335,8 @@ describe('Trae catalog', () => {
       },
     ]
     const { models } = mergeTraeModels([], wire)
-    expect(models.map(model => model.id)).toEqual(['glm-5.3'])
+    // Without a primary directory row nothing is promoted, internal or not.
+    expect(models).toEqual([])
   })
 
   it('keeps exactly the levels Trae publishes', () => {
@@ -368,7 +345,7 @@ describe('Trae catalog', () => {
     // be claimed — there is no inferred `none` and no inferred `max`.
     const remote = [{
       id: 'deepseek-v4.1-flash', name: 'DeepSeek-V4.1-Flash', contextWindow: 200_000,
-      multimodal: true, efforts: ['low', 'high', 'xhigh'],
+      multimodal: true, efforts: ['low', 'high', 'xhigh'], primary: true,
     }]
     const wire = [{
       configName: 'deepseek-v4.1-flash', name: 'DeepSeek-V4.1-Flash', contextWindow: 200_000,
@@ -677,7 +654,7 @@ describe('TraeProvider', () => {
     // The shared rule: no OpenRouter match and an empty directory declaration
     // falls back to all levels, with the second-strongest as the default.
     const { models } = mergeTraeModels(
-      [{ id: 'x-model', name: 'X Model', multimodal: false, efforts: [] }],
+      [{ id: 'x-model', name: 'X Model', multimodal: false, efforts: [], primary: true }],
       [{
         configName: 'x-model',
         name: 'X Model',
@@ -697,7 +674,7 @@ describe('TraeProvider', () => {
   it('merges the directory and the wire roster behind one catalog', async () => {
     const { provider } = make('cn', catalogFetch())
     const models = await provider.models()
-    expect(models.map(model => model.id)).toEqual(['gpt-5', 'claude-4.5-sonnet', 'gemini-3-pro'])
+    expect(models.map(model => model.id)).toEqual(['gpt-5', 'claude-4.5-sonnet'])
     expect(provider.catalogError()).toBeUndefined()
   })
 
@@ -756,13 +733,12 @@ describe('TraeProvider', () => {
       ttlMs: () => 1000,
       timeoutMs: () => 1000,
       textOnly: () => new Set(['claude-4.5-sonnet']),
-      forceVision: () => new Set(['gemini-3-pro']),
+      forceVision: () => new Set(['gpt-5']),
       fetchImpl: catalogFetch(),
     })
     const models = await provider.models()
     expect(models.find(model => model.id === 'claude-4.5-sonnet')?.vision).toBe(false)
-    expect(models.find(model => model.id === 'gemini-3-pro')?.vision).toBe(true)
-    expect(models.find(model => model.id === 'gpt-5')?.vision).toBe(false)
+    expect(models.find(model => model.id === 'gpt-5')?.vision).toBe(true)
   })
 
   it('reads the mainland quota and the check-in state', async () => {
@@ -785,6 +761,38 @@ describe('TraeProvider', () => {
     expect(seen[0]).toBe('https://api.trae.cn/trae/api/v2/pay/web_user_ent_usage')
   })
 
+  it('derives a stable 16-digit decimal id for check-in', () => {
+    // The claim endpoint rejects the web session's UUID with 9074; only a
+    // 16-digit decimal id is accepted, so it is derived from that UUID.
+    const first = checkinDeviceId('635ed490-f950-40f7-9178-8c72ae1cf1cc')
+    const again = checkinDeviceId('635ed490-f950-40f7-9178-8c72ae1cf1cc')
+    const other = checkinDeviceId('11111111-2222-3333-4444-555555555555')
+    expect(first).toMatch(/^[1-9]\d{15}$/)
+    expect(first).toBe(again)
+    expect(other).not.toBe(first)
+    expect(first).not.toContain('-')
+  })
+
+  it('sends the decimal check-in id instead of the web UUID', async () => {
+    const seen: { url: string, deviceId?: string }[] = []
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      const headers = init.headers as Record<string, string>
+      seen.push({ url, deviceId: headers['x-device-id'] })
+      if (url.endsWith('/checkin_credits/status')) return json({ enable: true, checked_in: false })
+      if (url.endsWith('/checkin_credits/claim')) return json({ code: 0 })
+      throw new Error(`unexpected ${url}`)
+    })
+    const { provider } = make('cn', fetchMock as unknown as typeof fetch)
+    await provider.checkinStatus()
+    await provider.claimCheckin()
+    expect(seen).toHaveLength(2)
+    for (const call of seen) {
+      expect(call.deviceId).toBe(checkinDeviceId('dev-1'))
+      expect(call.deviceId).toMatch(/^[1-9]\d{15}$/)
+      expect(call.deviceId).not.toBe('dev-1')
+    }
+  })
+
   it('claims once, then reports the device as already claimed', async () => {
     let call = 0
     const fetchMock = vi.fn(async (url: string) => {
@@ -797,6 +805,7 @@ describe('TraeProvider', () => {
     const { provider } = make('cn', fetchMock as unknown as typeof fetch)
     expect(await provider.claimCheckin()).toEqual({ available: true, claimed: true, deviceClaimed: false })
     expect(await provider.claimCheckin()).toMatchObject({ claimed: false, deviceClaimed: true })
+    expect(call).toBe(2)
   })
 
   it('has no check-in on the international deployment', async () => {
