@@ -1,9 +1,10 @@
 /**
  * dsh-llm-adapters host half.
  *
- * Registers two provider routes on `ctx.llm` and mounts the settings API.
- * Credentials come only from the settings page's QR login, stored in the
- * plugin's own account store.
+ * Registers one provider route per brand on `ctx.llm` and mounts the settings
+ * API. Credentials come only from the settings page's browser login, stored in
+ * the plugin's own account store. Trae is a single route with two regions; the
+ * region is a setting, so switching it reuses the same card and route.
  *
  * @module dsh-llm-adapters
  */
@@ -11,17 +12,18 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import { LoomyAdapter, RaccoonAdapter, resolveModelId } from './adapter.ts'
+import { LoomyAdapter, RaccoonAdapter, TraeAdapter, resolveModelId } from './adapter.ts'
 import type { AdapterOptions, LocalAdapter } from './adapter.ts'
 import { AccountStore } from './account-store.ts'
 import { API_PREFIX, handleApi } from './api.ts'
-import { LoomyAuth, RaccoonAuth } from './auth.ts'
-import { BRANDS, LOOMY_PROVIDER, RACCOON_PROVIDER } from './brand.ts'
+import { LoomyAuth, RaccoonAuth, TraeAuth } from './auth.ts'
+import { BRANDS, LOOMY_PROVIDER, RACCOON_PROVIDER, TRAE_PROVIDER } from './brand.ts'
 import type { BrandId } from './brand.ts'
 import { Config as ConfigSchema, liveConfig } from './config.ts'
 import type { ParsedConfig } from './config.ts'
 import { LoomyProvider } from './loomy.ts'
 import { RaccoonProvider } from './raccoon.ts'
+import { TraeProvider } from './trae.ts'
 
 interface WebServerService {
   register(route: {
@@ -40,11 +42,11 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
-export { LoomyAdapter, RaccoonAdapter, LocalAdapter, resolveModelId } from './adapter.ts'
-export { LoomyAuth, RaccoonAuth, decodeJwtFacts } from './auth.ts'
+export { LoomyAdapter, RaccoonAdapter, TraeAdapter, LocalAdapter, resolveModelId } from './adapter.ts'
+export { LoomyAuth, RaccoonAuth, TraeAuth, decodeJwtFacts } from './auth.ts'
 export type { AuthStatus, LocalAccount } from './auth.ts'
 export { AccountStore } from './account-store.ts'
-export type { LoomyAccountRecord, RaccoonAccountRecord, StoredAccounts } from './account-store.ts'
+export type { LoomyAccountRecord, RaccoonAccountRecord, StoredAccounts, TraeAccountRecord } from './account-store.ts'
 export { startLoginPage } from './login-page.ts'
 export type {
   LoginBindingSpec, LoginPageHandle, LoginPageSpec, LoginPhase, LoginPoll, LoginStatus,
@@ -63,8 +65,8 @@ export type {
 } from './raccoon-login.ts'
 export { buildQrMatrix, renderQrSvg } from './qr.ts'
 export type { QrMatrix } from './qr.ts'
-export { BRANDS, LOOMY_BRAND, RACCOON_BRAND, LOOMY_PROVIDER, RACCOON_PROVIDER, isBrandId } from './brand.ts'
-export type { BrandId, BrandProfile } from './brand.ts'
+export { BRANDS, LOOMY_BRAND, RACCOON_BRAND, TRAE_BRAND, LOOMY_PROVIDER, RACCOON_PROVIDER, TRAE_PROVIDER, isBrandId, normalizeTraeRegion } from './brand.ts'
+export type { BrandId, BrandProfile, TraeRegion } from './brand.ts'
 export {
   ModelCatalog, defaultEffortOf, effortLabel, parseLoomyCatalog, parseRaccoonCatalog, priceFactorOf,
 } from './catalog.ts'
@@ -81,12 +83,24 @@ export { LoomyProvider, LOOMY_BASE, LOOMY_VERSION, loomyGatewaySessionValid } fr
 export {
   RaccoonProvider, RACCOON_BASE, RACCOON_CLIENT_VERSION, raccoonAccessTokenValid, raccoonRefreshCandidate,
 } from './raccoon.ts'
+export {
+  TraeProvider, TRAE_CHAT_FUNCTIONS, TRAE_DIRECTORY_FUNCTIONS, mergeTraeModels, normalizeEffort,
+  openTraeStream, parseTraeCheckin, parseTraePlan, parseTraeRemoteModels, parseTraeUsage, parseTraeWireModels,
+  traeMessages, traeTools,
+} from './trae.ts'
+export type {
+  TraeCatalog, TraeModelMeta, TraeProviderOptions, TraeRemoteModel, TraeWireModel,
+} from './trae.ts'
+export { TRAE_APP_ID, TRAE_REGION_PROFILES, TRAE_SOLO_CHAT_PATH, TRAE_WEB_USER_AGENT } from './trae-endpoints.ts'
+export type { TraeRegionProfile } from './trae-endpoints.ts'
+export { TraeWebLogin, machineIdOf } from './trae-login.ts'
+export type { TraeLoginAccount, TraeWebLoginOptions } from './trae-login.ts'
 export { ProviderHttpError, buildMessages, buildTools, openAiStream, sseEvents } from './wire.ts'
 export type { WireMessage } from './wire.ts'
 export { API_PREFIX, buildRows } from './api.ts'
 export { liveConfig, resolveConfig } from './config.ts'
 export type { Config as ConfigShape, LiveConfig, ParsedConfig, ResolvedConfig } from './config.ts'
-export type { ProviderStatus, QuotaSnapshot } from './types.ts'
+export type { CheckinStatus, ProviderStatus, QuotaPack, QuotaSnapshot } from './types.ts'
 
 export const name = 'llm-adapters'
 export const inject = ['llm']
@@ -95,7 +109,8 @@ const NS = 'llm-adapters'
 const REQUEST_IMAGE_MAX_BYTES = 1_048_576
 
 const STRUCTURAL_FIELDS: ReadonlySet<string> = new Set([
-  'loomyEnabled', 'raccoonEnabled', 'loomyDisplayName', 'raccoonDisplayName',
+  'loomyEnabled', 'raccoonEnabled', 'traeEnabled',
+  'loomyDisplayName', 'raccoonDisplayName', 'traeDisplayName',
 ])
 
 export const Config = ConfigSchema
@@ -114,6 +129,7 @@ export function apply(ctx: Context, config: ParsedConfig): void {
   const accounts = new AccountStore()
   const loomyAuth = new LoomyAuth(accounts)
   const raccoonAuth = new RaccoonAuth(accounts)
+  const traeAuth = new TraeAuth(accounts, () => live.traeRegion())
 
   const loomyProvider = new LoomyProvider({
     auth: loomyAuth,
@@ -131,14 +147,47 @@ export function apply(ctx: Context, config: ParsedConfig): void {
     textOnly: () => new Set(live.raccoonTextOnlyModelIds()),
     forceVision: () => new Set(live.raccoonVisionModelIds()),
   })
+  const traeProvider = new TraeProvider({
+    auth: traeAuth,
+    store: accounts,
+    region: () => live.traeRegion(),
+    ttlMs: live.modelCacheTtlMs,
+    timeoutMs: live.catalogFetchTimeoutMs,
+    textOnly: () => new Set(live.traeTextOnlyModelIds()),
+    forceVision: () => new Set(live.traeVisionModelIds()),
+    logger: message => ctx.logger?.warn(message),
+  })
+
+  // The four per-brand choices are the same shape for every provider, so they
+  // are kept in one table: adding a provider means adding a row, not a branch
+  // in four different ternaries.
+  const brandChoices: Record<BrandId, Pick<
+    AdapterOptions, 'displayName' | 'disabledModels' | 'modelContextWindows' | 'modelAliases'
+  >> = {
+    loomy: {
+      displayName: live.loomyDisplayName,
+      disabledModels: live.loomyDisabledModels,
+      modelContextWindows: live.loomyModelContextWindows,
+      modelAliases: live.loomyModelAliases,
+    },
+    raccoon: {
+      displayName: live.raccoonDisplayName,
+      disabledModels: live.raccoonDisabledModels,
+      modelContextWindows: live.raccoonModelContextWindows,
+      modelAliases: live.raccoonModelAliases,
+    },
+    trae: {
+      displayName: live.traeDisplayName,
+      disabledModels: live.traeDisabledModels,
+      modelContextWindows: live.traeModelContextWindows,
+      modelAliases: live.traeModelAliases,
+    },
+  }
 
   const makeOptions = (brand: BrandId, provider: string): AdapterOptions => ({
     brand,
     provider,
-    displayName: brand === 'loomy' ? live.loomyDisplayName : live.raccoonDisplayName,
-    disabledModels: brand === 'loomy' ? live.loomyDisabledModels : live.raccoonDisabledModels,
-    modelContextWindows: brand === 'loomy' ? live.loomyModelContextWindows : live.raccoonModelContextWindows,
-    modelAliases: brand === 'loomy' ? live.loomyModelAliases : live.raccoonModelAliases,
+    ...brandChoices[brand],
     defaultMaxTokens: live.defaultMaxTokens,
     readImage,
   })
@@ -146,6 +195,7 @@ export function apply(ctx: Context, config: ParsedConfig): void {
   const adapters: Record<BrandId, LocalAdapter> = {
     loomy: new LoomyAdapter(makeOptions('loomy', LOOMY_PROVIDER), loomyProvider),
     raccoon: new RaccoonAdapter(makeOptions('raccoon', RACCOON_PROVIDER), raccoonProvider),
+    trae: new TraeAdapter(makeOptions('trae', TRAE_PROVIDER), traeProvider),
   }
 
   ctx.inject(['attachments'], (scope) => {
@@ -156,12 +206,14 @@ export function apply(ctx: Context, config: ParsedConfig): void {
   const routes: Partial<Record<BrandId, () => void>> = {}
   let directory: ReturnType<typeof ctx.llm.registerConfigurableProviders> | undefined
 
-  const enabled = (id: BrandId): boolean => id === 'loomy' ? live.loomyEnabled() : live.raccoonEnabled()
+  const enabled = (id: BrandId): boolean => id === 'loomy'
+    ? live.loomyEnabled()
+    : id === 'raccoon' ? live.raccoonEnabled() : live.traeEnabled()
   const directoryFor = () => BRANDS
     .filter(brand => enabled(brand.id))
     .map(brand => ({
       provider: brand.provider,
-      displayName: brand.id === 'loomy' ? live.loomyDisplayName() : live.raccoonDisplayName(),
+      displayName: brandChoices[brand.id].displayName(),
       settingsNs: NS,
       settingsPath: [],
     }))
@@ -201,6 +253,7 @@ export function apply(ctx: Context, config: ParsedConfig): void {
   ctx.effect(() => () => {
     adapters.loomy.close()
     adapters.raccoon.close()
+    adapters.trae.close()
   }, 'llm-adapters.dispose')
 
   ctx.inject(['webServer'], (scope) => {

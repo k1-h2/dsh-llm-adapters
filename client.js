@@ -1,13 +1,17 @@
 /**
  * dsh-llm-adapters — browser half.
  *
- * Two settings sections, one per provider. Each follows the same shape as
+ * One settings section per provider. Each follows the same shape as
  * dsh-agent-sdk-bridge: an account card first, then the live catalog with per
  * model on/off and context-window controls, then a collapsed advanced area.
  *
  * The account card is read-only by design. It never asks for a password or a
- * token; sign-in happens in the provider's own page through a WeChat QR code,
- * and the card only reports the resulting account and quota.
+ * token; sign-in happens on the provider's own page (a WeChat QR code for Loomy
+ * and Raccoon, a dedicated browser window for Trae), and the card only reports
+ * the resulting account, quota and check-in state.
+ *
+ * Trae is one card with a region switch: `traeRegion` is a setting, not a
+ * second brand, so both regions share this page and keep separate accounts.
  *
  * Hand-written ModuleLoader bundle: no build step, no dependency beyond the
  * `react` the shell provides.
@@ -111,6 +115,37 @@ window.__ModuleLoader__.load({
       raccoonNav: '商汤小浣熊',
       raccoonTitle: '商汤小浣熊',
       raccoonIntro: '点“打开扫码登录”，用微信扫码登录小浣熊即可使用，无需安装客户端。改动即时生效，无需重启。',
+      traeNav: 'Trae',
+      traeTitle: 'Trae',
+      traeIntro: '先选国内版或国际版，再点“打开浏览器登录”在 Trae 官网登录。设备指纹由这次网页登录生成，不需要安装桌面客户端。改动即时生效，无需重启。',
+      traeHint: 'Trae 的令牌来自网页登录；过期后重新登录即可。国内版每天可签到领积分，国际版没有签到活动。',
+      traeLoginMissing: 'Trae 尚未登录。请点“打开浏览器登录”。',
+      regionLabel: '区域',
+      regionCn: '国内版 · trae.cn',
+      regionGlobal: '国际版 · trae.ai',
+      regionHint: '两个区域各自保存账号：切换区域不会退出另一个区域的登录。',
+      regionSwitching: '正在切换区域…',
+      checkin: '签到',
+      checkinClaim: '签到领积分',
+      checkinBusy: '签到中…',
+      checkinClaimed: '今日已签到',
+      checkinDevice: '本机今日已签到',
+      checkinReward: '可得',
+      checkinFailed: '签到失败',
+      plan: '套餐',
+      planFree: '免费版',
+      planTrial: '试用中',
+      trialEnds: '试用到期',
+      packs: '资源包',
+      packExpires: '到期',
+      usedOf: '已用',
+      browserHintTrae: '点下面的按钮会打开一个独立的浏览器窗口（不会动你自己的浏览器配置）：在其中登录 Trae，登录成功后窗口会自动关闭。',
+      browserPollingTrae: '浏览器已打开：请在窗口里登录 Trae，成功后会自动接回，这个窗口随后会关闭。',
+      browserTitleTrae: '浏览器登录',
+      browserOpenTrae: '打开浏览器登录',
+      browserWaitingTrae: '等待登录…',
+      loginGuideTrae: '点“打开浏览器登录”，在弹出的窗口里登录 Trae 即可；登录成功后会自动接回。',
+      modelsEmptyTrae: '账号没有返回任何 Trae 模型。请确认账号已登录，然后点“重新读取登录态”。',
     }
     const en = {
       pluginOptionsTitle: 'Enabled providers',
@@ -199,11 +234,43 @@ window.__ModuleLoader__.load({
       raccoonNav: 'SenseTime Raccoon',
       raccoonTitle: 'SenseTime Raccoon',
       raccoonIntro: 'Use “Open QR sign-in” and scan the code in WeChat; no client install needed. Changes apply immediately.',
+      traeNav: 'Trae',
+      traeTitle: 'Trae',
+      traeIntro: 'Pick the mainland or international edition, then use “Open browser sign-in” to sign in on Trae’s website. The device fingerprint comes from that web session, so no desktop client is needed. Changes apply immediately.',
+      traeHint: 'Trae tokens come from the web sign-in; sign in again when one expires. The mainland edition offers a daily check-in for credits; the international edition has none.',
+      traeLoginMissing: 'Trae is not signed in. Use “Open browser sign-in”.',
+      regionLabel: 'Region',
+      regionCn: 'Mainland · trae.cn',
+      regionGlobal: 'International · trae.ai',
+      regionHint: 'Each region keeps its own account: switching regions does not sign out the other one.',
+      regionSwitching: 'Switching region…',
+      checkin: 'Check-in',
+      checkinClaim: 'Check in for credits',
+      checkinBusy: 'Checking in…',
+      checkinClaimed: 'Already checked in today',
+      checkinDevice: 'This device checked in today',
+      checkinReward: 'reward',
+      checkinFailed: 'Check-in failed',
+      plan: 'Plan',
+      planFree: 'Free',
+      planTrial: 'Trial',
+      trialEnds: 'Trial ends',
+      packs: 'Credit packs',
+      packExpires: 'expires',
+      usedOf: 'used',
+      browserHintTrae: 'The button opens a dedicated browser window (your own browser profile is untouched): sign in to Trae there and the window closes itself.',
+      browserPollingTrae: 'The browser is open: sign in to Trae in that window; the login is adopted automatically and the window then closes.',
+      browserTitleTrae: 'Browser sign-in',
+      browserOpenTrae: 'Open browser sign-in',
+      browserWaitingTrae: 'Waiting for sign-in…',
+      loginGuideTrae: 'Use “Open browser sign-in” and sign in to Trae in the window that opens; the login is adopted automatically.',
+      modelsEmptyTrae: 'Trae returned no models. Confirm the account is signed in, then re-read the login state.',
     }
 
     const BRANDS = [
       { id: 'loomy', settingsId: 'loomy', order: 40, titleKey: 'loomyTitle', navKey: 'loomyNav', introKey: 'loomyIntro' },
       { id: 'raccoon', settingsId: 'raccoon', order: 41, titleKey: 'raccoonTitle', navKey: 'raccoonNav', introKey: 'raccoonIntro' },
+      { id: 'trae', settingsId: 'trae', order: 42, titleKey: 'traeTitle', navKey: 'traeNav', introKey: 'traeIntro' },
     ]
 
     const FIELDS = {
@@ -225,6 +292,25 @@ window.__ModuleLoader__.load({
         vision: 'raccoonVisionModelIds',
         textOnly: 'raccoonTextOnlyModelIds',
       },
+      trae: {
+        enabled: 'traeEnabled',
+        displayName: 'traeDisplayName',
+        disabled: 'traeDisabledModels',
+        windows: 'traeModelContextWindows',
+        aliases: 'traeModelAliases',
+        vision: 'traeVisionModelIds',
+        textOnly: 'traeTextOnlyModelIds',
+        region: 'traeRegion',
+      },
+    }
+
+    const REGIONS = [
+      { id: 'cn', labelKey: 'regionCn' },
+      { id: 'global', labelKey: 'regionGlobal' },
+    ]
+
+    function regionOf(value) {
+      return value === 'global' ? 'global' : 'cn'
     }
 
     const css = {
@@ -272,6 +358,10 @@ window.__ModuleLoader__.load({
       optionStatus: { fontSize: '0.82em', opacity: 0.62 },
       advLabel: { fontSize: '0.88em' },
       advHelp: { fontSize: '0.78em', opacity: 0.55, lineHeight: 1.4 },
+      regionBox: { display: 'flex', flexDirection: 'column', gap: '6px', paddingBottom: '10px', borderBottom: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.15))' },
+      seg: { display: 'flex', gap: '6px', flexWrap: 'wrap' },
+      segBtn: { padding: '4px 10px', borderRadius: '7px', border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.35))', background: 'transparent', color: 'inherit', cursor: 'pointer', font: 'inherit', fontSize: '0.84em' },
+      segOn: { border: '1px solid var(--dsw-alias-brand-primary, #4c6ef5)', fontWeight: 600 },
     }
 
     const API = (() => {
@@ -366,8 +456,11 @@ window.__ModuleLoader__.load({
       return owner
     }
 
-    function AccountCard({ t, brand, reloadSignal, onStatus, onAfterRefresh }) {
-      const cached = readCache(brand.id, 'status')
+    function AccountCard({ t, brand, region, regionBusy, onRegionChange, reloadSignal, onStatus, onAfterRefresh }) {
+      // Trae keeps one snapshot per region, so switching back and forth never
+      // shows the other region's account while a fresh read is in flight.
+      const cacheId = brand.id === 'trae' ? `trae:${region}` : brand.id
+      const cached = readCache(cacheId, 'status')
       const [status, setStatus] = useState(cached)
       const [busy, setBusy] = useState(false)
       const [error, setError] = useState(undefined)
@@ -376,30 +469,42 @@ window.__ModuleLoader__.load({
       const [browser, setBrowser] = useState(undefined)
       const [actionBusy, setActionBusy] = useState(false)
       const [actionError, setActionError] = useState(undefined)
+      const [checkinBusy, setCheckinBusy] = useState(false)
+      const ticket = useRef(0)
 
       const load = useCallback(async (fresh, notify) => {
+        const mine = ++ticket.current
         setBusy(true)
         setError(undefined)
         try {
           const payload = await api(`/status?brand=${brand.id}${fresh ? '&fresh=1' : ''}`, { timeout: 35_000 })
-          if (!mounted.current) return
+          // A region switch starts a second read; the older one must not win.
+          if (!mounted.current || mine !== ticket.current) return
           setStatus(payload)
-          writeCache(brand.id, 'status', { ...payload, cachedAt: Date.now() })
+          writeCache(cacheId, 'status', { ...payload, cachedAt: Date.now() })
           onStatus?.(payload)
           if (notify && payload?.signedIn === true) onAfterRefresh?.()
         } catch (err) {
-          if (!mounted.current) return
+          if (!mounted.current || mine !== ticket.current) return
           setError(String(err?.message ?? err))
         } finally {
-          if (mounted.current) setBusy(false)
+          if (mounted.current && mine === ticket.current) setBusy(false)
         }
-      }, [brand.id, onStatus, onAfterRefresh])
+      }, [brand.id, cacheId, onStatus, onAfterRefresh])
 
       useEffect(() => {
         mounted.current = true
         void load(false, false)
         return () => { mounted.current = false }
       }, [load])
+
+      // A region switch changes which stored account the card describes, so the
+      // previous region's snapshot is dropped before the new read lands.
+      useEffect(() => {
+        setStatus(readCache(cacheId, 'status'))
+        setBrowser(undefined)
+        setActionError(undefined)
+      }, [cacheId])
 
       useEffect(() => {
         if (reloadSignal === seenReload.current) return
@@ -438,9 +543,9 @@ window.__ModuleLoader__.load({
       const accountRequest = useCallback(async body => api('/account', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ brand: brand.id, ...body }),
+        body: JSON.stringify({ brand: brand.id, ...(brand.id === 'trae' ? { region } : {}), ...body }),
         timeout: 45_000,
-      }), [brand.id])
+      }), [brand.id, region])
 
       const logout = useCallback(async () => {
         if (typeof window.confirm === 'function' && !window.confirm(t('loginConfirmLogout'))) return
@@ -449,7 +554,7 @@ window.__ModuleLoader__.load({
         try {
           const payload = await accountRequest({ action: 'logout' })
           setStatus(payload)
-          writeCache(brand.id, 'status', { ...payload, cachedAt: Date.now() })
+          writeCache(cacheId, 'status', { ...payload, cachedAt: Date.now() })
           onStatus?.(payload)
           onAfterRefresh?.()
         } catch (err) {
@@ -457,7 +562,7 @@ window.__ModuleLoader__.load({
         } finally {
           setActionBusy(false)
         }
-      }, [accountRequest, brand.id, onStatus, onAfterRefresh, t])
+      }, [accountRequest, cacheId, onStatus, onAfterRefresh, t])
 
       const startBrowserLogin = useCallback(async () => {
         setActionError(undefined)
@@ -481,6 +586,26 @@ window.__ModuleLoader__.load({
         }
       }, [accountRequest, t])
 
+      // Claiming is the only state-changing account action. The reward changes
+      // the quota, so the reading is refreshed afterwards instead of guessed.
+      const claimCheckin = useCallback(async () => {
+        setCheckinBusy(true)
+        setActionError(undefined)
+        try {
+          const payload = await accountRequest({ action: 'checkin' })
+          if (payload?.checkin !== undefined) {
+            setStatus(previous => previous === undefined
+              ? previous
+              : { ...previous, checkin: payload.checkin })
+          }
+          await load(true, false)
+        } catch (err) {
+          setActionError(`${t('checkinFailed')}：${String(err?.message ?? err)}`)
+        } finally {
+          setCheckinBusy(false)
+        }
+      }, [accountRequest, load, t])
+
       const quotaContent = (() => {
         if (busy && quota === undefined) return h('div', { style: css.note }, t('quotaRefreshing'))
         if (status?.quotaError !== undefined) return h('div', { style: css.err }, `${t('quotaFailed')}：${status.quotaError}`)
@@ -503,22 +628,81 @@ window.__ModuleLoader__.load({
             ),
           )
         }
+        if (brand.id === 'trae') {
+          const packs = Array.isArray(quota.packs) ? quota.packs : []
+          const plan = typeof quota.plan === 'string' && quota.plan !== '' ? quota.plan : undefined
+          const usedText = quota.used === undefined
+            ? undefined
+            : `${creditsOf(quota.used)}${quota.total === undefined ? '' : ` / ${creditsOf(quota.total)}`} ${t('points')}`
+          return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '5px' } },
+            plan === undefined && quota.total === undefined && usedText === undefined && packs.length === 0
+              ? h('div', { style: css.note }, t('quotaUnavailable'))
+              : null,
+            plan === undefined ? null : h('div', { style: css.line },
+              h('span', { style: css.label }, t('plan')),
+              h('span', { style: css.value }, plan),
+              quota.trialEndsAt === undefined ? null : h('span', { style: css.label }, t('trialEnds')),
+              quota.trialEndsAt === undefined ? null : h('span', { style: css.value }, dateLabel(quota.trialEndsAt)),
+            ),
+            usedText === undefined ? null : h('div', { style: css.line },
+              h('span', { style: css.label }, t('quota')),
+              h('span', { style: css.value }, usedText),
+              quota.ratio === undefined ? null : h('span', { style: css.label }, `${Math.round(quota.ratio)}%`),
+            ),
+            packs.length === 0 ? null : h('div', { style: css.line },
+              h('span', { style: css.label }, t('packs')),
+              h('span', { style: css.value }, packs.map(pack => [
+                pack.label,
+                pack.total === undefined ? undefined : `${creditsOf(pack.used ?? 0)} / ${creditsOf(pack.total)}`,
+                pack.expiresAt === undefined ? undefined : `${t('packExpires')} ${dateLabel(pack.expiresAt)}`,
+              ].filter(part => typeof part === 'string' && part !== '').join(' · ')).join('；')),
+            ),
+          )
+        }
         return h('div', { style: css.line },
           h('span', { style: css.label }, t('quota')),
           h('span', { style: css.value }, `${creditsOf(quota.total)} ${t('points')}`),
         )
       })()
 
+      // Trae CN grants one reward per account per day, but its device flag can
+      // also block the claim; the two reasons are shown apart so "本机已签"
+      // never reads as "this account already claimed".
+      const checkin = brand.id === 'trae' ? status?.checkin : undefined
+      const checkinBlocked = checkin === undefined
+        || checkin.available === false
+        || checkin.claimed === true
+        || checkin.deviceClaimed === true
+      const checkinLabel = checkin?.claimed === true
+        ? t('checkinClaimed')
+        : checkin?.deviceClaimed === true ? t('checkinDevice') : t('checkinClaim')
+      const checkinPanel = signedIn && checkin !== undefined && checkin.available !== false
+        ? h('div', { style: css.bar },
+            h('button', {
+              style: { ...css.btn, ...css.btnPrimary },
+              disabled: checkinBlocked || checkinBusy || actionBusy,
+              onClick: () => void claimCheckin(),
+            }, checkinBusy ? t('checkinBusy') : checkinLabel),
+            checkin.reward === undefined || checkin.claimed === true || checkin.deviceClaimed === true
+              ? null
+              : h('span', { style: css.note }, `${t('checkinReward')} +${creditsOf(checkin.reward)} ${t('points')}`),
+          )
+        : null
+
       const browserRunning = browser?.running === true
       const browserPanel = h('div', { style: css.loginBox },
-        h('h4', { style: css.h4 }, t('browserTitle')),
-        h('div', { style: css.note }, brand.id === 'loomy' ? t('browserHintLoomy') : t('browserHintRaccoon')),
+        h('h4', { style: css.h4 }, brand.id === 'trae' ? t('browserTitleTrae') : t('browserTitle')),
+        h('div', { style: css.note }, brand.id === 'loomy'
+          ? t('browserHintLoomy')
+          : brand.id === 'raccoon' ? t('browserHintRaccoon') : t('browserHintTrae')),
         h('div', { style: css.bar },
           h('button', {
             style: { ...css.btn, ...css.btnPrimary },
-            disabled: browserRunning || actionBusy,
+            disabled: browserRunning || actionBusy || regionBusy,
             onClick: () => void startBrowserLogin(),
-          }, browserRunning ? t('browserWaiting') : t('browserOpen')),
+          }, browserRunning
+            ? brand.id === 'trae' ? t('browserWaitingTrae') : t('browserWaiting')
+            : brand.id === 'trae' ? t('browserOpenTrae') : t('browserOpen')),
           browserRunning
             ? h('button', {
                 style: css.btn,
@@ -534,14 +718,43 @@ window.__ModuleLoader__.load({
               }, t('browserReopen'))
             : null,
         ),
-        browserRunning ? h('div', { style: css.note }, t('browserPolling')) : null,
+        browserRunning
+          ? h('div', { style: css.note }, typeof browser?.message === 'string' && browser.message !== ''
+              ? browser.message
+              : brand.id === 'trae' ? t('browserPollingTrae') : t('browserPolling'))
+          : null,
         browser !== undefined && browser.running === false && browser.error !== undefined
           ? h('div', { style: css.err }, browser.error)
           : null,
         actionError !== undefined ? h('div', { style: css.err }, actionError) : null,
       )
 
+      // Trae's region is a saved setting, not a tab: the selector writes the
+      // same `traeRegion` the provider reads, and the page then re-reads both
+      // the account and the catalog for the newly selected region.
+      const regionPicker = brand.id === 'trae'
+        ? h('div', { style: css.regionBox },
+            h('div', { style: css.bar },
+              h('span', { style: css.label }, t('regionLabel')),
+              h('div', { style: css.seg },
+                ...REGIONS.map(option => h('button', {
+                  key: option.id,
+                  style: { ...css.segBtn, ...(region === option.id ? css.segOn : {}) },
+                  disabled: regionBusy || busy,
+                  onClick: () => {
+                    if (region === option.id) return
+                    onRegionChange?.(option.id)
+                  },
+                }, t(option.labelKey))),
+              ),
+              regionBusy ? h('span', { style: css.note }, t('regionSwitching')) : null,
+            ),
+            h('div', { style: css.note }, t('regionHint')),
+          )
+        : null
+
       return h('div', { style: css.card },
+        regionPicker,
         h('div', { style: css.cardHead },
           h('h3', { style: css.h3 }, t('accountTitle')),
           h('span', { style: { ...css.note, opacity: 0.75 } }, signedIn ? t('signedIn') : t('notLoggedIn')),
@@ -551,7 +764,9 @@ window.__ModuleLoader__.load({
             onClick: () => { void load(true, true) },
           }, busy ? t('reading') : t('reread')),
         ),
-        h('div', { style: css.note }, brand.id === 'loomy' ? t('loomyHint') : t('raccoonHint')),
+        h('div', { style: css.note }, brand.id === 'loomy'
+          ? t('loomyHint')
+          : brand.id === 'raccoon' ? t('raccoonHint') : t('traeHint')),
         signedIn
           ? h('div', { style: css.line },
               h('span', { style: css.label }, t('account')),
@@ -571,11 +786,12 @@ window.__ModuleLoader__.load({
             )
           : null,
         signedIn ? quotaContent : null,
+        checkinPanel,
         status?.possiblyExpired === true ? h('div', { style: css.err }, t('possiblyExpired')) : null,
         !signedIn && status !== undefined
           ? h('div', { style: css.guide },
-              h('div', { style: css.guideText }, status?.error ?? (brand.id === 'loomy' ? t('loomyLoginMissing') : t('raccoonLoginMissing'))),
-              h('div', { style: css.note }, t('loginGuide')),
+              h('div', { style: css.guideText }, status?.error ?? signInGuide(t, brand)),
+              h('div', { style: css.note }, brand.id === 'trae' ? t('loginGuideTrae') : t('loginGuide')),
             )
           : null,
         signedIn
@@ -701,7 +917,11 @@ window.__ModuleLoader__.load({
       const read = useCallback(() => form.getSnapshot(), [form])
       const snapshot = useSyncExternalStore(subscribe, read)
       const fields = FIELDS[brand.id]
-      const cached = readCache(brand.id, 'models')
+      // Trae's two regions have independent accounts AND catalogs, so every
+      // snapshot (models and status) is keyed by region as well as by brand.
+      const region = brand.id === 'trae' ? regionOf(snapshot?.value?.[fields.region]) : undefined
+      const cacheId = region === undefined ? brand.id : `${brand.id}:${region}`
+      const cached = readCache(cacheId, 'models')
       const [models, setModels] = useState(() => Array.isArray(cached?.rows) ? cached.rows : undefined)
       const [notice, setNotice] = useState(() => typeof cached?.notice === 'string' ? cached.notice : undefined)
       const [signedIn, setSignedIn] = useState(() => cached?.signedIn === true ? true : undefined)
@@ -712,6 +932,7 @@ window.__ModuleLoader__.load({
       const [onlyEnabled, setOnlyEnabled] = useState(false)
       const [showAdvanced, setShowAdvanced] = useState(false)
       const [reloadSignal, setReloadSignal] = useState(0)
+      const [regionBusy, setRegionBusy] = useState(false)
       const ticket = useRef(0)
       const writeTicket = useRef(0)
 
@@ -728,8 +949,8 @@ window.__ModuleLoader__.load({
         setModels(rows)
         setNotice(nextNotice)
         if (nextSignedIn !== undefined) setSignedIn(nextSignedIn)
-        writeCache(brand.id, 'models', { rows, notice: nextNotice, signedIn: nextSignedIn, at: Date.now() })
-      }, [brand.id])
+        writeCache(cacheId, 'models', { rows, notice: nextNotice, signedIn: nextSignedIn, at: Date.now() })
+      }, [cacheId])
 
       const load = useCallback(async (fresh = false) => {
         const mine = ++ticket.current
@@ -746,14 +967,28 @@ window.__ModuleLoader__.load({
       }, [adopt, fetchModels])
 
       useEffect(() => {
-        const saved = readCache(brand.id, 'models')
-        if (Array.isArray(saved?.rows)) {
-          setModels(saved.rows)
-          setNotice(typeof saved.notice === 'string' ? saved.notice : undefined)
-        }
+        const saved = readCache(cacheId, 'models')
+        setModels(Array.isArray(saved?.rows) ? saved.rows : undefined)
+        setNotice(typeof saved?.notice === 'string' ? saved.notice : undefined)
         setError(undefined)
         void load(false)
-      }, [brand.id, load])
+      }, [cacheId, load])
+
+      // Switching region writes the same field the provider reads, so the host
+      // starts answering for the new region immediately; the cacheId change
+      // above then restores that region's own account and catalog.
+      const changeRegion = useCallback(async next => {
+        setRegionBusy(true)
+        setError(undefined)
+        try {
+          const accepted = await withDeadline(form.set(fields.region, next), WRITE_TIMEOUT_MS, t('timeout'))
+          if (accepted === false) throw new Error(t('saveFailed'))
+        } catch (err) {
+          setError(`${t('saveFailed')}：${String(err?.message ?? err)}`)
+        } finally {
+          setRegionBusy(false)
+        }
+      }, [fields.region, form, t])
 
       const handleStatus = useCallback((payload) => {
         if (typeof payload?.signedIn === 'boolean') setSignedIn(payload.signedIn)
@@ -841,6 +1076,9 @@ window.__ModuleLoader__.load({
       const accountCard = h(AccountCard, {
         t,
         brand,
+        region,
+        regionBusy,
+        onRegionChange: next => { void changeRegion(next) },
         reloadSignal,
         onStatus: handleStatus,
         onAfterRefresh: afterRefresh,
@@ -966,7 +1204,9 @@ window.__ModuleLoader__.load({
         ),
         all.length === 0
           ? h('div', { style: css.guide },
-              h('div', { style: css.guideText }, brand.id === 'loomy' ? t('modelsEmptyLoomy') : t('modelsEmptyRaccoon')),
+              h('div', { style: css.guideText }, brand.id === 'loomy'
+                ? t('modelsEmptyLoomy')
+                : brand.id === 'raccoon' ? t('modelsEmptyRaccoon') : t('modelsEmptyTrae')),
             )
           : h('div', { style: css.list }, rows.length > 0
               ? rows
@@ -982,7 +1222,8 @@ window.__ModuleLoader__.load({
     }
 
     function signInGuide(t, brand) {
-      return brand.id === 'loomy' ? t('loomyLoginMissing') : t('raccoonLoginMissing')
+      if (brand.id === 'loomy') return t('loomyLoginMissing')
+      return brand.id === 'raccoon' ? t('raccoonLoginMissing') : t('traeLoginMissing')
     }
 
     function BundleSettings({ ctx, t, view }) {
@@ -1103,8 +1344,8 @@ window.__ModuleLoader__.load({
     exports.inject = inject
     exports.name = 'dsh-llm-adapters'
     exports.__test = {
-      BRANDS, FIELDS, zh, en, css, windowLabel, creditsOf, ownerLabel, priceText, dateLabel, readCache, writeCache,
-      AccountCard, SettingsPage, BundleSettings,
+      BRANDS, FIELDS, REGIONS, regionOf, zh, en, css, windowLabel, creditsOf, ownerLabel, priceText, dateLabel,
+      readCache, writeCache, AccountCard, SettingsPage, BundleSettings,
     }
     return module.exports
   },

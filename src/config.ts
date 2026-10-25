@@ -11,22 +11,32 @@
 
 import { isVolatile } from '@deepseek-ai/cosmokit'
 import z from '@deepseek-ai/schemastery'
+import type { TraeRegion } from './brand.ts'
+import { normalizeTraeRegion } from './brand.ts'
 
 export interface Config {
   loomyEnabled?: boolean
   raccoonEnabled?: boolean
+  traeEnabled?: boolean
+  traeRegion?: string
   loomyDisplayName?: string
   raccoonDisplayName?: string
+  traeDisplayName?: string
   loomyDisabledModels?: string[]
   raccoonDisabledModels?: string[]
+  traeDisabledModels?: string[]
   loomyModelContextWindows?: Record<string, number>
   raccoonModelContextWindows?: Record<string, number>
+  traeModelContextWindows?: Record<string, number>
   loomyModelAliases?: Record<string, string>
   raccoonModelAliases?: Record<string, string>
+  traeModelAliases?: Record<string, string>
   loomyVisionModelIds?: string[]
   loomyTextOnlyModelIds?: string[]
   raccoonVisionModelIds?: string[]
   raccoonTextOnlyModelIds?: string[]
+  traeVisionModelIds?: string[]
+  traeTextOnlyModelIds?: string[]
   defaultMaxTokens?: number
   modelCacheTtlSeconds?: number
   catalogFetchTimeoutSeconds?: number
@@ -35,21 +45,29 @@ export interface Config {
 export const Config = z.object({
   loomyEnabled: z.boolean().default(true).description('启用 Loomy。关闭后该设置页、模型列表与 provider 路由都会移除；登录态与模型选择会保留。').volatile(),
   raccoonEnabled: z.boolean().default(true).description('启用商汤小浣熊。关闭后该设置页、模型列表与 provider 路由都会移除；登录态与模型选择会保留。').volatile(),
+  traeEnabled: z.boolean().default(true).description('启用 Trae。关闭后该设置页、模型列表与 provider 路由都会移除；两个区域的登录态与模型选择会保留。').volatile(),
+  traeRegion: z.string().default('cn').description('Trae 登录区域：cn（国内版 trae.cn）或 global（国际版 trae.ai）。两个区域各自保存账号，切换后立即恢复对应账号。').volatile(),
 
   loomyDisplayName: z.string().default('Loomy').description('模型选择器里 Loomy 分组的名称。').volatile(),
   raccoonDisplayName: z.string().default('商汤小浣熊').description('模型选择器里小浣熊分组的名称。').volatile(),
+  traeDisplayName: z.string().default('Trae').description('模型选择器里 Trae 分组的名称。').volatile(),
 
   loomyDisabledModels: z.array(z.string()).default([]).description('Loomy 已关闭的模型 ID 列表。关闭的模型不会出现在模型选择器里。').volatile(),
   raccoonDisabledModels: z.array(z.string()).default([]).description('小浣熊已关闭的模型 ID 列表。').volatile(),
+  traeDisabledModels: z.array(z.string()).default([]).description('Trae 已关闭的模型 ID 列表。').volatile(),
   loomyModelContextWindows: z.dict(z.number()).default({}).description('Loomy 按模型指定上下文窗口（token 数）。未指定的模型使用上游声明的窗口。').volatile(),
   raccoonModelContextWindows: z.dict(z.number()).default({}).description('小浣熊按模型指定上下文窗口（token 数）。').volatile(),
+  traeModelContextWindows: z.dict(z.number()).default({}).description('Trae 按模型指定上下文窗口（token 数）。').volatile(),
   loomyModelAliases: z.dict(z.string()).default({}).description('Loomy 模型别名映射：DSH 侧名称 → 上游模型 ID。').volatile(),
   raccoonModelAliases: z.dict(z.string()).default({}).description('小浣熊模型别名映射：DSH 侧名称 → 上游模型 ID。').volatile(),
+  traeModelAliases: z.dict(z.string()).default({}).description('Trae 模型别名映射：DSH 侧名称 → 上游模型 ID。').volatile(),
 
   loomyVisionModelIds: z.array(z.string()).default([]).description('Loomy 强制按“能读图”声明的模型 ID，优先级高于目录标签。').volatile(),
   loomyTextOnlyModelIds: z.array(z.string()).default([]).description('Loomy 强制按“纯文本”声明的模型 ID，优先级最高。').volatile(),
   raccoonVisionModelIds: z.array(z.string()).default([]).description('小浣熊强制按“能读图”声明的模型 ID。用于纠正上游标签错误。').volatile(),
   raccoonTextOnlyModelIds: z.array(z.string()).default([]).description('小浣熊强制按“纯文本”声明的模型 ID，优先级最高。').volatile(),
+  traeVisionModelIds: z.array(z.string()).default([]).description('Trae 强制按“能读图”声明的模型 ID。目录标注 multimodal 的模型会自动启用。').volatile(),
+  traeTextOnlyModelIds: z.array(z.string()).default([]).description('Trae 强制按“纯文本”声明的模型 ID，优先级最高。').volatile(),
 
   defaultMaxTokens: z.number().step(1).min(1).default(32_000).description('模型目录未声明输出上限时使用的输出上限。').volatile(),
   modelCacheTtlSeconds: z.number().step(1).min(10).max(86_400).default(120).description('模型列表缓存时长（秒）。调小可更快看到账号侧变化。').volatile(),
@@ -59,18 +77,26 @@ export const Config = z.object({
 export interface ResolvedConfig {
   loomyEnabled: boolean
   raccoonEnabled: boolean
+  traeEnabled: boolean
+  traeRegion: TraeRegion
   loomyDisplayName: string
   raccoonDisplayName: string
+  traeDisplayName: string
   loomyDisabledModels: readonly string[]
   raccoonDisabledModels: readonly string[]
+  traeDisabledModels: readonly string[]
   loomyModelContextWindows: Readonly<Record<string, number>>
   raccoonModelContextWindows: Readonly<Record<string, number>>
+  traeModelContextWindows: Readonly<Record<string, number>>
   loomyModelAliases: Readonly<Record<string, string>>
   raccoonModelAliases: Readonly<Record<string, string>>
+  traeModelAliases: Readonly<Record<string, string>>
   loomyVisionModelIds: readonly string[]
   loomyTextOnlyModelIds: readonly string[]
   raccoonVisionModelIds: readonly string[]
   raccoonTextOnlyModelIds: readonly string[]
+  traeVisionModelIds: readonly string[]
+  traeTextOnlyModelIds: readonly string[]
   defaultMaxTokens: number
   modelCacheTtlMs: number
   catalogFetchTimeoutMs: number
@@ -89,18 +115,26 @@ export function liveConfig(config: ParsedConfig | undefined): LiveConfig {
   return {
     loomyEnabled: () => bool(field('loomyEnabled'), true),
     raccoonEnabled: () => bool(field('raccoonEnabled'), true),
+    traeEnabled: () => bool(field('traeEnabled'), true),
+    traeRegion: () => normalizeTraeRegion(field('traeRegion')),
     loomyDisplayName: () => nonEmpty(field('loomyDisplayName'), 'Loomy'),
     raccoonDisplayName: () => nonEmpty(field('raccoonDisplayName'), '商汤小浣熊'),
+    traeDisplayName: () => nonEmpty(field('traeDisplayName'), 'Trae'),
     loomyDisabledModels: () => stringList(field('loomyDisabledModels')),
     raccoonDisabledModels: () => stringList(field('raccoonDisabledModels')),
+    traeDisabledModels: () => stringList(field('traeDisabledModels')),
     loomyModelContextWindows: () => numberMap(field('loomyModelContextWindows')),
     raccoonModelContextWindows: () => numberMap(field('raccoonModelContextWindows')),
+    traeModelContextWindows: () => numberMap(field('traeModelContextWindows')),
     loomyModelAliases: () => stringMap(field('loomyModelAliases')),
     raccoonModelAliases: () => stringMap(field('raccoonModelAliases')),
+    traeModelAliases: () => stringMap(field('traeModelAliases')),
     loomyVisionModelIds: () => stringList(field('loomyVisionModelIds')),
     loomyTextOnlyModelIds: () => stringList(field('loomyTextOnlyModelIds')),
     raccoonVisionModelIds: () => stringList(field('raccoonVisionModelIds')),
     raccoonTextOnlyModelIds: () => stringList(field('raccoonTextOnlyModelIds')),
+    traeVisionModelIds: () => stringList(field('traeVisionModelIds')),
+    traeTextOnlyModelIds: () => stringList(field('traeTextOnlyModelIds')),
     defaultMaxTokens: () => positive(field('defaultMaxTokens'), 32_000),
     modelCacheTtlMs: () => positive(field('modelCacheTtlSeconds'), 120) * 1_000,
     catalogFetchTimeoutMs: () => positive(field('catalogFetchTimeoutSeconds'), 20) * 1_000,
@@ -112,18 +146,26 @@ export function resolveConfig(config: ParsedConfig | undefined): ResolvedConfig 
   return {
     loomyEnabled: live.loomyEnabled(),
     raccoonEnabled: live.raccoonEnabled(),
+    traeEnabled: live.traeEnabled(),
+    traeRegion: live.traeRegion(),
     loomyDisplayName: live.loomyDisplayName(),
     raccoonDisplayName: live.raccoonDisplayName(),
+    traeDisplayName: live.traeDisplayName(),
     loomyDisabledModels: live.loomyDisabledModels(),
     raccoonDisabledModels: live.raccoonDisabledModels(),
+    traeDisabledModels: live.traeDisabledModels(),
     loomyModelContextWindows: live.loomyModelContextWindows(),
     raccoonModelContextWindows: live.raccoonModelContextWindows(),
+    traeModelContextWindows: live.traeModelContextWindows(),
     loomyModelAliases: live.loomyModelAliases(),
     raccoonModelAliases: live.raccoonModelAliases(),
+    traeModelAliases: live.traeModelAliases(),
     loomyVisionModelIds: live.loomyVisionModelIds(),
     loomyTextOnlyModelIds: live.loomyTextOnlyModelIds(),
     raccoonVisionModelIds: live.raccoonVisionModelIds(),
     raccoonTextOnlyModelIds: live.raccoonTextOnlyModelIds(),
+    traeVisionModelIds: live.traeVisionModelIds(),
+    traeTextOnlyModelIds: live.traeTextOnlyModelIds(),
     defaultMaxTokens: live.defaultMaxTokens(),
     modelCacheTtlMs: live.modelCacheTtlMs(),
     catalogFetchTimeoutMs: live.catalogFetchTimeoutMs(),
