@@ -25,6 +25,8 @@ export interface ProviderModel {
   /** Non-price bracket contents from the upstream name (`限时免费`, …). */
   labels?: readonly string[]
   contextWindow: number
+  /** Widest window the upstream offers (Trae's Max tier), when it publishes one. */
+  maxContextWindow?: number
   maxTokens?: number
   vision: boolean
   reasoning: boolean

@@ -30,7 +30,8 @@ import type { LoginStatus } from './login-page.ts'
 import { parseModelName } from './model-name.ts'
 import type { TraeRegionProfile } from './trae-endpoints.ts'
 import {
-  TRAE_APP_ID, TRAE_REGION_PROFILES, TRAE_SOLO_CHAT_PATH, TRAE_SOLO_MODELS_PATH, TRAE_WEB_USER_AGENT,
+  TRAE_APP_ID, TRAE_REGION_PROFILES, TRAE_SOLO_CHAT_PATH, TRAE_SOLO_MODELS_PATH, TRAE_VERSION_CODE,
+  TRAE_WEB_USER_AGENT,
 } from './trae-endpoints.ts'
 import { TraeWebLogin } from './trae-login.ts'
 import type { TraeLoginAccount } from './trae-login.ts'
@@ -191,6 +192,31 @@ function contactConfig(value: unknown): Record<string, unknown> | undefined {
   }
 }
 
+/** A field that may arrive as a nested object or as a JSON string. */
+function jsonRecord(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value === 'string') {
+    try {
+      return record(JSON.parse(value))
+    } catch {
+      return undefined
+    }
+  }
+  return record(value)
+}
+
+/**
+ * The effort levels a Trae model offers.
+ *
+ * The directory frequently omits `max` even when the gateway accepts it (live
+ * check: `light`, `high`, `extra_high` and `max` all stream on
+ * `solo_work_remote`). Without it the model menu stops at `xhigh`, so every
+ * model that publishes any level also gets `max`.
+ */
+function effortsWithMax(efforts: readonly string[]): string[] {
+  if (efforts.length === 0 || efforts.includes('max')) return [...efforts]
+  return [...efforts, 'max']
+}
+
 /**
  * Parse the Remote directory.
  *
@@ -218,9 +244,10 @@ export function parseTraeRemoteModels(payload: unknown): TraeRemoteModel[] {
       const context = record(model?.context_window_tokens)
       const dev = num(context?.dev)
       const max = model?.max_mode === true ? num(context?.max) : undefined
-      const features = record(model?.features)
+      // `features` is a JSON *string* on the wire, not an object.
+      const features = jsonRecord(model?.features)
       const reasoning = record(model?.reasoning_effort_config)
-      const efforts = effortsOf(reasoning?.options)
+      const efforts = effortsWithMax(effortsOf(reasoning?.options))
       const candidate: TraeRemoteModel = {
         id,
         name: display !== undefined && display !== '-' ? display : id,
@@ -322,6 +349,7 @@ export function mergeTraeModels(remote: readonly TraeRemoteModel[], wire: readon
     maxTokens?: number
     creditMultiplier?: number
     multimodal: boolean
+    maxContextWindow?: number
     efforts: readonly string[]
     configName: string
     function?: string
@@ -329,7 +357,7 @@ export function mergeTraeModels(remote: readonly TraeRemoteModel[], wire: readon
   }): void => {
     const parsed = parseModelName(input.name)
     const name = parsed.name.length > 0 ? parsed.name : input.id
-    const efforts = [...new Set(input.efforts)]
+    const efforts = effortsWithMax([...new Set(input.efforts)])
     const defaultEffort = defaultEffortOf(efforts)
     const price = input.creditMultiplier
     models.push({
@@ -338,6 +366,9 @@ export function mergeTraeModels(remote: readonly TraeRemoteModel[], wire: readon
       ...input.labels === undefined || input.labels.length === 0 ? {} : { labels: input.labels },
       ...parsed.labels.length === 0 ? {} : { labels: [...new Set([...(input.labels ?? []), ...parsed.labels])] },
       contextWindow: input.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+      ...input.maxContextWindow === undefined || input.maxContextWindow <= (input.contextWindow ?? 0)
+        ? {}
+        : { maxContextWindow: input.maxContextWindow },
       ...input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens },
       vision: input.multimodal,
       reasoning: efforts.length > 0,
@@ -362,6 +393,7 @@ export function mergeTraeModels(remote: readonly TraeRemoteModel[], wire: readon
       id: model.id,
       name: model.name,
       ...model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow },
+      ...model.maxContextWindow === undefined ? {} : { maxContextWindow: model.maxContextWindow },
       ...wireModel?.maxTokens === undefined ? {} : { maxTokens: wireModel.maxTokens },
       ...wireModel?.creditMultiplier === undefined && model.creditMultiplier === undefined
         ? {}
@@ -369,7 +401,9 @@ export function mergeTraeModels(remote: readonly TraeRemoteModel[], wire: readon
       multimodal: model.multimodal,
       efforts: wireModel !== undefined && wireModel.efforts.length > 0 ? wireModel.efforts : model.efforts,
       configName: wireModel?.configName ?? model.id,
-      function: model.function ?? wireModel?.function,
+      // The wire roster is what chat actually accepts; the directory group is
+      // only a hint (and can name a function that rejects the model).
+      function: wireModel?.function ?? model.function,
     })
   }
 
@@ -804,6 +838,13 @@ export class TraeProvider {
       'content-type': 'application/json',
       accept: 'application/json',
       'x-trae-client-type': 'web',
+      // These four are bound by the gateway on every call, including
+      // get_detail_param; omitting the version code makes chat fail with
+      // `expr_path=app_version_code` and turns the wire roster empty.
+      'x-app-id': TRAE_APP_ID,
+      'x-app-version-code': TRAE_VERSION_CODE,
+      'x-ide-version-code': TRAE_VERSION_CODE,
+      'x-ide-version-type': 'stable',
       'x-trae-user-timezone': profile.timezone,
       'x-preferenced-language': profile.language,
       referer: `${profile.webOrigin}/`,
@@ -822,7 +863,6 @@ export class TraeProvider {
       accept: 'text/event-stream',
       'x-ide-token': token,
       'x-cloudide-token': token,
-      'x-app-id': TRAE_APP_ID,
       'x-device-id': identity.deviceId,
       'x-machine-id': identity.machineId,
       ...identity.userId === undefined ? {} : { 'x-uid': identity.userId },

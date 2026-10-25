@@ -109,9 +109,25 @@ Trae 没有可以自建的二维码链路：设备指纹必须来自一次真实
 映射（`light` → `low`、`extra_high` → `xhigh`），默认档仍是倒数第二强。
 
 聊天走 `POST {chatBase}/api/agent/v3/llm_utils_chat`，需要 `x-device-id` / `x-machine-id` /
-`x-uid` 等网页头；消息 content 一律是 block 数组，assistant 的工具调用放在 `function_call`，
-工具的 `parameters` 是 JSON **字符串**。上游错误帧按码映射：`1005` / `4222` → 402，
-`4008` / `4011` → 429，`4001` / `4023` → 400，其余 502。
+`x-uid` 与 **`x-app-version-code` / `x-ide-version-code`** 等网页头。后两个是数字，缺失时上游
+返回 `4001 binding: expr_path=app_version_code, cause=missing required parameter`（聊天）或
+`config_info_list: []`（`get_detail_param`，静默少一半目录）；网页登录拿不到桌面构建号，因此用
+固定的数字 `TRAE_VERSION_CODE`，只规范格式、不冒充设备。消息 content 一律是 block 数组，
+assistant 的工具调用放在 `function_call`，工具的 `parameters` 是 JSON **字符串**。上游错误帧
+按码映射：`1005` / `4222` → 402，`4008` / `4011` → 429，`4001` / `4023` → 400，其余 502。
+
+目录里的 `features` 是 **JSON 字符串**（不是对象），倍率在
+`features.consumption_rate.data.rate`；不解析字符串时所有模型都会丢掉倍率。同一模型会出现在
+多个分组，容量取最强行（Max 优先、其次更宽的 dev 窗口），但**调用函数以 wire 目录为准**：
+远端分组可能把模型标到一个实际会回 `4001` 的函数上（实测 `solo_agent_remote` 拒绝
+`deepseek-v4.1-flash`，`solo_work_remote` 正常）。
+
+思考档位在目录里常被省略 `max`（只给 `light` / `high` / `extra_high`），但网关接受
+`reasoning_effort: "max"`（实测四档都能流式返回，reasoning token 随档位增加）。所以只要模型
+发布了任意档位，就补上 `max`，菜单为 `Low / High / xhigh / Max`；默认仍是公共规则的倒数第二强。
+
+上下文窗口同时保留上游的 dev 与 Max 两档：模型行默认用 dev，下拉里额外提供它声明的
+`maxContextWindow`（例如 1M），不再只显示 200K。
 
 额度按区域走不同接口：国内版 `web_user_ent_usage`（已用 / 总额 + 资源包，按最早到期排序），
 国际版 `ide_user_pay_status`（套餐 / 试用）。签到只有国内版有：`checkin_credits/status` 读状态，

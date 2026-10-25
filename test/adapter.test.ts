@@ -210,6 +210,25 @@ function response(): { res: never, captured: Captured } {
   return { res: res as never, captured }
 }
 
+describe('context window choices', () => {
+  it('offers a published Max tier without changing the default', async () => {
+    const wide: ProviderModel = {
+      id: 'wide-model', name: 'Wide', contextWindow: 200_000, maxContextWindow: 1_000_000,
+      vision: false, reasoning: false,
+    }
+    const { adapter } = makeAdapter({ models: async () => [wide] })
+    const rows = await buildRows(adapter)
+    expect(rows[0]).toMatchObject({
+      defaultContextWindow: 200_000,
+      contextWindow: 200_000,
+      maxContextWindow: 1_000_000,
+    })
+    expect(rows[0]!.contextWindows).toContain(1_000_000)
+    expect(rows[0]!.contextWindows).toContain(200_000)
+    expect(rows[0]!.contextWindows).not.toContain(500_000)
+  })
+})
+
 describe('settings API', () => {
   it('serves model rows and echoes the brand', async () => {
     const { adapter } = makeAdapter()

@@ -138,6 +138,9 @@ window.__ModuleLoader__.load({
       trialEnds: '试用到期',
       packs: '资源包',
       packExpires: '到期',
+      packUsage: '已用 / 总额',
+      packExpand: '展开全部',
+      packCollapse: '收起',
       usedOf: '已用',
       browserHintTrae: '点下面的按钮会打开一个独立的浏览器窗口（不会动你自己的浏览器配置）：在其中登录 Trae，登录成功后窗口会自动关闭。',
       browserPollingTrae: '浏览器已打开：请在窗口里登录 Trae，成功后会自动接回，这个窗口随后会关闭。',
@@ -257,6 +260,9 @@ window.__ModuleLoader__.load({
       trialEnds: 'Trial ends',
       packs: 'Credit packs',
       packExpires: 'expires',
+      packUsage: 'used / total',
+      packExpand: 'Show all',
+      packCollapse: 'Collapse',
       usedOf: 'used',
       browserHintTrae: 'The button opens a dedicated browser window (your own browser profile is untouched): sign in to Trae there and the window closes itself.',
       browserPollingTrae: 'The browser is open: sign in to Trae in that window; the login is adopted automatically and the window then closes.',
@@ -362,6 +368,16 @@ window.__ModuleLoader__.load({
       seg: { display: 'flex', gap: '6px', flexWrap: 'wrap' },
       segBtn: { padding: '4px 10px', borderRadius: '7px', border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.35))', background: 'transparent', color: 'inherit', cursor: 'pointer', font: 'inherit', fontSize: '0.84em' },
       segOn: { border: '1px solid var(--dsw-alias-brand-primary, #4c6ef5)', fontWeight: 600 },
+      packBlock: { display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '2px' },
+      packHead: { display: 'flex', alignItems: 'baseline', gap: '8px' },
+      packToggle: { marginLeft: 'auto', background: 'none', border: 'none', padding: 0, font: 'inherit', fontSize: '0.8em', color: 'var(--dsw-alias-brand-primary, #4c6ef5)', cursor: 'pointer' },
+      packList: { display: 'flex', flexDirection: 'column', borderRadius: '8px', border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.25))', overflow: 'hidden' },
+      packListScroll: { maxHeight: '190px', overflowY: 'auto' },
+      packRow: { display: 'grid', gridTemplateColumns: 'minmax(90px, 1.5fr) auto auto', alignItems: 'baseline', gap: '10px', padding: '6px 10px', borderTop: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.15))', fontSize: '0.82em' },
+      packFirst: { borderTop: 'none' },
+      packLabel: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+      packAmount: { fontFamily: 'ui-monospace, monospace', textAlign: 'right', whiteSpace: 'nowrap' },
+      packExpiry: { opacity: 0.6, whiteSpace: 'nowrap', fontSize: '0.92em' },
     }
 
     const API = (() => {
@@ -470,6 +486,7 @@ window.__ModuleLoader__.load({
       const [actionBusy, setActionBusy] = useState(false)
       const [actionError, setActionError] = useState(undefined)
       const [checkinBusy, setCheckinBusy] = useState(false)
+      const [packsExpanded, setPacksExpanded] = useState(false)
       const ticket = useRef(0)
 
       const load = useCallback(async (fresh, notify) => {
@@ -504,6 +521,7 @@ window.__ModuleLoader__.load({
         setStatus(readCache(cacheId, 'status'))
         setBrowser(undefined)
         setActionError(undefined)
+        setPacksExpanded(false)
       }, [cacheId])
 
       useEffect(() => {
@@ -649,14 +667,40 @@ window.__ModuleLoader__.load({
               h('span', { style: css.value }, usedText),
               quota.ratio === undefined ? null : h('span', { style: css.label }, `${Math.round(quota.ratio)}%`),
             ),
-            packs.length === 0 ? null : h('div', { style: css.line },
-              h('span', { style: css.label }, t('packs')),
-              h('span', { style: css.value }, packs.map(pack => [
-                pack.label,
-                pack.total === undefined ? undefined : `${creditsOf(pack.used ?? 0)} / ${creditsOf(pack.total)}`,
-                pack.expiresAt === undefined ? undefined : `${t('packExpires')} ${dateLabel(pack.expiresAt)}`,
-              ].filter(part => typeof part === 'string' && part !== '').join(' · ')).join('；')),
-            ),
+            packs.length === 0 ? null : (() => {
+              // A CN account can carry a dozen packs; one joined sentence is
+              // unreadable. Collapsed shows the soonest few, expanded shows all
+              // inside a bounded scroll area.
+              const limit = 4
+              const collapsed = !packsExpanded && packs.length > limit
+              const visible = collapsed ? packs.slice(0, limit) : packs
+              return h('div', { style: css.packBlock },
+                h('div', { style: css.packHead },
+                  h('span', { style: css.label }, t('packs')),
+                  h('span', { style: css.note }, t('packUsage')),
+                  packs.length > limit
+                    ? h('button', {
+                        style: css.packToggle,
+                        onClick: () => setPacksExpanded(value => !value),
+                      }, packsExpanded ? t('packCollapse') : `${t('packExpand')}（${packs.length}）`)
+                    : null,
+                ),
+                h('div', {
+                  style: { ...css.packList, ...(packsExpanded && packs.length > limit ? css.packListScroll : {}) },
+                },
+                  visible.map((pack, index) => h('div', {
+                    key: `${pack.label}-${index}`,
+                    style: { ...css.packRow, ...(index === 0 ? css.packFirst : {}) },
+                  },
+                    h('span', { style: css.packLabel, title: pack.label }, pack.label),
+                    h('span', { style: css.packAmount }, pack.total === undefined
+                      ? (pack.used === undefined ? '—' : creditsOf(pack.used))
+                      : `${creditsOf(pack.used ?? 0)} / ${creditsOf(pack.total)}`),
+                    h('span', { style: css.packExpiry }, pack.expiresAt === undefined ? '' : dateLabel(pack.expiresAt)),
+                  )),
+                ),
+              )
+            })(),
           )
         }
         return h('div', { style: css.line },
