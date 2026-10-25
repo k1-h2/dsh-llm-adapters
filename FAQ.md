@@ -123,19 +123,33 @@ Trae 的工具调用只在首帧给出 `id`，之后的参数分片会带 `id: "
 都有唯一非空 id；工具结果也统一发 block 数组（空数组会被上游判为参数无效）。升级并重启后
 即可正常调用工具。
 
-**Trae 的倍率为什么没了 / 为什么没有 Max、没有 1M？**
+**Trae 的倍率为什么没了 / 为什么有的模型没有 Max、没有 1M？**
 倍率在目录的 `features` 字段里，而它是 JSON **字符串**（`features.consumption_rate.data.rate`），
-现在会解析后显示成 `x0.06` 这样的倍率。Max 档在目录里经常不发布，但网关实际接受
-`reasoning_effort: "max"`，所以只要模型支持思考就会列出来。1M 来自同一模型更宽的分组
-（`context_window_tokens.max`），会作为上下文下拉里的一个选项出现，默认仍是 200K。
+现在会解析后显示成 `x0.06` 这样的倍率。思考档位先查 OpenRouter 的 `supported_efforts`，匹配不到
+才用 Trae 目录自己发布的档位，**不再人为补 `max`**：DeepSeek V4.1 Flash 在 OpenRouter 里支持
+`max/high/low/none`，菜单就是 `None/Low/High/Max`；目录只给 `light/high/extra_high` 的模型则是
+`Low/High/xhigh`。1M 来自同一模型更宽的分组（`context_window_tokens.max`），会作为上下文下拉里
+的一个选项出现，默认仍是 200K。
 
 **模型选择器报“invalid or duplicate model metadata”？**
 这是模型目录里有重复 id 时宿主给出的拒绝。Trae 的远端目录会把同一个配置以不同大小写或不同显示名
-列在多个分组里（`custom_model_gemini` 就是实测例子），现在按 id 去重后只保留第一行，适配器
-`listModels` 也会再兜一次底，避免一条重复记录把整个 Trae 路由打掉。重启并刷新模型后即可恢复。
+列在多个分组里（`custom_model_gemini` 就是实测例子），现在按 id 去重后只保留第一行，内部配置
+（`custom_model_*`、`summary`、`*_subagent`）也会按 `usage` / `config_source` 过滤，适配器
+`listModels` 还会再兜一次底，避免一条脏记录把整个 Trae 路由打掉。重启并刷新模型后即可恢复。
+
+**Qwen3.8-Flash / Kimi-K2.8-Preview 为什么在 DSH 里看不到？**
+它们在 Trae 官方客户端里可以调用，但走的是客户端自己的 **TraeCode/IDE 通道**，不是网页登录
+所获得的 SOLO 通道。实测：5 个 SOLO 聊天函数和 12 个目录函数的 `get_detail_param` 都没有返回
+它们的 `config_name`；用网页令牌调用 IDE Raw Chat 端点时，连普通模型的 config 都会被拒
+（`4001`），`/api/ide/v1/chat` 则返回 `4023 model is unknown`。参考实现 `dsh-connect-trae`
+也把这两个模型标注为“TraeCode 通道、SOLO 尚未开放”。因此插件现在直接不把它们放进模型列表，
+而不是让你选中后必然收到 `4001`。要支持它们需要桌面端 TraeCode 的配置与凭据，这与“只靠网页
+登录、不读本机客户端”的约束冲突，当前不做。
 
 **Trae 模型列表为什么比客户端少？**
 插件把两份目录合并：远端目录（`/api/remote/v1/models`）提供显示名、上下文窗口与多模态标签，
-`get_detail_param` 提供真正可调用的 `config_name` 与输出上限。目录是按账号下发的，账号没有的
-模型不会凭空出现；反过来，只在 `get_detail_param` 里出现、显示名又不重复的模型会被保留，
-调用失败时按 Trae 自己的错误码提示（`1005` 套餐不含、`4008` 额度用完、`4011` 限流等）。
+`get_detail_param` 提供真正可调用的 `config_name` 与输出上限。只有拿到 config 的目录模型才会
+出现：没有 config 的客户端专属模型（见上一条）会隐藏，内部 `custom_model_*`、`summary`、
+`*_subagent` 也会过滤。目录是按账号下发的，账号没有的模型不会凭空出现；反过来，只在
+`get_detail_param` 里出现、显示名正常且不重复的模型会被保留，调用失败时按 Trae 自己的错误码
+提示（`1005` 套餐不含、`4008` 额度用完、`4011` 限流等）。

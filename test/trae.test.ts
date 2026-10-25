@@ -6,6 +6,7 @@ import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { AccountStore } from '../src/account-store.ts'
 import { TraeAuth } from '../src/auth.ts'
 import { normalizeTraeRegion } from '../src/brand.ts'
+import { EMPTY_OPENROUTER_INDEX, buildOpenRouterIndex } from '../src/openrouter.ts'
 import {
   TraeProvider, mergeTraeModels, normalizeEffort, openTraeStream, parseTraeCheckin, parseTraePlan,
   parseTraeRemoteModels, parseTraeUsage, parseTraeWireModels, traeMessages, traeTools,
@@ -72,18 +73,24 @@ const wirePayload = {
     {
       config_name: 'gpt-5-2026',
       display_config: { display_name: 'GPT-5' },
+      usage: 'chat_completion',
+      config_source: 1,
       model_detail_list: [{ max_tokens: 64_000, prompt_max_tokens: 272_000, reasoning_effort_options: ['low', 'medium', 'high'] }],
       display_contact_config: JSON.stringify({ consumption_rate: { enable: true, data: { rate: 0.8 } } }),
     },
     {
       config_name: 'gemini-3-pro',
       display_config: { display_name: 'Gemini 3 Pro' },
+      usage: 'chat_completion',
+      config_source: 1,
       model_detail_list: [{ max_tokens: 32_000 }],
     },
     {
       // Same display name as a remote row: the dated snapshot is skipped.
       config_name: 'claude-4.5-sonnet-20260101',
       display_config: { display_name: 'Claude 4.5 Sonnet' },
+      usage: 'chat_completion',
+      config_source: 1,
       model_detail_list: [{ max_tokens: 8_000 }],
     },
   ],
@@ -94,7 +101,8 @@ describe('Trae catalog', () => {
     expect(normalizeEffort('light')).toBe('low')
     expect(normalizeEffort('extra_high')).toBe('xhigh')
     expect(normalizeEffort('max')).toBe('max')
-    expect(normalizeEffort('none')).toBeUndefined()
+    expect(normalizeEffort('none')).toBe('none')
+    expect(normalizeEffort('minimal')).toBe('minimal')
     expect(normalizeEffort(42)).toBeUndefined()
   })
 
@@ -103,8 +111,8 @@ describe('Trae catalog', () => {
     expect(models.map(model => model.id)).toEqual(['gpt-5', 'kimi-k2', 'claude-4.5-sonnet'])
     const gpt = models.find(model => model.id === 'gpt-5')!
     expect(gpt).toMatchObject({ name: 'GPT-5', contextWindow: 272_000, function: 'solo_work_remote' })
-    // `max` is appended even though the directory omits it: the gateway accepts it.
-    expect(gpt.efforts).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
+    // Exactly what the directory advertises; `max` is not invented here.
+    expect(gpt.efforts).toEqual(['low', 'medium', 'high', 'xhigh'])
     const claude = models.find(model => model.id === 'claude-4.5-sonnet')!
     expect(claude).toMatchObject({
       multimodal: true, contextWindow: 200_000, maxContextWindow: 1_000_000, creditMultiplier: 1.2,
@@ -125,6 +133,8 @@ describe('Trae catalog', () => {
       contextWindow: 272_000,
       creditMultiplier: 0.8,
       efforts: ['low', 'medium', 'high'],
+      usage: 'chat_completion',
+      configSource: 1,
       function: 'solo_work_remote',
     })
   })
@@ -134,7 +144,9 @@ describe('Trae catalog', () => {
     const wire = parseTraeWireModels(wirePayload, 'solo_work_remote')
     const { models, meta } = mergeTraeModels(remote, wire)
 
-    expect(models.map(model => model.id)).toEqual(['gpt-5', 'kimi-k2', 'claude-4.5-sonnet', 'gemini-3-pro'])
+    // `kimi-k2` has no config in any chat roster in this fixture, so it is not
+    // offered; `gemini-3-pro` is a real wire-only model and is promoted.
+    expect(models.map(model => model.id)).toEqual(['gpt-5', 'claude-4.5-sonnet', 'gemini-3-pro'])
     const gpt = models[0]!
     // Remote owns the display name and the window; wire owns the config name,
     // the output cap and the multiplier.
@@ -145,13 +157,13 @@ describe('Trae catalog', () => {
       maxTokens: 64_000,
       priceFactor: 0.8,
       reasoning: true,
-      reasoningEfforts: ['low', 'medium', 'high', 'max'],
+      reasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
       defaultReasoningEffort: 'high',
     })
     expect(meta.get('gpt-5')).toEqual({
       configName: 'gpt-5-2026',
       function: 'solo_work_remote',
-      wireEfforts: { low: 'light', medium: 'medium', high: 'high', max: 'max' },
+      wireEfforts: { low: 'light', medium: 'medium', high: 'high', xhigh: 'extra_high' },
     })
 
     const claude = models.find(model => model.id === 'claude-4.5-sonnet')!
@@ -191,8 +203,14 @@ describe('Trae catalog', () => {
     expect(remote[0]!.function).toBe('solo_work_remote')
 
     const wire = [
-      { configName: 'custom_model_gemini', name: 'Gemini 3.1 Pro Preview', function: 'solo_work_remote', efforts: [] },
-      { configName: 'custom_model_gemini', name: 'Gemini 3 Pro Preview', function: 'chat_v3', efforts: [] },
+      {
+        configName: 'custom_model_gemini', name: 'Gemini 3.1 Pro Preview',
+        usage: 'chat_completion', configSource: 1, function: 'solo_work_remote', efforts: [],
+      },
+      {
+        configName: 'custom_model_gemini', name: 'Gemini 3 Pro Preview',
+        usage: 'chat_completion', configSource: 1, function: 'chat_v3', efforts: [],
+      },
     ]
     const merged = mergeTraeModels(remote, wire)
     expect(merged.models).toHaveLength(1)
@@ -240,7 +258,7 @@ describe('Trae catalog', () => {
       contextWindow: 116_000,
       maxContextWindow: 1_000_000,
       multimodal: true,
-      efforts: ['low', 'high', 'xhigh', 'max'],
+      efforts: ['low', 'high', 'xhigh'],
     })
   })
 
@@ -249,9 +267,18 @@ describe('Trae catalog', () => {
       id: 'kimi-k2', name: 'Kimi-K2', contextWindow: 28_000, multimodal: false, efforts: [],
     }]
     const wire = [
-      { configName: 'kimi-k2-0905', name: 'Kimi-K2', contextWindow: 168_000, function: 'chat_v3', efforts: [] },
-      { configName: 'glm-4.7', name: 'GLM-4.7', contextWindow: 100_000, function: 'solo_work_remote', efforts: [] },
-      { configName: 'glm-4.7-auto', name: 'GLM-4.7', contextWindow: 100_000, function: 'chat_v3', efforts: [] },
+      {
+        configName: 'kimi-k2-0905', name: 'Kimi-K2', contextWindow: 168_000,
+        usage: 'chat_completion', configSource: 1, function: 'chat_v3', efforts: [],
+      },
+      {
+        configName: 'glm-4.7', name: 'GLM-4.7', contextWindow: 100_000,
+        usage: 'chat_completion', configSource: 1, function: 'solo_work_remote', efforts: [],
+      },
+      {
+        configName: 'glm-4.7-auto', name: 'GLM-4.7', contextWindow: 100_000,
+        usage: 'chat_completion', configSource: 1, function: 'chat_v3', efforts: [],
+      },
     ]
     const { models } = mergeTraeModels(remote, wire)
     expect(models.map(model => model.id)).toEqual(['kimi-k2', 'kimi-k2-0905', 'glm-4.7'])
@@ -276,7 +303,17 @@ describe('Trae catalog', () => {
         }],
       },
     })
-    const { models } = mergeTraeModels(remote, [])
+    const wire = [
+      {
+        configName: 'DeepSeek-V4-Flash-Official', name: 'DeepSeek-V4-Flash',
+        usage: 'chat_completion', configSource: 1, function: 'solo_work_remote', efforts: [],
+      },
+      {
+        configName: 'DeepSeek-V4-Flash', name: 'DeepSeek-V4-Flash',
+        usage: 'chat_completion', configSource: 1, function: 'solo_work_remote', efforts: [],
+      },
+    ]
+    const { models } = mergeTraeModels(remote, wire)
     expect(models.map(model => model.name)).toEqual([
       'DeepSeek V4 Flash',
       'DeepSeek V4 Flash (DeepSeek-V4-Flash)',
@@ -288,6 +325,64 @@ describe('Trae catalog', () => {
     const wire = parseTraeWireModels(wirePayload, 'solo_work_remote')
     const { models } = mergeTraeModels(remote, wire)
     expect(models.filter(model => model.name === 'Claude 4.5 Sonnet')).toHaveLength(1)
+  })
+
+  it('hides a directory model with no callable config', () => {
+    // Qwen3.8-Flash and Kimi-K2.8-Preview are listed by the directory but no
+    // chat roster returns a config for them; selecting one can only answer 4001.
+    const remote = [{
+      id: 'qwen3.8-flash', name: 'Qwen3.8-Flash', contextWindow: 200_000,
+      maxContextWindow: 1_000_000, multimodal: true, efforts: ['low', 'high', 'xhigh'],
+    }]
+    const { models } = mergeTraeModels(remote, [])
+    expect(models).toEqual([])
+  })
+
+  it('never promotes internal wire configurations', () => {
+    const wire = [
+      {
+        configName: 'custom_model_gpt-5', name: 'custom_model_gpt 5',
+        usage: 'custom_model', configSource: 1, function: 'solo_work_remote', efforts: [],
+      },
+      {
+        configName: 'summary', name: 'summary',
+        usage: 'summary', configSource: 1, function: 'solo_work_remote', efforts: [],
+      },
+      {
+        configName: 'computer_use_subagent', name: 'computer_use_subagent',
+        usage: 'chat_completion', configSource: 1, function: 'solo_work_lite', efforts: [],
+      },
+      {
+        configName: 'glm-5.3', name: 'GLM 5.3',
+        usage: 'chat_completion', configSource: 1, function: 'solo_work_remote', efforts: ['low', 'high'],
+      },
+    ]
+    const { models } = mergeTraeModels([], wire)
+    expect(models.map(model => model.id)).toEqual(['glm-5.3'])
+  })
+
+  it('takes efforts and modalities from OpenRouter when it knows the model', () => {
+    const remote = [{
+      id: 'deepseek-v4.1-flash', name: 'DeepSeek-V4.1-Flash', contextWindow: 200_000,
+      multimodal: true, efforts: ['low', 'high', 'xhigh'],
+    }]
+    const wire = [{
+      configName: 'deepseek-v4.1-flash', name: 'DeepSeek-V4.1-Flash', contextWindow: 200_000,
+      usage: 'chat_completion', configSource: 1, function: 'solo_work_remote', efforts: [],
+    }]
+    const index = buildOpenRouterIndex([{
+      id: 'deepseek/deepseek-v4.1-flash',
+      name: 'DeepSeek: DeepSeek V4.1 Flash',
+      inputModalities: ['text'],
+      efforts: ['max', 'high', 'low', 'none'],
+    }])
+    const { models } = mergeTraeModels(remote, wire, index)
+    expect(models[0]).toMatchObject({
+      // OpenRouter says text only, so the directory's multimodal flag loses.
+      vision: false,
+      reasoningEfforts: ['none', 'low', 'high', 'max'],
+      defaultReasoningEffort: 'high',
+    })
   })
 })
 
@@ -512,6 +607,10 @@ describe('TraeProvider', () => {
       logout: async () => undefined,
     }
     const store = { saveTrae: vi.fn(async () => undefined) }
+    const openRouter = {
+      models: vi.fn(async () => EMPTY_OPENROUTER_INDEX),
+      invalidate: vi.fn(),
+    }
     const provider = new TraeProvider({
       auth: auth as never,
       store: store as never,
@@ -520,9 +619,10 @@ describe('TraeProvider', () => {
       timeoutMs: () => 1000,
       textOnly: () => new Set(),
       forceVision: () => new Set(),
+      openRouter,
       fetchImpl,
     })
-    return { provider, auth, store }
+    return { provider, auth, store, openRouter }
   }
 
   function catalogFetch(): typeof fetch {
@@ -547,7 +647,7 @@ describe('TraeProvider', () => {
   it('merges the directory and the wire roster behind one catalog', async () => {
     const { provider } = make('cn', catalogFetch())
     const models = await provider.models()
-    expect(models.map(model => model.id)).toEqual(['gpt-5', 'kimi-k2', 'claude-4.5-sonnet', 'gemini-3-pro'])
+    expect(models.map(model => model.id)).toEqual(['gpt-5', 'claude-4.5-sonnet', 'gemini-3-pro'])
     expect(provider.catalogError()).toBeUndefined()
   })
 
@@ -606,12 +706,13 @@ describe('TraeProvider', () => {
       ttlMs: () => 1000,
       timeoutMs: () => 1000,
       textOnly: () => new Set(['claude-4.5-sonnet']),
-      forceVision: () => new Set(['kimi-k2']),
+      forceVision: () => new Set(['gemini-3-pro']),
+      openRouter: { models: async () => EMPTY_OPENROUTER_INDEX, invalidate: () => {} },
       fetchImpl: catalogFetch(),
     })
     const models = await provider.models()
     expect(models.find(model => model.id === 'claude-4.5-sonnet')?.vision).toBe(false)
-    expect(models.find(model => model.id === 'kimi-k2')?.vision).toBe(true)
+    expect(models.find(model => model.id === 'gemini-3-pro')?.vision).toBe(true)
     expect(models.find(model => model.id === 'gpt-5')?.vision).toBe(false)
   })
 
@@ -673,7 +774,17 @@ describe('TraeProvider', () => {
           },
         })
       }
-      if (url.includes('/get_detail_param')) return json({ config_info_list: [] })
+      if (url.includes('/get_detail_param')) {
+        return json({
+          config_info_list: [{
+            config_name: region === 'cn' ? 'cn-model' : 'global-model',
+            display_config: { display_name: region === 'cn' ? 'CN' : 'Global' },
+            usage: 'chat_completion',
+            config_source: 1,
+            model_detail_list: [{}],
+          }],
+        })
+      }
       if (url.endsWith('/web_user_ent_usage')) return json({ data: { usage_summary: { total_amount: 1 } } })
       if (url.endsWith('/ide_user_pay_status')) return json({ user_pay_identity_str: 'Pro' })
       if (url.endsWith('/checkin_credits/status')) return json({ enable: true, checked_in: false })
@@ -692,6 +803,7 @@ describe('TraeProvider', () => {
       timeoutMs: () => 1000,
       textOnly: () => new Set(),
       forceVision: () => new Set(),
+      openRouter: { models: async () => EMPTY_OPENROUTER_INDEX, invalidate: () => {} },
       fetchImpl: fetchMock as unknown as typeof fetch,
     })
 
@@ -704,6 +816,20 @@ describe('TraeProvider', () => {
     expect((await provider.models()).map(model => model.id)).toEqual(['global-model'])
     expect(await provider.quota()).toMatchObject({ plan: 'Pro' })
     expect(await provider.checkinStatus()).toMatchObject({ available: false })
+  })
+
+  it('refreshes OpenRouter metadata when models are invalidated', async () => {
+    const { provider, openRouter } = make('cn', catalogFetch())
+    await provider.models()
+    provider.invalidateModels()
+    expect(openRouter.invalidate).toHaveBeenCalledOnce()
+  })
+
+  it('reports a clear error for a model outside the catalog', async () => {
+    const { provider } = make('cn', catalogFetch())
+    await provider.models()
+    await expect(collect(provider.stream(options, 'qwen3.8-flash', undefined, () => undefined)))
+      .rejects.toThrow('只存在于 Trae 客户端通道')
   })
 
   it('refreshes the token once when the gateway rejects it', async () => {
@@ -730,6 +856,7 @@ describe('TraeProvider', () => {
       timeoutMs: () => 1000,
       textOnly: () => new Set(),
       forceVision: () => new Set(),
+      openRouter: { models: async () => EMPTY_OPENROUTER_INDEX, invalidate: () => {} },
       fetchImpl: fetchMock as unknown as typeof fetch,
     })
     await expect(collect(provider.stream(options, 'gpt-5', undefined, () => undefined)))

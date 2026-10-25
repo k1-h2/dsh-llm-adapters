@@ -104,9 +104,13 @@ Trae 没有可以自建的二维码链路：设备指纹必须来自一次真实
    `taskkill /T /F` 杀掉进程树）。
 
 两条目录来源合并成一份模型表（`mergeTraeModels`）：远端目录给显示名、上下文窗口、多模态与
-倍率，`get_detail_param` 给真正可调用的 `config_name`、输出上限与折后倍率。只在 wire 里出现、
-显示名又不重复的模型会被保留——目录是账号级的，藏掉反而会少给付费账号模型。思考档位统一
-映射（`light` → `low`、`extra_high` → `xhigh`），默认档仍是倒数第二强。
+倍率，`get_detail_param` 给真正可调用的 `config_name`、输出上限与折后倍率。**远端行必须有
+wire config 才保留**——`Qwen3.8-Flash` / `Kimi-K2.8-Preview` 只出现在远端 `chat_v3`，12 个
+`get_detail_param` 通道都没有它们，选中只会回 `4001`，所以直接不列出。只在 wire 里出现、且
+通过 `isPromotableTraeWireModel` 的模型才会被提升：`usage` 必须是 `chat_completion`、
+`config_source` 为 1，显示名不能等于 config 名，且不能是 `custom_model_*` / 下划线内部名。
+能力来源与另外两个供应商一致：OpenRouter 优先，其次 Trae 目录；思考档位统一映射
+（`light` → `low`、`extra_high` → `xhigh`），默认档仍是倒数第二强。
 
 聊天走 `POST {chatBase}/api/agent/v3/llm_utils_chat`，需要 `x-device-id` / `x-machine-id` /
 `x-uid` 与 **`x-app-version-code` / `x-ide-version-code`** 等网页头。后两个是数字，缺失时上游
@@ -122,9 +126,10 @@ assistant 的工具调用放在 `function_call`，工具的 `parameters` 是 JSO
 远端分组可能把模型标到一个实际会回 `4001` 的函数上（实测 `solo_agent_remote` 拒绝
 `deepseek-v4.1-flash`，`solo_work_remote` 正常）。
 
-思考档位在目录里常被省略 `max`（只给 `light` / `high` / `extra_high`），但网关接受
-`reasoning_effort: "max"`（实测四档都能流式返回，reasoning token 随档位增加）。所以只要模型
-发布了任意档位，就补上 `max`，菜单为 `Low / High / xhigh / Max`；默认仍是公共规则的倒数第二强。
+思考档位不再人为补 `max`：先查 OpenRouter 的 `supported_efforts`，匹配不到才用 Trae 目录
+发布的 `light/high/extra_high`。实测网关也接受 `none` / `minimal` / `low` / `max`，所以
+OpenRouter 给出的档位可以直接映射到 wire；没有 OpenRouter 信息时，目录给几档就显示几档，
+默认仍是公共规则的倒数第二强。
 
 上下文窗口同时保留上游的 dev 与 Max 两档：模型行默认用 dev，下拉里额外提供它声明的
 `maxContextWindow`（例如 1M），不再只显示 200K。
@@ -151,6 +156,11 @@ assistant 的工具调用放在 `function_call`，工具的 `parameters` 是 JSO
 模型 id 与显示名都必须能区分：id 按小写去重（`custom_model_gemini` 这种跨分组重复），两条
 不同 id 归一到同一显示名时（`DeepSeek-V4-Flash` 与 `DeepSeek-V4-Flash-Official`），后来的
 一行会追加 id 后缀，避免设置页出现两行一模一样的模型名。
+
+`Qwen3.8-Flash` / `Kimi-K2.8-Preview` 是客户端 TraeCode 通道的模型：5 个聊天函数和 12 个目录
+函数的 `get_detail_param` 都不返回它们的 config，网页令牌调 `/api/ide/v2/llm_raw_chat` 也会对
+包括普通模型在内的所有 config 回 `4001`，所以网页登录无法调用；插件把它们隐藏，而不是提供
+一个必然失败的入口。若将来要支持，需要另一套桌面端 TraeCode 凭据，不能复用本插件的网页令牌。
 
 模型 id 必须唯一：宿主对重复元数据直接拒绝整条 provider（“invalid or duplicate model
 metadata”）。远端目录在多个分组里用不同大小写/显示名重复列出同一 config，所以
