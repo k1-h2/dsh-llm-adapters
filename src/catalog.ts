@@ -81,16 +81,27 @@ function recordOf(value: unknown): Record<string, unknown> {
     : {}
 }
 
+/** Display label for one effort id: `None`, `Low`, `High`, `Max`; `xhigh` stays as vendors spell it. */
+export function effortLabel(effort: string): string {
+  return effort === 'xhigh' ? effort : `${effort.charAt(0).toUpperCase()}${effort.slice(1)}`
+}
+
+/** Strength rank of an effort id; unknown ids rank below every known one. */
+function effortRank(effort: string): number {
+  return ALL_REASONING_EFFORTS.indexOf(effort)
+}
+
 /**
- * Pick the lowest supported effort for a fast default. OpenRouter's own
- * default is often `max`, which would make every first reply slower; the full
- * list is still exposed so the user can opt into more reasoning.
+ * The default level: second strongest of the supported list.
+ *
+ * Starting one step below the top gives a useful reasoning budget whenever the
+ * user switches models, without silently paying for the most expensive tier —
+ * and without starting at `none`, which makes a reasoning model look broken.
  */
-function preferredEffort(efforts: readonly string[]): string | undefined {
-  for (const candidate of ['none', 'off', 'low', 'minimal', 'medium', 'high', 'xhigh', 'max', 'on']) {
-    if (efforts.includes(candidate)) return candidate
-  }
-  return efforts[0]
+export function defaultEffortOf(efforts: readonly string[]): string | undefined {
+  if (efforts.length === 0) return undefined
+  const ranked = [...efforts].sort((a, b) => effortRank(a) - effortRank(b))
+  return ranked[Math.max(0, ranked.length - 2)]
 }
 
 function effortsOf(value: unknown): string[] {
@@ -124,27 +135,19 @@ interface ResolvedCapabilities {
 function resolveCapabilities(input: {
   live?: { efforts?: readonly string[]; inputModalities?: readonly string[] }
   upstreamEfforts?: readonly string[]
-  upstreamDefaultEffort?: string
   upstreamReasoning?: boolean
   upstreamModalities?: readonly string[]
 }): ResolvedCapabilities {
   const liveEfforts = input.live?.efforts ?? []
   const upstreamEfforts = input.upstreamEfforts ?? []
-  const fromOpenRouter = liveEfforts.length > 0
-  const efforts = fromOpenRouter
+  const efforts = liveEfforts.length > 0
     ? liveEfforts
     : upstreamEfforts.length > 0
       ? upstreamEfforts
       : input.upstreamReasoning === false
         ? []
         : ALL_REASONING_EFFORTS
-  const defaultEffort = efforts.length === 0
-    ? undefined
-    : fromOpenRouter
-      ? preferredEffort(efforts)
-      : input.upstreamDefaultEffort !== undefined && efforts.includes(input.upstreamDefaultEffort)
-        ? input.upstreamDefaultEffort
-        : preferredEffort(efforts)
+  const defaultEffort = defaultEffortOf(efforts)
 
   const liveModalities = input.live?.inputModalities ?? []
   const upstreamModalities = input.upstreamModalities ?? []
@@ -230,7 +233,6 @@ export function parseLoomyCatalog(
     const resolved = resolveCapabilities({
       live,
       upstreamEfforts: effortsOf(record.reasoning_efforts ?? record.reasoningEfforts),
-      upstreamDefaultEffort: stringField(record, ['default_reasoning_effort', 'defaultReasoningEffort']),
       upstreamReasoning: typeof capabilities.reasoning === 'boolean' ? capabilities.reasoning : undefined,
       upstreamModalities: loomyUpstreamModalities(capabilities),
     })
@@ -310,7 +312,6 @@ export function parseRaccoonCatalog(
     const resolved = resolveCapabilities({
       live,
       upstreamEfforts: effortsOf(record.reasoning_efforts ?? record.reasoningEfforts),
-      upstreamDefaultEffort: stringField(record, ['default_reasoning_effort', 'defaultReasoningEffort']),
       upstreamModalities: raccoonUpstreamModalities(tags),
     })
     const base = billingMultiplier(record)

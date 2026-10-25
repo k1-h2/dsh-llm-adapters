@@ -66,7 +66,7 @@ export type { QrMatrix } from './qr.ts'
 export { BRANDS, LOOMY_BRAND, RACCOON_BRAND, LOOMY_PROVIDER, RACCOON_PROVIDER, isBrandId } from './brand.ts'
 export type { BrandId, BrandProfile } from './brand.ts'
 export {
-  ModelCatalog, parseLoomyCatalog, parseRaccoonCatalog, priceFactorOf,
+  ModelCatalog, defaultEffortOf, effortLabel, parseLoomyCatalog, parseRaccoonCatalog, priceFactorOf,
 } from './catalog.ts'
 export type { ProviderModel } from './catalog.ts'
 export { parseModelName, modelKey } from './model-name.ts'

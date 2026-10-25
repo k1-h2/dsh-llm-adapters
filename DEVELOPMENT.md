@@ -97,15 +97,17 @@ test/                vitest，不访问真实上游
 3. **能力来源**（`resolveCapabilities`）：OpenRouter 有 `supported_efforts` /
    `input_modalities` 就用它；否则回退上游的 `reasoning_efforts`、`input_modalities`、
    `capabilities.vision` 或 `tags`；两边都没有时开放全部档位与 text/image 两种模态。
-4. **默认档**取列表里最省的一档（有 `none` 用 `none`，否则 `low`/`minimal`…），不沿用
-   OpenRouter 的 `max`，避免首字过慢；上游自己的默认档只在回退上游时保留。
-5. **档位名不翻译**：DSH 的模型菜单直接显示 `none` / `low` / `high` / `max` 等 id。
+4. **默认档**取列表里**倒数第二强**的一档（强度顺序 `none < minimal < low < medium <
+   high < xhigh < max`），由 `defaultEffortOf` 统一计算：不沿用 OpenRouter 的 `max`（太贵），
+   也不沿用上游常见默认值 `low` 或 `none`（切模型时看起来像没思考）。只有一个档位时就取它。
+5. **档位名只做大写化**：`none` → `None`、`low` → `Low`、`max` → `Max`，`xhigh` 保持原样；
+   不做中文翻译。
 6. **刷新即更新**：设置页的「刷新状态与模型」调用 `models(true)`，先 `invalidate()` 再重拉
    OpenRouter；OpenRouter 表或上游目录变化会在下一次刷新中体现。
 
 Loomy 的 `GET /models` 自带 `reasoning_efforts` 与 `default_reasoning_effort`，但为了统一
-规则，它也会先查 OpenRouter（命中时以实时表为准），匹配不上才用上游值。它的请求体直接透传
-`reasoning_effort`。
+规则，它也会先查 OpenRouter（命中时以实时表为准），匹配不上才用上游的档位列表；无论档位来自
+哪一边，默认档都按倒数第二强计算。它的请求体直接透传 `reasoning_effort`。
 
 Raccoon 的思考控制有两条通道，都要发：`extra_body.thinking.type = enabled | disabled`
 （真正的开关，`disabled` 实测能把 `reasoning_tokens` 压到 0）与 `reasoning_effort`
