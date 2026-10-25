@@ -19,6 +19,7 @@ export interface ModelRow {
   id: string
   name: string
   description?: string
+  labels?: readonly string[]
   enabled: boolean
   vision: boolean
   contextWindow: number
@@ -57,6 +58,7 @@ export async function buildRows(adapter: LocalAdapter): Promise<ModelRow[]> {
       id: model.id,
       name: model.name,
       ...model.description === undefined ? {} : { description: model.description },
+      ...model.labels === undefined ? {} : { labels: model.labels },
       enabled: !adapter.isModelDisabled(model.id),
       vision: model.vision,
       contextWindow: override ?? model.contextWindow,

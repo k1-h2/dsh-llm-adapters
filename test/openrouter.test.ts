@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
-  OpenRouterCatalog, buildOpenRouterIndex, modelKey, parseOpenRouterModels, EMPTY_OPENROUTER_INDEX,
+  OpenRouterCatalog, buildOpenRouterIndex, parseOpenRouterModels, EMPTY_OPENROUTER_INDEX,
 } from '../src/openrouter.ts'
+import { modelKey } from '../src/model-name.ts'
 
 describe('parseOpenRouterModels', () => {
   it('reads the reasoning and modality fields', () => {
@@ -78,33 +79,55 @@ describe('buildOpenRouterIndex', () => {
     id: 'z-ai/glm-5.3', name: 'Z.ai: GLM 5.3',
     inputModalities: ['text'], efforts: ['max', 'low'], mandatory: true,
   }
+  const kimiPro = {
+    id: 'moonshotai/kimi-k3.1-pro', name: 'MoonshotAI: Kimi K3.1 Pro',
+    inputModalities: ['text', 'image', 'video'], efforts: ['max', 'high', 'low', 'none'], mandatory: false,
+  }
+
+  it('matches a normalized product name exactly', () => {
+    const index = buildOpenRouterIndex([kimi, glm])
+    expect(index.match('Kimi K3')?.id).toBe('moonshotai/kimi-k3')
+    expect(index.match('GLM 5.3')?.id).toBe('z-ai/glm-5.3')
+    expect(index.match('Kimi K3', 'sn-kimi-k3')?.id).toBe('moonshotai/kimi-k3')
+  })
 
   it('matches an upstream id with or without the sn- prefix', () => {
     const index = buildOpenRouterIndex([kimi, glm])
-    expect(index.match('sn-kimi-k3')?.id).toBe('moonshotai/kimi-k3')
-    expect(index.match('kimi-k3')?.id).toBe('moonshotai/kimi-k3')
+    expect(index.match('unknown', 'sn-kimi-k3')?.id).toBe('moonshotai/kimi-k3')
+    expect(index.match('unknown', 'kimi-k3')?.id).toBe('moonshotai/kimi-k3')
   })
 
-  it('falls back to the model name tail when the id does not match', () => {
-    const index = buildOpenRouterIndex([kimi, glm])
-    expect(index.match('custom-front', 'Kimi K3')?.id).toBe('moonshotai/kimi-k3')
-    expect(index.match('unknown-id', 'Z.ai: GLM 5.3')?.id).toBe('z-ai/glm-5.3')
-    expect(index.match('unknown-id')).toBeUndefined()
+  it('uses wildcard containment when no exact name exists', () => {
+    const index = buildOpenRouterIndex([kimiPro])
+    // Upstream drops the vendor's `.1 Pro` suffix; the normalized prefix still matches.
+    expect(index.match('Kimi K3')?.id).toBe('moonshotai/kimi-k3.1-pro')
+  })
+
+  it('does not match unrelated models or generic router names', () => {
+    const index = buildOpenRouterIndex([
+      kimi,
+      glm,
+      {
+        id: 'openrouter/auto', name: 'OpenRouter: Auto Router',
+        inputModalities: ['text'], efforts: ['none'], mandatory: false,
+      },
+    ])
+    expect(index.match('SenseNova 6.8 Flash Lite')).toBeUndefined()
+    expect(index.match('Spark X2.6')).toBeUndefined()
+    expect(index.match('auto')).toBeUndefined()
   })
 
   it('prefers a canonical entry over batch and latest aliases', () => {
     const index = buildOpenRouterIndex([kimiBatch, kimi, kimiLatest])
-    expect(index.match('sn-kimi-k3')?.id).toBe('moonshotai/kimi-k3')
+    expect(index.match('Kimi K3')?.id).toBe('moonshotai/kimi-k3')
   })
 
   it('returns nothing for an empty index', () => {
-    expect(EMPTY_OPENROUTER_INDEX.match('sn-kimi-k3')).toBeUndefined()
+    expect(EMPTY_OPENROUTER_INDEX.match('Kimi K3')).toBeUndefined()
   })
 })
 
 describe('OpenRouterCatalog', () => {
-  const url = 'https://openrouter.ai/api/v1/models'
-
   function json(value: unknown): Response {
     return new Response(JSON.stringify(value), {
       status: 200,

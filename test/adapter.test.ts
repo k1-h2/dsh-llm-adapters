@@ -10,7 +10,7 @@ import type { QuotaSnapshot } from '../src/types.ts'
 const models: ProviderModel[] = [
   {
     id: 'spark-x', name: 'Spark X', contextWindow: 1_000_000, maxTokens: 32_000,
-    vision: true, reasoning: true, priceFactor: 0.1,
+    vision: true, reasoning: true, priceFactor: 0.1, labels: ['限时免费'],
   },
   {
     id: 'deepseek-v4-flash-0731', name: 'DeepSeek V4 Flash', contextWindow: 200_000,
@@ -83,27 +83,28 @@ describe('LocalAdapter', () => {
     })
   })
 
-  it('publishes the thinking switch and its default for Raccoon models', async () => {
+  it('publishes raw effort ids without translating them', async () => {
     const { adapter } = makeAdapter({
       models: async () => [{
         id: 'sn-kimi-k3',
-        name: 'Kimi-K3',
+        name: 'Kimi K3',
         contextWindow: 1_000_000,
         maxTokens: 100_000,
         vision: true,
         reasoning: true,
-        reasoningEfforts: ['on', 'off'],
-        reasoningEffortNames: { on: '开启思考', off: '关闭思考' },
-        defaultReasoningEffort: 'off',
+        reasoningEfforts: ['max', 'high', 'low', 'none'],
+        defaultReasoningEffort: 'none',
       }],
     }, { brand: 'raccoon', provider: 'raccoon' })
     const info = await adapter.resolveModel('raccoon', 'sn-kimi-k3')
     expect(info.reasoning).toEqual({
       efforts: [
-        { id: 'on', name: '开启思考' },
-        { id: 'off', name: '关闭思考' },
+        { id: 'max', name: 'max' },
+        { id: 'high', name: 'high' },
+        { id: 'low', name: 'low' },
+        { id: 'none', name: 'none' },
       ],
-      defaultEffort: 'off',
+      defaultEffort: 'none',
     })
   })
 
@@ -167,6 +168,7 @@ describe('buildRows', () => {
       priceFactor: 0.1,
       vision: true,
       reasoning: true,
+      labels: ['限时免费'],
     })
     expect(rows[0]!.contextWindows).toContain(1_000_000)
     expect(rows[0]!.contextWindows).toContain(500_000)

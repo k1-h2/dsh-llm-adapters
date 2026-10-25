@@ -2,52 +2,48 @@
  * Provider-neutral model rows plus the two upstream catalog parsers.
  *
  * The settings page needs more than `LlmModelInfo` (vision, context, multiplier,
- * badges), so adapters keep this shape internally and project it down to the
+ * labels), so adapters keep this shape internally and project it down to the
  * harness on `listModels`/`resolveModel`.
+ *
+ * Capability rules are shared by both providers: match the normalized name
+ * against OpenRouter first, fall back to the upstream declaration, and expose
+ * every effort/modality when neither source says anything. No model is
+ * special-cased.
  *
  * @module dsh-llm-adapters/catalog
  */
 
+import { parseModelName } from './model-name.ts'
 import type { OpenRouterIndex } from './openrouter.ts'
+
+export { priceFactorOf } from './model-name.ts'
 
 export interface ProviderModel {
   id: string
   name: string
   description?: string
+  /** Non-price bracket contents from the upstream name (`限时免费`, …). */
+  labels?: readonly string[]
   contextWindow: number
   maxTokens?: number
   vision: boolean
   reasoning: boolean
   reasoningEfforts?: readonly string[]
-  reasoningEffortNames?: Readonly<Record<string, string>>
   defaultReasoningEffort?: string
   priceFactor?: number
   badge?: string
   tags?: readonly string[]
 }
 
-/** Display names for every effort id either provider can return. */
-export const REASONING_EFFORT_NAMES: Readonly<Record<string, string>> = {
-  none: '关闭思考',
-  minimal: '最小',
-  low: '低',
-  medium: '中',
-  high: '高',
-  xhigh: '极高',
-  max: '最大',
-  on: '开启思考',
-  off: '关闭思考',
-}
+/** Every level the shared fallback exposes when no source knows the model. */
+export const ALL_REASONING_EFFORTS: readonly string[] = [
+  'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max',
+]
+export const ALL_INPUT_MODALITIES: readonly string[] = ['text', 'image']
 
-/**
- * The two-state switch used where the provider exposes no effort list. Raccoon's
- * `extra_body.thinking` works for every model, so an unmatched model still gets
- * on/off control; OpenRouter only ever *upgrades* this to real levels.
- */
+/** Legacy two-state ids, kept so older saved selections still map on the wire. */
 export const RACCOON_EFFORT_ON = 'on'
 export const RACCOON_EFFORT_OFF = 'off'
-export const RACCOON_SWITCH_EFFORTS: readonly string[] = [RACCOON_EFFORT_ON, RACCOON_EFFORT_OFF]
-export const RACCOON_SWITCH_DEFAULT = RACCOON_EFFORT_OFF
 
 export const DEFAULT_CONTEXT_WINDOW = 200_000
 
@@ -85,14 +81,6 @@ function recordOf(value: unknown): Record<string, unknown> {
     : {}
 }
 
-/** `x3.0`, `× 0.1`, `3倍` — only a multiplier next to the catalogue name. */
-export function priceFactorOf(text: string): number | undefined {
-  const match = /(?:[x×]\s*([0-9]+(?:\.[0-9]+)?)|([0-9]+(?:\.[0-9]+)?)\s*倍)/i.exec(text)
-  if (match === null) return undefined
-  const value = Number(match[1] ?? match[2])
-  return Number.isFinite(value) ? value : undefined
-}
-
 /**
  * Pick the lowest supported effort for a fast default. OpenRouter's own
  * default is often `max`, which would make every first reply slower; the full
@@ -119,37 +107,101 @@ function effortsOf(value: unknown): string[] {
   return [...new Set(out)]
 }
 
+interface ResolvedCapabilities {
+  efforts: readonly string[]
+  defaultEffort?: string
+  modalities: readonly string[]
+}
+
+/**
+ * Resolve one model's efforts and modalities from the two allowed sources.
+ *
+ * 1. Live OpenRouter metadata wins when it carries the field.
+ * 2. Otherwise the upstream declaration (`reasoning_efforts`, `input_modalities`,
+ *    `vision`, tags) is used.
+ * 3. When neither says anything, every effort and both modalities are exposed.
+ */
+function resolveCapabilities(input: {
+  live?: { efforts?: readonly string[]; inputModalities?: readonly string[] }
+  upstreamEfforts?: readonly string[]
+  upstreamDefaultEffort?: string
+  upstreamReasoning?: boolean
+  upstreamModalities?: readonly string[]
+}): ResolvedCapabilities {
+  const liveEfforts = input.live?.efforts ?? []
+  const upstreamEfforts = input.upstreamEfforts ?? []
+  const fromOpenRouter = liveEfforts.length > 0
+  const efforts = fromOpenRouter
+    ? liveEfforts
+    : upstreamEfforts.length > 0
+      ? upstreamEfforts
+      : input.upstreamReasoning === false
+        ? []
+        : ALL_REASONING_EFFORTS
+  const defaultEffort = efforts.length === 0
+    ? undefined
+    : fromOpenRouter
+      ? preferredEffort(efforts)
+      : input.upstreamDefaultEffort !== undefined && efforts.includes(input.upstreamDefaultEffort)
+        ? input.upstreamDefaultEffort
+        : preferredEffort(efforts)
+
+  const liveModalities = input.live?.inputModalities ?? []
+  const upstreamModalities = input.upstreamModalities ?? []
+  const modalities = liveModalities.length > 0
+    ? liveModalities
+    : upstreamModalities.length > 0
+      ? upstreamModalities
+      : ALL_INPUT_MODALITIES
+  return {
+    efforts,
+    ...defaultEffort === undefined ? {} : { defaultEffort },
+    modalities,
+  }
+}
+
 function visionFrom(input: {
-  capabilities: Record<string, unknown>
-  tags: readonly string[]
-  /** Authoritative modality list from the provider or OpenRouter. */
-  modalities?: readonly string[]
+  modalities: readonly string[]
   textOnly: ReadonlySet<string>
   forceVision: ReadonlySet<string>
-  fallback: boolean
   id: string
 }): boolean {
   if (input.textOnly.has(input.id)) return false
   if (input.forceVision.has(input.id)) return true
-  if (input.modalities !== undefined) {
-    return input.modalities.some(mode => mode.toLowerCase() === 'image')
-  }
-  if (input.capabilities.vision === true) return true
-  const tags = input.tags.map(tag => tag.toLowerCase())
-  if (tags.some(tag => tag === 'vision' || tag === 'image' || tag === 'image-understanding' || tag === 'image_input')) return true
-  return input.fallback
+  return input.modalities.some(mode => mode.toLowerCase() === 'image')
+}
+
+function loomyUpstreamModalities(capabilities: Record<string, unknown>): readonly string[] | undefined {
+  const declared = stringArray(capabilities.input_modalities ?? capabilities.inputModalities)
+  if (declared.length > 0) return declared
+  if (capabilities.vision === true) return ALL_INPUT_MODALITIES
+  if (capabilities.vision === false) return ['text']
+  return undefined
+}
+
+function raccoonUpstreamModalities(tags: readonly string[]): readonly string[] | undefined {
+  // No tags at all means the upstream said nothing; an explicit tag list
+  // without `vision` is an upstream text-only declaration.
+  if (tags.length === 0) return undefined
+  const lower = tags.map(tag => tag.toLowerCase())
+  const sees = lower.some(tag => tag === 'vision' || tag === 'image' || tag === 'image-understanding' || tag === 'image_input')
+  return sees ? ALL_INPUT_MODALITIES : ['text']
 }
 
 /**
  * Parse Loomy's `/models` response.
  *
  * The upstream returns an OpenAI-style list but varies whether the array sits
- * at `data`, `models`, or `data.models`; the multiplier is embedded in the
- * display name rather than a structured field.
+ * at `data`, `models`, or `data.models`; the multiplier and promo text are
+ * embedded in the display name rather than in structured fields.
  */
 export function parseLoomyCatalog(
   payload: unknown,
-  options: { textOnly?: ReadonlySet<string>, forceVision?: ReadonlySet<string> } = {},
+  options: {
+    textOnly?: ReadonlySet<string>
+    forceVision?: ReadonlySet<string>
+    openRouter?: OpenRouterIndex
+  } = {},
 ): ProviderModel[] {
   const root = recordOf(payload)
   const data = recordOf(root.data)
@@ -169,42 +221,38 @@ export function parseLoomyCatalog(
     const record = recordOf(candidate)
     const id = stringField(record, ['id', 'model', 'modelId'])
     if (id === undefined) continue
-    const display = stringField(record, ['display_name', 'displayName', 'name', 'label']) ?? id
+    const rawName = stringField(record, ['display_name', 'displayName', 'name', 'label']) ?? id
+    const parsed = parseModelName(rawName)
     const description = stringField(record, ['description', 'desc'])
     const capabilities = recordOf(record.capabilities)
     const tags = stringArray(record.tags)
-    const modalities = stringArray(capabilities.input_modalities ?? capabilities.inputModalities)
-    const priceFactor = priceFactorOf(`${display} ${description ?? ''}`)
-    const efforts = effortsOf(record.reasoning_efforts ?? record.reasoningEfforts)
-    const defaultEffort = stringField(record, ['default_reasoning_effort', 'defaultReasoningEffort'])
+    const live = options.openRouter?.match(parsed.name, id)
+    const resolved = resolveCapabilities({
+      live,
+      upstreamEfforts: effortsOf(record.reasoning_efforts ?? record.reasoningEfforts),
+      upstreamDefaultEffort: stringField(record, ['default_reasoning_effort', 'defaultReasoningEffort']),
+      upstreamReasoning: typeof capabilities.reasoning === 'boolean' ? capabilities.reasoning : undefined,
+      upstreamModalities: loomyUpstreamModalities(capabilities),
+    })
     out.push({
       id,
-      name: display,
+      name: parsed.name || id,
       ...description === undefined ? {} : { description },
+      ...parsed.labels.length === 0 ? {} : { labels: parsed.labels },
       contextWindow: numberField(record, ['context_length', 'context_window', 'contextWindow', 'max_context_length']) ?? DEFAULT_CONTEXT_WINDOW,
       ...numberField(record, ['max_output_tokens', 'max_tokens', 'maxTokens', 'max_output_length']) === undefined
         ? {}
         : { maxTokens: numberField(record, ['max_output_tokens', 'max_tokens', 'maxTokens', 'max_output_length'])! },
       vision: visionFrom({
-        capabilities,
-        tags,
-        ...modalities.length === 0 ? {} : { modalities },
+        modalities: resolved.modalities,
         textOnly,
         forceVision,
-        fallback: false,
         id,
       }),
-      reasoning: capabilities.reasoning === true || efforts.length > 0,
-      ...efforts.length === 0
-        ? {}
-        : {
-            reasoningEfforts: efforts,
-            reasoningEffortNames: REASONING_EFFORT_NAMES,
-            ...defaultEffort !== undefined && efforts.includes(defaultEffort)
-              ? { defaultReasoningEffort: defaultEffort }
-              : {},
-          },
-      ...priceFactor === undefined ? {} : { priceFactor },
+      reasoning: resolved.efforts.length > 0,
+      ...resolved.efforts.length === 0 ? {} : { reasoningEfforts: resolved.efforts },
+      ...resolved.defaultEffort === undefined ? {} : { defaultReasoningEffort: resolved.defaultEffort },
+      ...parsed.priceFactor === undefined ? {} : { priceFactor: parsed.priceFactor },
       ...tags.length === 0 ? {} : { tags },
     })
   }
@@ -225,14 +273,15 @@ function raccoonBadge(record: Record<string, unknown>): string | undefined {
  *
  * Only `categories[type=chat]` is relevant. The catalogue's `name` is both the
  * model id and the value the completion endpoint accepts; the human label comes
- * from `display_description` when present.
+ * from `description` (the product name), while `display_description` is a
+ * workload sentence shown as the description.
  */
 export function parseRaccoonCatalog(
   payload: unknown,
   options: {
     textOnly?: ReadonlySet<string>
     forceVision?: ReadonlySet<string>
-    /** Live OpenRouter index, matched by upstream id or product name. */
+    /** Live OpenRouter index, matched by normalized name or id. */
     openRouter?: OpenRouterIndex
   } = {},
 ): ProviderModel[] {
@@ -253,38 +302,36 @@ export function parseRaccoonCatalog(
     if (record.visible === false) continue
     const params = recordOf(record.params)
     const tags = stringArray(record.tags)
-    // `description` is the product name ("Kimi-K3"); `display_description` is a
-    // sentence about the workload. Selectors must show the former.
-    const name = stringField(record, ['description', 'display_name', 'model_name']) ?? id
+    const rawName = stringField(record, ['description', 'display_name', 'model_name']) ?? id
+    const parsed = parseModelName(rawName)
     const display = stringField(record, ['display_description', 'displayDescription'])
-    const description = display === undefined || display === name ? undefined : display
-    const live = options.openRouter?.match(id, name)
-    // OpenRouter upgrades the always-available on/off switch to real levels when
-    // it carries the model; otherwise the switch stays.
-    const efforts = live?.efforts ?? RACCOON_SWITCH_EFFORTS
-    const defaultEffort = preferredEffort(efforts)
+    const description = display === undefined || display === parsed.name ? undefined : display
+    const live = options.openRouter?.match(parsed.name, id)
+    const resolved = resolveCapabilities({
+      live,
+      upstreamEfforts: effortsOf(record.reasoning_efforts ?? record.reasoningEfforts),
+      upstreamDefaultEffort: stringField(record, ['default_reasoning_effort', 'defaultReasoningEffort']),
+      upstreamModalities: raccoonUpstreamModalities(tags),
+    })
     const base = billingMultiplier(record)
     out.push({
       id,
-      name,
+      name: parsed.name || id,
       ...description === undefined ? {} : { description },
+      ...parsed.labels.length === 0 ? {} : { labels: parsed.labels },
       contextWindow: numberField(params, ['context_window', 'contextWindow']) ?? DEFAULT_CONTEXT_WINDOW,
       ...numberField(params, ['max_tokens', 'maxTokens']) === undefined
         ? {}
         : { maxTokens: numberField(params, ['max_tokens', 'maxTokens'])! },
       vision: visionFrom({
-        capabilities: {},
-        tags,
-        ...live === undefined ? {} : { modalities: live.inputModalities },
+        modalities: resolved.modalities,
         textOnly,
         forceVision,
-        fallback: false,
         id,
       }),
-      reasoning: true,
-      reasoningEfforts: efforts,
-      reasoningEffortNames: REASONING_EFFORT_NAMES,
-      defaultReasoningEffort: defaultEffort,
+      reasoning: resolved.efforts.length > 0,
+      ...resolved.efforts.length === 0 ? {} : { reasoningEfforts: resolved.efforts },
+      ...resolved.defaultEffort === undefined ? {} : { defaultReasoningEffort: resolved.defaultEffort },
       ...base === undefined ? {} : { priceFactor: base },
       ...raccoonBadge(record) === undefined ? {} : { badge: raccoonBadge(record)! },
       ...tags.length === 0 ? {} : { tags },

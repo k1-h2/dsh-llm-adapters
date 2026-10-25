@@ -19,6 +19,8 @@ import type { LoginStatus } from './login-page.ts'
 import { parseLoomyCatalog, ModelCatalog } from './catalog.ts'
 import type { ProviderModel } from './catalog.ts'
 import { fetchJson } from './http.ts'
+import { OpenRouterCatalog } from './openrouter.ts'
+import type { OpenRouterLookup } from './openrouter.ts'
 import type { QuotaSnapshot } from './types.ts'
 import { ProviderHttpError, buildBody, buildMessages, buildTools, openAiStream } from './wire.ts'
 import type { ReadImage } from './wire.ts'
@@ -36,6 +38,8 @@ export interface LoomyProviderOptions {
   textOnly: () => ReadonlySet<string>
   forceVision: () => ReadonlySet<string>
   fetchImpl?: typeof fetch
+  /** Injectable OpenRouter lookup for tests; defaults to the live catalog. */
+  openRouter?: OpenRouterLookup
 }
 
 function traceparent(): string {
@@ -123,8 +127,10 @@ export class LoomyProvider {
   private quotaCache: { at: number, value: QuotaSnapshot } | undefined
   private quotaInflight: Promise<QuotaSnapshot> | undefined
   private loginFlow: LoomyQrLogin | undefined
+  private readonly openRouter: OpenRouterLookup
 
   constructor(private readonly options: LoomyProviderOptions) {
+    this.openRouter = options.openRouter ?? new OpenRouterCatalog(options.fetchImpl ?? fetch)
     this.catalog = new ModelCatalog(
       () => this.fetchModels(),
       options.ttlMs,
@@ -195,23 +201,28 @@ export class LoomyProvider {
 
   private async fetchModels(): Promise<ProviderModel[]> {
     const session = await this.session()
-    const payload = await fetchJson<unknown>(`${LOOMY_BASE}/models`, {
-      headers: {
-        ...tracingHeaders(session, { model: '', provider: '', messages: [] }, 'system'),
-        accept: 'application/json',
-      },
-      timeoutMs: this.options.timeoutMs(),
-      fetchImpl: this.options.fetchImpl,
-    })
+    const [openRouter, payload] = await Promise.all([
+      this.openRouter.models(),
+      fetchJson<unknown>(`${LOOMY_BASE}/models`, {
+        headers: {
+          ...tracingHeaders(session, { model: '', provider: '', messages: [] }, 'system'),
+          accept: 'application/json',
+        },
+        timeoutMs: this.options.timeoutMs(),
+        fetchImpl: this.options.fetchImpl,
+      }),
+    ])
     const models = parseLoomyCatalog(payload, {
       textOnly: this.options.textOnly(),
       forceVision: this.options.forceVision(),
+      openRouter,
     })
     if (models.length === 0) throw new Error('Loomy 返回的模型目录为空。')
     return models
   }
 
   async models(fresh = false): Promise<readonly ProviderModel[]> {
+    if (fresh) this.openRouter.invalidate()
     return this.catalog.models(fresh)
   }
 
@@ -220,6 +231,7 @@ export class LoomyProvider {
   }
 
   invalidateModels(): void {
+    this.openRouter.invalidate()
     this.catalog.invalidate()
   }
 

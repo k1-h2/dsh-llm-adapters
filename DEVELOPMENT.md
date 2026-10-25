@@ -18,8 +18,9 @@ src/
   account-profile.ts 小浣熊账号展示字段
   loomy.ts           Loomy 目录 / 积分 / 流式调用
   raccoon.ts         小浣熊目录 / 余额 / 流式调用
-  catalog.ts         目录解析、模型缓存
-  openrouter.ts      实时拉取 OpenRouter 模型表，校正思考档位与模态（不写死）
+  catalog.ts         目录解析、模型缓存、能力来源合并
+  model-name.ts      公共名称规则：括号标签、倍率、连字符归一化、匹配 key
+  openrouter.ts      实时拉取 OpenRouter 模型表，通配匹配档位与模态（不写死）
   wire.ts            OpenAI 兼容 SSE、工具调用、usage
   config.ts          volatile 配置与 live 读取
 client.js            设置页（ModuleLoader bundle，无构建步骤）
@@ -82,29 +83,35 @@ test/                vitest，不访问真实上游
 
 不走官方桌面端的 `office-raccoon://auth/callback`，也不改网页里写死的回调地址。
 
-模型清单里 `name` 取远端的 `description`（`Kimi-K3`），`display_description` 只作说明；旧版
-把中文任务描述当成了模型名。
+### 公共的名称与能力规则
 
-思考控制有两条通道，都要发：
+这些规则在 `src/model-name.ts` 与 `src/openrouter.ts`，Loomy、Raccoon 以及以后新增的供应商
+都走同一套，**不按模型 id 硬编码**。
 
-- `extra_body.thinking.type = enabled | disabled`：真正的开关，`disabled` 实测能把
-  `reasoning_tokens` 压到 0。
-- `reasoning_effort`：强度档，小浣熊网关**确实生效**（Kimi-K3 上 `low` 约 2.7k、`max` 约
-  8.4k completion token，3 倍差距）。但小浣熊自己的 `model_catalog` **不下发**可选档位。
+1. **名称归一化**（`parseModelName`）：提取 `()` / `（）` 里的内容；纯倍率（`x0.8`、`12倍`）
+   作为 `priceFactor` 并从句子里删掉；其他括号内容变成 `labels`；数字之间的 `-` 变 `.`
+   （`GLM-5-3` → `GLM 5.3`），其余 `-` 变空格（`Kimi-K3` → `Kimi K3`）。
+2. **OpenRouter 匹配**（`OpenRouterIndex.match`）：`modelKey` 去掉空格、点、横线等，把
+   `sn-kimi-k3`、`Kimi K3`、`moonshotai/kimi-k3` 归一到同一 key；先查精确 key，再用双向
+   包含做通配匹配（上游少一个版本后缀、或多一个后缀都能命中），同分且有歧义时放弃匹配。
+3. **能力来源**（`resolveCapabilities`）：OpenRouter 有 `supported_efforts` /
+   `input_modalities` 就用它；否则回退上游的 `reasoning_efforts`、`input_modalities`、
+   `capabilities.vision` 或 `tags`；两边都没有时开放全部档位与 text/image 两种模态。
+4. **默认档**取列表里最省的一档（有 `none` 用 `none`，否则 `low`/`minimal`…），不沿用
+   OpenRouter 的 `max`，避免首字过慢；上游自己的默认档只在回退上游时保留。
+5. **档位名不翻译**：DSH 的模型菜单直接显示 `none` / `low` / `high` / `max` 等 id。
+6. **刷新即更新**：设置页的「刷新状态与模型」调用 `models(true)`，先 `invalidate()` 再重拉
+   OpenRouter；OpenRouter 表或上游目录变化会在下一次刷新中体现。
 
-因此档位与模态都从 **OpenRouter 实时获取**（`src/openrouter.ts`）：每次「刷新状态与模型」都会
-清缓存重拉 `GET /api/v1/models`，按归一化后的模型名/ id 匹配（`sn-kimi-k3` ↔
-`moonshotai/kimi-k3`），读取 `reasoning.supported_efforts` 与 `architecture.input_modalities`。
-**不写死任何模型清单** —— OpenRouter 和上游都会变。匹配不到（如 SenseNova 未被收录）时，
-回退到上游自己的 `vision` 标签，思考退化为「开启 / 关闭」两态。默认档取列表里**最省**的一档
-（有 `none` 用 `none`，否则 `low`/`minimal`…），而非 OpenRouter 的 `max`，避免默认回复过慢。
+Loomy 的 `GET /models` 自带 `reasoning_efforts` 与 `default_reasoning_effort`，但为了统一
+规则，它也会先查 OpenRouter（命中时以实时表为准），匹配不上才用上游值。它的请求体直接透传
+`reasoning_effort`。
 
+Raccoon 的思考控制有两条通道，都要发：`extra_body.thinking.type = enabled | disabled`
+（真正的开关，`disabled` 实测能把 `reasoning_tokens` 压到 0）与 `reasoning_effort`
+（强度档，网关确实生效；Kimi-K3 上 `low` 约 2.7k、`max` 约 8.4k completion token）。
 `raccoon.ts` 只在 DSH 传下 `reasoningEffort` 时才写这两个字段；DSH 会用适配器声明的
-`defaultReasoningEffort` 物化它，所以「用户没选」和「选了关闭」都落到 `disabled`。
-
-Loomy 相反：它的 `GET /models` **自带** `reasoning_efforts` 与
-`default_reasoning_effort`（实测 `['none','low','medium','high','xhigh']`、默认 `low`），
-所以直接用上游值，**不查 OpenRouter**；请求体透传 `reasoning_effort`。
+`defaultReasoningEffort` 物化它。
 
 额度接口是 `GET /points/v1/balance`，核心字段为 `available_points`（另有 `reward_points`、
 `daily_points`、`topup_points`）。没有 `available_points` 时按旧字段回退，绝不编造数字。
@@ -173,7 +180,8 @@ npm run build
   和 `accessKeyId` / `accessKeySecret` / `appId` 常量。页面改版先看 `extractWechatUuid()`。
 - 小浣熊依赖 `/auth/mp/qrcode` 的签发字段、`scan_path` 形态与 `auth/mp/qrcode/login` 的
   状态值；扫码页或状态值改名会使二维码扫不出结果。
-- 目录字段：Loomy 的倍率在展示名称里，小浣熊的 `billing_*` / `params.*` 可能改名。
-- 图片能力不能只信标签；小浣熊在刷新时用 OpenRouter 的实时模态/档位表校正，匹配不到才回退
-  上游标签；Loomy 直接用目录 `capabilities` 与 `reasoning_efforts`。OpenRouter 表本身会变，
-  所以每次「刷新状态与模型」都重拉，不写死任何模型清单。
+- 目录字段：Loomy 的倍率在展示名称的括号里，小浣熊的 `billing_*` / `params.*` 可能改名；
+  名称归一化与 OpenRouter 匹配都依赖这些字段的语义，改版时先看 `parseModelName` /
+  `buildOpenRouterIndex` 的测试。
+- OpenRouter 表本身会变，所以每次「刷新状态与模型」都重拉，不写死任何模型清单；匹配不到时
+  回退上游，再没有就全部开放，任何新供应商都自动适用这套规则。

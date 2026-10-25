@@ -87,7 +87,7 @@ window.__ModuleLoader__.load({
       browserHintLoomy: '会打开一个本地登录页：用微信扫码登录 Loomy；首次使用的微信账号需要在页面里绑定手机号。',
       browserHintRaccoon: '会打开一个本地登录页：用微信扫码登录小浣熊，扫码确认后插件会自动接回。',
       loomyHint: 'Loomy 会话约 14 天有效，且没有刷新令牌；过期后再点“打开扫码登录”即可。',
-      raccoonHint: '小浣熊扫码登录的令牌约 30 天有效，到期后重新扫码即可。思考档位（关闭 / 低 / 高 / 最大）在聊天框的模型菜单里切换，每次刷新模型时按 OpenRouter 实时校正。',
+      raccoonHint: '小浣熊扫码登录的令牌约 30 天有效，到期后重新扫码即可。思考档位（none / low / high / max 等）在聊天框的模型菜单里切换，每次刷新模型时按 OpenRouter 实时校正。',
       loginLogout: '退出登录',
       loginConfirmLogout: '确定要退出当前账号吗？',
       loginFailedPrefix: '登录失败',
@@ -909,6 +909,8 @@ window.__ModuleLoader__.load({
               model.name,
               model.vision === true ? h('span', { key: 'v', style: { ...css.tag, marginLeft: '6px' } }, t('vision')) : null,
               model.reasoning === true ? h('span', { key: 'r', style: { ...css.tag, marginLeft: '6px' } }, t('reasoning')) : null,
+              ...(Array.isArray(model.labels) ? model.labels : []).map((label, labelIndex) =>
+                h('span', { key: `l${labelIndex}`, style: { ...css.tag, marginLeft: '6px' } }, label)),
               model.badge !== undefined
                 ? h('span', { key: 'b', style: { ...css.tag, marginLeft: '6px' } }, model.badge)
                 : null,
