@@ -66,9 +66,17 @@ export type { QrMatrix } from './qr.ts'
 export { BRANDS, LOOMY_BRAND, RACCOON_BRAND, LOOMY_PROVIDER, RACCOON_PROVIDER, isBrandId } from './brand.ts'
 export type { BrandId, BrandProfile } from './brand.ts'
 export {
-  ModelCatalog, parseLoomyCatalog, parseRaccoonCatalog, priceFactorOf, REASONING_EFFORT_NAMES,
+  ModelCatalog, parseLoomyCatalog, parseRaccoonCatalog, priceFactorOf,
 } from './catalog.ts'
 export type { ProviderModel } from './catalog.ts'
+export { parseModelName, modelKey } from './model-name.ts'
+export type { ParsedModelName } from './model-name.ts'
+export {
+  OpenRouterCatalog, buildOpenRouterIndex, parseOpenRouterModels, EMPTY_OPENROUTER_INDEX,
+} from './openrouter.ts'
+export type {
+  OpenRouterIndex, OpenRouterLookup, OpenRouterModel,
+} from './openrouter.ts'
 export { LoomyProvider, LOOMY_BASE, LOOMY_VERSION, loomyGatewaySessionValid } from './loomy.ts'
 export {
   RaccoonProvider, RACCOON_BASE, RACCOON_CLIENT_VERSION, raccoonAccessTokenValid, raccoonRefreshCandidate,

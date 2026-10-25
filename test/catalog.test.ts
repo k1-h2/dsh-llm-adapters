@@ -1,14 +1,51 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
-  ModelCatalog, parseLoomyCatalog, parseRaccoonCatalog, priceFactorOf,
+  ALL_REASONING_EFFORTS, ModelCatalog, parseLoomyCatalog, parseRaccoonCatalog, priceFactorOf,
 } from '../src/catalog.ts'
-import { buildOpenRouterIndex, type OpenRouterModel } from '../src/openrouter.ts'
+import { buildOpenRouterIndex } from '../src/openrouter.ts'
+import { modelKey, parseModelName } from '../src/model-name.ts'
+
+describe('parseModelName', () => {
+  it('removes price brackets and turns other bracket contents into labels', () => {
+    expect(parseModelName('Spark-X2.6 正式版(限时免费)(x0.0)')).toEqual({
+      name: 'Spark X2.6 正式版',
+      labels: ['限时免费'],
+      priceFactor: 0,
+    })
+    expect(parseModelName('qwen 3.8 flash（x0.8）')).toEqual({
+      name: 'qwen 3.8 flash',
+      labels: [],
+      priceFactor: 0.8,
+    })
+    expect(parseModelName('GLM 5.3 Flash (Soon)')).toEqual({
+      name: 'GLM 5.3 Flash',
+      labels: ['Soon'],
+    })
+  })
+
+  it('normalizes version hyphens and keeps a clean product name', () => {
+    expect(parseModelName('GLM-5-3').name).toBe('GLM 5.3')
+    expect(parseModelName('GLM-5-3-Flash').name).toBe('GLM 5.3 Flash')
+    expect(parseModelName('DeepSeek-V4.1-Flash-1017').name).toBe('DeepSeek V4.1 Flash 1017')
+    expect(parseModelName('Kimi-K3').name).toBe('Kimi K3')
+  })
+
+  it('builds a comparison key that ignores separators and the sn- prefix', () => {
+    expect(modelKey('sn-GLM-5.3-Flash')).toBe('glm53flash')
+    expect(modelKey('DeepSeek V4.1 Flash 1017')).toBe('deepseekv41flash1017')
+    expect(modelKey('Kimi-K3')).toBe('kimik3')
+  })
+})
 
 describe('priceFactorOf', () => {
-  it('reads x/× and 倍 multipliers', () => {
+  it('reads bracketed or separated multipliers', () => {
     expect(priceFactorOf('DeepSeek V4 (x3.0)')).toBe(3)
     expect(priceFactorOf('Spark × 0.1')).toBe(0.1)
     expect(priceFactorOf('Qwen 12倍')).toBe(12)
+  })
+
+  it('does not mistake a model name like Spark-X2.6 for a multiplier', () => {
+    expect(priceFactorOf('Spark-X2.6')).toBeUndefined()
     expect(priceFactorOf('GLM-5.3')).toBeUndefined()
   })
 })
@@ -17,42 +54,71 @@ describe('parseLoomyCatalog', () => {
   const payload = {
     data: [
       {
-        id: 'spark-x',
-        name: 'Spark X (x0.1)',
-        context_length: 1_000_000,
+        id: 'spark-x2.6',
+        name: 'Spark-X2.6 正式版(限时免费)(x0.0)',
+        context_length: 1_048_576,
         max_output_tokens: 32_000,
-        capabilities: { reasoning: true, vision: true },
-        reasoning_efforts: [{ value: 'low' }, 'high'],
+        capabilities: { reasoning: true, vision: false, input_modalities: ['text'] },
+        reasoning_efforts: ['none', 'low', 'medium', 'high', 'xhigh'],
+        default_reasoning_effort: 'low',
       },
       {
         id: 'deepseek-v4-flash-0731',
-        name: 'DeepSeek V4 Flash (x3.0)',
+        name: 'DeepSeek-V4.1-Flash(x3.0)',
         context_length: 200_000,
         capabilities: { reasoning: false, vision: false },
       },
     ],
   }
 
-  it('projects the OpenAI-style list and its multiplier', () => {
+  it('normalizes names, labels and prices', () => {
     const models = parseLoomyCatalog(payload)
     expect(models).toHaveLength(2)
     expect(models[0]).toMatchObject({
-      id: 'spark-x',
-      name: 'Spark X (x0.1)',
-      contextWindow: 1_000_000,
+      id: 'spark-x2.6',
+      name: 'Spark X2.6 正式版',
+      labels: ['限时免费'],
+      priceFactor: 0,
+      contextWindow: 1_048_576,
       maxTokens: 32_000,
-      vision: true,
+      vision: false,
       reasoning: true,
-      reasoningEfforts: ['low', 'high'],
-      priceFactor: 0.1,
+      defaultReasoningEffort: 'low',
     })
-    expect(models[1]).toMatchObject({ vision: false, reasoning: false, priceFactor: 3 })
+    expect(models[1]).toMatchObject({
+      name: 'DeepSeek V4.1 Flash',
+      priceFactor: 3,
+      vision: false,
+      reasoning: false,
+    })
   })
 
-  it('honours text-only over force-vision over the catalog tag', () => {
+  it('keeps every effort id raw instead of translating it', () => {
+    const models = parseLoomyCatalog(payload)
+    expect(models[0]!.reasoningEfforts).toEqual(['none', 'low', 'medium', 'high', 'xhigh'])
+  })
+
+  it('prefers live OpenRouter capabilities over the upstream declaration', () => {
+    const openRouter = buildOpenRouterIndex([{
+      id: 'deepseek/deepseek-v4.1-flash',
+      name: 'DeepSeek: DeepSeek V4.1 Flash',
+      inputModalities: ['text', 'image'],
+      efforts: ['max', 'high', 'low', 'none'],
+      mandatory: false,
+    }])
+    const models = parseLoomyCatalog(payload, { openRouter })
+    expect(models[1]).toMatchObject({
+      vision: true,
+      reasoning: true,
+      defaultReasoningEffort: 'none',
+    })
+    expect(models[1]!.reasoningEfforts).toEqual(['max', 'high', 'low', 'none'])
+  })
+
+  it('honours text-only over force-vision', () => {
     const textOnly = parseLoomyCatalog(payload, {
-      textOnly: new Set(['spark-x']),
-      forceVision: new Set(['spark-x']),
+      textOnly: new Set(['spark-x2.6']),
+      forceVision: new Set(['spark-x2.6']),
     })
     expect(textOnly[0]!.vision).toBe(false)
     const forced = parseLoomyCatalog(payload, { forceVision: new Set(['deepseek-v4-flash-0731']) })
@@ -63,6 +129,17 @@ describe('parseLoomyCatalog', () => {
     expect(parseLoomyCatalog([{ id: 'a' }])[0]!.id).toBe('a')
     expect(parseLoomyCatalog({ models: [{ id: 'b' }] })[0]!.id).toBe('b')
     expect(parseLoomyCatalog({ data: { models: [{ id: 'c' }] } })[0]!.id).toBe('c')
+  })
+
+  it('opens every effort and modality when neither source knows the model', () => {
+    const models = parseLoomyCatalog({ data: [{ id: 'mystery', name: 'Mystery-1' }] })
+    expect(models[0]).toMatchObject({
+      name: 'Mystery 1',
+      vision: true,
+      reasoning: true,
+      reasoningEfforts: ALL_REASONING_EFFORTS,
+      defaultReasoningEffort: 'none',
+    })
   })
 })
 
@@ -80,7 +157,6 @@ describe('parseRaccoonCatalog', () => {
               name: 'sn-sensenova-6-8-flash-lite',
               description: 'SenseNova-6.8-Flash-Lite',
               display_description: '适合简单问答和摘要等轻量任务',
-              context_window: 1,
               visible: true,
               tags: ['vision'],
               params: { context_window: 256_000, max_tokens: 63_999 },
@@ -116,43 +192,49 @@ describe('parseRaccoonCatalog', () => {
     },
   }
 
-  it('reads the chat category, labels, prices and badges', () => {
+  it('shows normalized product names, prices and badges', () => {
     const models = parseRaccoonCatalog(payload)
     expect(models.map(model => model.id)).toEqual([
       'sn-sensenova-6-8-flash-lite', 'sn-glm-5-3', 'sn-glm-5-3-flash',
     ])
     expect(models[0]).toMatchObject({
-      name: 'SenseNova-6.8-Flash-Lite',
+      name: 'SenseNova 6.8 Flash Lite',
       description: '适合简单问答和摘要等轻量任务',
       contextWindow: 256_000,
       maxTokens: 63_999,
       priceFactor: 0,
       badge: '限免一个月',
       reasoning: true,
-      reasoningEfforts: ['on', 'off'],
-      defaultReasoningEffort: 'off',
-      reasoningEffortNames: { on: '开启思考', off: '关闭思考' },
+      defaultReasoningEffort: 'none',
     })
+    expect(models[1]!.name).toBe('GLM 5.3')
+    expect(models[2]!.name).toBe('GLM 5.3 Flash')
     expect(models[2]!.badge).toBe('折扣')
   })
 
-  it('reads vision from upstream tags when no OpenRouter entry is given', () => {
+  it('falls back to upstream tags and opens all efforts when OpenRouter has no entry', () => {
     const models = parseRaccoonCatalog(payload)
     const byId = Object.fromEntries(models.map(model => [model.id, model]))
-    // Without live metadata the parser trusts the catalog tag; the OpenRouter
-    // tests below cover the correction path.
     expect(byId['sn-glm-5-3']!.vision).toBe(true)
     expect(byId['sn-glm-5-3-flash']!.vision).toBe(false)
+    expect(byId['sn-sensenova-6-8-flash-lite']!.reasoningEfforts).toEqual(ALL_REASONING_EFFORTS)
   })
 
-  it('lets explicit overrides win', () => {
-    const models = parseRaccoonCatalog(payload, {
-      textOnly: new Set(['sn-glm-5-3-flash']),
-      forceVision: new Set(['sn-glm-5-3']),
+  it('opens both modalities when the upstream has no tags either', () => {
+    const models = parseRaccoonCatalog({
+      data: {
+        categories: [{
+          type: 'chat',
+          models: [{ name: 'sn-mystery', description: 'Mystery-1', visible: true, params: { context_window: 1_000 } }],
+        }],
+      },
     })
-    const byId = Object.fromEntries(models.map(model => [model.id, model]))
-    expect(byId['sn-glm-5-3-flash']!.vision).toBe(false)
-    expect(byId['sn-glm-5-3']!.vision).toBe(true)
+    expect(models[0]).toMatchObject({
+      name: 'Mystery 1',
+      vision: true,
+      reasoning: true,
+      reasoningEfforts: ALL_REASONING_EFFORTS,
+    })
   })
 
   it('adopts effort levels and modalities from the live OpenRouter metadata', () => {
@@ -160,22 +242,22 @@ describe('parseRaccoonCatalog', () => {
       {
         id: 'moonshotai/kimi-k3', name: 'MoonshotAI: Kimi K3',
         inputModalities: ['text', 'image', 'video'],
-        efforts: ['max', 'high', 'low', 'none'], defaultEffort: 'max', mandatory: false,
+        efforts: ['max', 'high', 'low', 'none'], mandatory: false,
       },
       {
         id: 'z-ai/glm-5.3', name: 'Z.ai: GLM 5.3',
         inputModalities: ['text'],
-        efforts: ['max', 'high', 'low'], defaultEffort: 'max', mandatory: true,
+        efforts: ['max', 'high', 'low'], mandatory: true,
       },
       {
         id: 'z-ai/glm-5.3-flash', name: 'Z.ai: GLM 5.3 Flash',
         inputModalities: ['text', 'image', 'video'],
-        efforts: ['max', 'high', 'low'], defaultEffort: 'max', mandatory: true,
+        efforts: ['max', 'high', 'low'], mandatory: true,
       },
       {
         id: 'deepseek/deepseek-v4.1-flash-1017', name: 'DeepSeek: DeepSeek V4.1 Flash 1017',
         inputModalities: ['text', 'image'],
-        efforts: ['max', 'high', 'low', 'none'], defaultEffort: 'high', mandatory: false,
+        efforts: ['max', 'high', 'low', 'none'], mandatory: false,
       },
     ])
     const models = parseRaccoonCatalog({
@@ -191,40 +273,16 @@ describe('parseRaccoonCatalog', () => {
         }],
       },
     }, { openRouter })
-    // OpenRouter says: 1017 has image, GLM-5.3 is text-only, Flash has image, Kimi has image.
     const byId = Object.fromEntries(models.map(model => [model.id, model]))
     expect(byId['sn-deepseek-v4-1-flash-1017']!.vision).toBe(true)
     expect(byId['sn-glm-5-3']!.vision).toBe(false)
     expect(byId['sn-glm-5-3-flash']!.vision).toBe(true)
     expect(byId['sn-kimi-k3']!.vision).toBe(true)
-    // Effort lists come from OpenRouter, not from upstream (which has none).
     expect(byId['sn-deepseek-v4-1-flash-1017']!.reasoningEfforts).toEqual(['max', 'high', 'low', 'none'])
     expect(byId['sn-glm-5-3']!.reasoningEfforts).toEqual(['max', 'high', 'low'])
     expect(byId['sn-kimi-k3']!.reasoningEfforts).toEqual(['max', 'high', 'low', 'none'])
-    // Default is the cheapest available level, not OpenRouter's `max`.
     expect(byId['sn-deepseek-v4-1-flash-1017']!.defaultReasoningEffort).toBe('none')
     expect(byId['sn-glm-5-3']!.defaultReasoningEffort).toBe('low')
-  })
-
-  it('keeps the two-state switch for models that have no OpenRouter entry', () => {
-    const openRouter = buildOpenRouterIndex([
-      { id: 'other/model', name: 'Other Model', inputModalities: ['text'], efforts: ['none'], mandatory: false },
-    ])
-    const models = parseRaccoonCatalog({
-      data: {
-        categories: [{
-          type: 'chat',
-          models: [
-            { name: 'sn-sensenova-6-8-flash-lite', description: 'SenseNova-6.8-Flash-Lite', visible: true, tags: ['vision'], params: { context_window: 256_000, max_tokens: 63_999 } },
-          ],
-        }],
-      },
-    }, { openRouter })
-    expect(models[0]).toMatchObject({
-      vision: true,
-      reasoningEfforts: ['on', 'off'],
-      defaultReasoningEffort: 'off',
-    })
   })
 
   it('lets explicit overrides win over OpenRouter modalities', () => {

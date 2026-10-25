@@ -147,7 +147,9 @@ export abstract class LocalAdapter extends LlmAdapter {
             reasoning: {
               efforts: live.reasoningEfforts.map(effort => ({
                 id: effort as never,
-                name: live.reasoningEffortNames?.[effort] ?? effort,
+                // Effort ids are the provider's own vocabulary (`low`, `high`,
+                // `max`, …); they are intentionally not translated.
+                name: effort,
               })),
               ...live.defaultReasoningEffort === undefined
                 ? {}

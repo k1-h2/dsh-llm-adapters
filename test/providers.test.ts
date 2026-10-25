@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { LoomyProvider } from '../src/loomy.ts'
 import { RaccoonProvider } from '../src/raccoon.ts'
+import { EMPTY_OPENROUTER_INDEX } from '../src/openrouter.ts'
+import type { OpenRouterLookup } from '../src/openrouter.ts'
 
 async function collect(stream: AsyncIterable<StreamChunk>): Promise<StreamChunk[]> {
   const out: StreamChunk[] = []
@@ -55,6 +57,7 @@ describe('LoomyProvider', () => {
       textOnly: () => new Set(),
       forceVision: () => new Set(),
       fetchImpl,
+      openRouter: { models: async () => EMPTY_OPENROUTER_INDEX, invalidate: () => {} },
     })
     return { provider, auth, store }
   }
@@ -118,7 +121,10 @@ describe('LoomyProvider', () => {
 })
 
 describe('RaccoonProvider', () => {
-  function make(fetchImpl: typeof fetch) {
+  function make(fetchImpl: typeof fetch, openRouter: OpenRouterLookup = {
+    models: async () => EMPTY_OPENROUTER_INDEX,
+    invalidate: () => {},
+  }) {
     const accessToken = vi.fn(async (force?: boolean) => force === true ? 'token-2' : 'token-1')
     const auth = {
       status: async () => ({ signedIn: true }),
@@ -137,6 +143,7 @@ describe('RaccoonProvider', () => {
       textOnly: () => new Set(),
       forceVision: () => new Set(),
       fetchImpl,
+      openRouter,
     })
     return { provider, accessToken, store }
   }
@@ -161,6 +168,30 @@ describe('RaccoonProvider', () => {
       'x-client-version': 'v1.0.35',
       'x-raccoon-language': 'zh',
     })
+  })
+
+  it('refetches OpenRouter capabilities whenever models are refreshed', async () => {
+    const invalidate = vi.fn()
+    const models = vi.fn(async () => EMPTY_OPENROUTER_INDEX)
+    const fetchMock = vi.fn(async () => json({
+      code: 0,
+      data: {
+        categories: [{
+          type: 'chat',
+          models: [{
+            name: 'sn-kimi-k3',
+            description: 'Kimi-K3',
+            tags: ['vision'],
+            params: { context_window: 1000, max_tokens: 100 },
+          }],
+        }],
+      },
+    }))
+    const { provider } = make(fetchMock as unknown as typeof fetch, { models, invalidate })
+    const rows = await provider.models(true)
+    expect(invalidate).toHaveBeenCalledOnce()
+    expect(models).toHaveBeenCalledOnce()
+    expect(rows[0]).toMatchObject({ name: 'Kimi K3', vision: true, reasoning: true })
   })
 
   it('reads the real points balance shape', async () => {

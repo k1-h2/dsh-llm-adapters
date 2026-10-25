@@ -2,7 +2,7 @@
   "name": "dsh-llm-adapters",
   "displayName": "Local LLM Adapters",
   "description": "DeepSeek Harness adapters for Loomy and SenseTime Raccoon. Sign in by scanning a WeChat QR code on a local page, then use the account's models with quota, thinking and per-model settings pages.",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "type": "module",
   "license": "MIT",
   "author": "k1-h2",
