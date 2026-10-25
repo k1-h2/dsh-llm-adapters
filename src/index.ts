@@ -1,0 +1,183 @@
+/**
+ * dsh-llm-adapters host half.
+ *
+ * Registers two provider routes on `ctx.llm` and mounts the settings API.
+ * Every provider reuses a locally signed-in desktop application, so there is
+ * no API-key field, no login form, and no credential copied out of the app.
+ *
+ * @module dsh-llm-adapters
+ */
+
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { Context } from '@deepseek-ai/cordis'
+import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import { LoomyAdapter, RaccoonAdapter, resolveModelId } from './adapter.ts'
+import type { AdapterOptions, LocalAdapter } from './adapter.ts'
+import { API_PREFIX, handleApi } from './api.ts'
+import { LoomyAuth, RaccoonAuth } from './auth.ts'
+import { BRANDS, LOOMY_PROVIDER, RACCOON_PROVIDER } from './brand.ts'
+import type { BrandId } from './brand.ts'
+import { Config as ConfigSchema, liveConfig } from './config.ts'
+import type { ParsedConfig } from './config.ts'
+import { LoomyProvider } from './loomy.ts'
+import { RaccoonProvider } from './raccoon.ts'
+
+interface WebServerService {
+  register(route: {
+    kind: 'exact' | 'prefix'
+    path: string
+    handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>
+  }): () => void
+}
+
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    webServer?: WebServerService
+  }
+  interface Events {
+    'loader/volatile-update'(paths: readonly (readonly string[])[]): void
+  }
+}
+
+export { LoomyAdapter, RaccoonAdapter, LocalAdapter, resolveModelId } from './adapter.ts'
+export { LoomyAuth, RaccoonAuth, decodeJwtFacts } from './auth.ts'
+export type { AuthStatus, LocalAccount } from './auth.ts'
+export { BRANDS, LOOMY_BRAND, RACCOON_BRAND, LOOMY_PROVIDER, RACCOON_PROVIDER, isBrandId } from './brand.ts'
+export type { BrandId, BrandProfile } from './brand.ts'
+export { ModelCatalog, parseLoomyCatalog, parseRaccoonCatalog, priceFactorOf, RACCOON_MEASURED_VISION } from './catalog.ts'
+export type { ProviderModel } from './catalog.ts'
+export { LoomyProvider, LOOMY_BASE, LOOMY_VERSION } from './loomy.ts'
+export { RaccoonProvider, RACCOON_BASE, RACCOON_CLIENT_VERSION } from './raccoon.ts'
+export { ProviderHttpError, buildMessages, buildTools, openAiStream, sseEvents } from './wire.ts'
+export type { WireMessage } from './wire.ts'
+export { API_PREFIX, buildRows } from './api.ts'
+export { liveConfig, resolveConfig } from './config.ts'
+export type { Config as ConfigShape, LiveConfig, ParsedConfig, ResolvedConfig } from './config.ts'
+export type { ProviderStatus, QuotaSnapshot } from './types.ts'
+
+export const name = 'llm-adapters'
+export const inject = ['llm']
+
+const NS = 'llm-adapters'
+const REQUEST_IMAGE_MAX_BYTES = 1_048_576
+
+const STRUCTURAL_FIELDS: ReadonlySet<string> = new Set([
+  'loomyEnabled', 'raccoonEnabled', 'loomyDisplayName', 'raccoonDisplayName',
+])
+
+export const Config = ConfigSchema
+
+export function apply(ctx: Context, config: ParsedConfig): void {
+  const live = liveConfig(config)
+  let attachments: AttachmentStore | undefined
+
+  const readImage = async (ref: ImageAttachmentRef, signal?: AbortSignal) => {
+    const store = attachments
+    if (store === undefined) return undefined
+    const image = await store.readImageRequest(ref, { width: ref.width, height: ref.height, maxBytes: REQUEST_IMAGE_MAX_BYTES }, signal)
+    return { data: image.data, mediaType: image.mediaType }
+  }
+
+  const loomyAuth = new LoomyAuth(live.loomyAuthFile)
+  const raccoonAuth = new RaccoonAuth(live.raccoonAuthFile)
+
+  const loomyProvider = new LoomyProvider({
+    auth: loomyAuth,
+    ttlMs: live.modelCacheTtlMs,
+    timeoutMs: live.catalogFetchTimeoutMs,
+    textOnly: () => new Set(live.loomyTextOnlyModelIds()),
+    forceVision: () => new Set(live.loomyVisionModelIds()),
+  })
+  const raccoonProvider = new RaccoonProvider({
+    auth: raccoonAuth,
+    ttlMs: live.modelCacheTtlMs,
+    timeoutMs: live.catalogFetchTimeoutMs,
+    textOnly: () => new Set(live.raccoonTextOnlyModelIds()),
+    forceVision: () => new Set(live.raccoonVisionModelIds()),
+  })
+
+  const makeOptions = (brand: BrandId, provider: string): AdapterOptions => ({
+    brand,
+    provider,
+    displayName: brand === 'loomy' ? live.loomyDisplayName : live.raccoonDisplayName,
+    disabledModels: brand === 'loomy' ? live.loomyDisabledModels : live.raccoonDisabledModels,
+    modelContextWindows: brand === 'loomy' ? live.loomyModelContextWindows : live.raccoonModelContextWindows,
+    modelAliases: brand === 'loomy' ? live.loomyModelAliases : live.raccoonModelAliases,
+    defaultMaxTokens: live.defaultMaxTokens,
+    readImage,
+  })
+
+  const adapters: Record<BrandId, LocalAdapter> = {
+    loomy: new LoomyAdapter(makeOptions('loomy', LOOMY_PROVIDER), loomyProvider),
+    raccoon: new RaccoonAdapter(makeOptions('raccoon', RACCOON_PROVIDER), raccoonProvider),
+  }
+
+  ctx.inject(['attachments'], (scope) => {
+    attachments = scope.attachments
+    scope.effect(() => () => { attachments = undefined }, 'llm-adapters.attachments')
+  })
+
+  const routes: Partial<Record<BrandId, () => void>> = {}
+  let directory: ReturnType<typeof ctx.llm.registerConfigurableProviders> | undefined
+
+  const enabled = (id: BrandId): boolean => id === 'loomy' ? live.loomyEnabled() : live.raccoonEnabled()
+  const directoryFor = () => BRANDS
+    .filter(brand => enabled(brand.id))
+    .map(brand => ({
+      provider: brand.provider,
+      displayName: brand.id === 'loomy' ? live.loomyDisplayName() : live.raccoonDisplayName(),
+      settingsNs: NS,
+      settingsPath: [],
+    }))
+
+  const syncRegistration = (): void => {
+    for (const brand of BRANDS) {
+      const current = routes[brand.id]
+      if (enabled(brand.id) && current === undefined) {
+        routes[brand.id] = ctx.llm.registerAdapter([brand.provider], adapters[brand.id])
+      } else if (!enabled(brand.id) && current !== undefined) {
+        current()
+        delete routes[brand.id]
+      }
+    }
+    const entries = directoryFor()
+    if (entries.length === 0) {
+      directory?.()
+      directory = undefined
+    } else if (directory === undefined) {
+      directory = ctx.llm.registerConfigurableProviders(entries)
+    } else {
+      directory.replace(entries)
+    }
+  }
+
+  syncRegistration()
+
+  ctx.on('loader/volatile-update', (paths: readonly (readonly string[])[]) => {
+    if (!paths.some(path => STRUCTURAL_FIELDS.has(String(path[0])))) return
+    try {
+      syncRegistration()
+    } catch (error) {
+      ctx.logger?.warn(`llm-adapters: 重新发布模型分组失败：${String(error)}`)
+    }
+  })
+
+  ctx.effect(() => () => {
+    adapters.loomy.close()
+    adapters.raccoon.close()
+  }, 'llm-adapters.dispose')
+
+  ctx.inject(['webServer'], (scope) => {
+    const server = scope.webServer
+    if (server === undefined) return
+    scope.effect(
+      () => server.register({
+        kind: 'prefix',
+        path: API_PREFIX,
+        handler: (req: IncomingMessage, res: ServerResponse) => { void handleApi(req, res, adapters) },
+      }),
+      'llm-adapters: settings api',
+    )
+    ctx.logger?.info(`llm-adapters: 设置接口已挂载于 ${API_PREFIX}`)
+  })
+}

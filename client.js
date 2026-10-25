@@ -1,0 +1,999 @@
+/**
+ * dsh-llm-adapters — browser half.
+ *
+ * Two settings sections, one per provider. Each follows the same shape as
+ * dsh-agent-sdk-bridge: an account card first, then the live catalog with per
+ * model on/off and context-window controls, then a collapsed advanced area.
+ *
+ * The account card is read-only by design. It never asks for a password or a
+ * token and never logs out the desktop app; it only reports the local login and
+ * quota that the app already owns.
+ *
+ * Hand-written ModuleLoader bundle: no build step, no dependency beyond the
+ * `react` the shell provides.
+ */
+
+window.__ModuleLoader__.load({
+  id: 'dsh-llm-adapters',
+  factory: require => {
+    const module = { exports: {} }
+    const exports = module.exports
+    const React = require('react')
+    const { createElement: h, useState, useEffect, useCallback, useMemo, useRef, useSyncExternalStore } = React
+
+    const NS = 'llm-adapters'
+    const inject = ['slots', 'locale', 'configForms']
+
+    const zh = {
+      pluginOptionsTitle: '启用的供应商',
+      pluginOptionsHint: '关闭后，对应设置页、模型列表与模型分组都会移除；登录态与已保存的模型选择会保留。',
+      pluginOptionsOn: '显示中',
+      pluginOptionsOff: '已关闭',
+      pluginOptionsReadOnly: '当前配置不可写',
+      pluginOptionsRejected: '宿主拒绝了这次改动；若刚更新过插件，请重启 DSH 后再试',
+      loadFailed: '读取失败',
+      retry: '重试',
+      refresh: '刷新状态与模型',
+      refreshing: '刷新中…',
+      saveFailed: '保存失败',
+      notApplied: '服务器未报告这次改动，可能被其他窗口覆盖了，请刷新后重试',
+      timeout: '保存超时，请重试',
+      saved: '已保存',
+      saving: '保存中…',
+      enabledCount: '已启用',
+      search: '搜索模型…',
+      onlyEnabled: '只看已启用',
+      selectAll: '全部启用',
+      selectNone: '全部关闭',
+      colEnabled: '启用',
+      windowDefault: '默认',
+      windowDefaultHint: '跟随上游声明的窗口',
+      vision: '读图',
+      reasoning: '思考',
+      free: '免费',
+      advanced: '高级设置',
+      advancedHint: '以下为细节参数，通常无需改动。',
+      show: '展开',
+      hide: '收起',
+      reset: '恢复默认',
+      windowWarn: '窗口越大，DSH 的自动压缩触发得越晚。若对话经常超限，请选较小的窗口。',
+      accountTitle: '本机登录态',
+      source: '登录态文件',
+      sourceAuto: '自动查找',
+      account: '账号',
+      accountUnknown: '账号信息未在本地登录态中提供',
+      expires: '预计到期',
+      refreshExpires: '刷新令牌到期',
+      quota: '额度',
+      quotaRefreshing: '正在读取额度…',
+      quotaUnavailable: '暂时无法读取额度',
+      quotaFailed: '额度读取失败',
+      points: '积分',
+      loomyAvailable: '可用',
+      loomyPermanent: '永久积分',
+      loomyDaily: '每日积分',
+      loomyCycle: '每日周期',
+      raccoonOwner: '账号类型',
+      ownerPersonal: '个人',
+      ownerEnterprise: '企业',
+      signedIn: '已登录',
+      notLoggedIn: '未登录',
+      reread: '重新读取登录态',
+      reading: '读取中…',
+      loginGuide: '请先打开并登录对应桌面应用。本插件只复用它的本机登录态，不需要也不接受手动填写密码或 Token。',
+      loomyHint: 'Loomy 的登录态来自客户端的 auth-session.json，有效期约 14 天且无法自动续期；过期后在客户端重新登录，再点“重新读取登录态”。',
+      raccoonHint: '小浣熊的登录态来自桌面端写给本地 agent 的 auth.json。访问令牌约 3 小时；插件在需要时刷新并原子回写，不会把令牌显示在页面上。',
+      loomyLoginMissing: '没有找到 Loomy 登录态。请启动 Loomy 并完成登录。',
+      raccoonLoginMissing: '没有找到小浣熊登录态。请启动小浣熊桌面端并完成登录。',
+      expiresEstimated: '约',
+      possiblyExpired: '登录态可能已过期',
+      needsRefresh: '访问令牌即将过期；下一次请求或额度刷新会自动续期。',
+      modelsEmptyLoomy: 'Loomy 没有返回模型。请确认客户端已登录，然后重新读取登录态。',
+      modelsEmptyRaccoon: '小浣熊没有返回模型。请确认桌面端已登录，然后重新读取登录态。',
+      modelsHint: '登录后才会读取并显示可用模型。',
+      catalogNotice: '模型列表提示',
+      advancedFields: {
+        displayName: '分组名称',
+        authFile: '登录态文件路径（留空自动查找）',
+        visionModelIds: '强制启用读图的模型 ID（JSON 数组）',
+        textOnlyModelIds: '强制按纯文本处理的模型 ID（JSON 数组）',
+        modelAliases: '模型别名（JSON 对象）',
+        defaultMaxTokens: '默认输出上限',
+      },
+      loomyNav: 'Loomy',
+      loomyTitle: 'Loomy',
+      loomyIntro: '复用 Loomy 桌面客户端的本机登录态，直接使用账号里的模型。改动即时生效，无需重启。',
+      raccoonNav: '商汤小浣熊',
+      raccoonTitle: '商汤小浣熊',
+      raccoonIntro: '复用商汤小浣熊桌面端的本机登录态，直接使用账号里的模型。改动即时生效，无需重启。',
+    }
+    const en = {
+      pluginOptionsTitle: 'Enabled providers',
+      pluginOptionsHint: 'Turning one off removes its settings page, model list and model group. Login state and saved model choices are kept.',
+      pluginOptionsOn: 'Shown',
+      pluginOptionsOff: 'Off',
+      pluginOptionsReadOnly: 'Configuration is read-only',
+      pluginOptionsRejected: 'The host rejected this change; restart DSH after a plugin update and retry',
+      loadFailed: 'Could not load',
+      retry: 'Retry',
+      refresh: 'Refresh status and models',
+      refreshing: 'Refreshing…',
+      saveFailed: 'Save failed',
+      notApplied: 'The host did not report this change; another window may have overwritten it. Refresh and retry.',
+      timeout: 'Save timed out; please retry',
+      saved: 'Saved',
+      saving: 'Saving…',
+      enabledCount: 'enabled',
+      search: 'Search models…',
+      onlyEnabled: 'Enabled only',
+      selectAll: 'Enable all',
+      selectNone: 'Disable all',
+      colEnabled: 'Enabled',
+      windowDefault: 'Default',
+      windowDefaultHint: 'Follow the upstream context window',
+      vision: 'vision',
+      reasoning: 'reasoning',
+      free: 'free',
+      advanced: 'Advanced',
+      advancedHint: 'Rarely needed; read the help text before changing.',
+      show: 'Show',
+      hide: 'Hide',
+      reset: 'Reset',
+      windowWarn: 'A larger window delays automatic compaction. Choose a smaller value if conversations often overflow.',
+      accountTitle: 'Local login',
+      source: 'Credential file',
+      sourceAuto: 'auto-discovered',
+      account: 'Account',
+      accountUnknown: 'The local login file does not expose account details',
+      expires: 'Expires (estimated)',
+      refreshExpires: 'Refresh token expires',
+      quota: 'Quota',
+      quotaRefreshing: 'Reading quota…',
+      quotaUnavailable: 'Quota is temporarily unavailable',
+      quotaFailed: 'Could not read quota',
+      points: 'points',
+      loomyAvailable: 'Available',
+      loomyPermanent: 'Permanent',
+      loomyDaily: 'Daily',
+      loomyCycle: 'Daily cycle',
+      raccoonOwner: 'Account type',
+      ownerPersonal: 'Personal',
+      ownerEnterprise: 'Enterprise',
+      signedIn: 'Signed in',
+      notLoggedIn: 'Not signed in',
+      reread: 'Re-read login state',
+      reading: 'Reading…',
+      loginGuide: 'Open and sign in to the desktop app first. This plugin only reuses its local login and never asks you to type a password or token here.',
+      loomyHint: 'Loomy stores its session in the client’s auth-session.json. It lasts about 14 days and cannot be refreshed; sign in again in the client, then re-read it here.',
+      raccoonHint: 'Raccoon stores its login in the auth.json it writes for its local agent. Access tokens last about 3 hours; the plugin refreshes and writes the rotated pair back atomically, and never shows tokens here.',
+      loomyLoginMissing: 'No Loomy login found. Start Loomy and sign in.',
+      raccoonLoginMissing: 'No Raccoon login found. Start the Raccoon desktop app and sign in.',
+      expiresEstimated: 'about',
+      possiblyExpired: 'The login may have expired',
+      needsRefresh: 'The access token is about to expire; the next request or quota refresh will renew it.',
+      modelsEmptyLoomy: 'Loomy returned no models. Confirm the client is signed in, then re-read the login state.',
+      modelsEmptyRaccoon: 'Raccoon returned no models. Confirm the desktop app is signed in, then re-read the login state.',
+      modelsHint: 'Models are read only after the local login is available.',
+      catalogNotice: 'Model list notice',
+      advancedFields: {
+        displayName: 'Group name',
+        authFile: 'Credential file path (empty = auto)',
+        visionModelIds: 'Force vision model IDs (JSON array)',
+        textOnlyModelIds: 'Force text-only model IDs (JSON array)',
+        modelAliases: 'Model aliases (JSON object)',
+        defaultMaxTokens: 'Default output limit',
+      },
+      loomyNav: 'Loomy',
+      loomyTitle: 'Loomy',
+      loomyIntro: 'Reuses the Loomy desktop client’s local login and serves the account’s models directly. Changes apply immediately.',
+      raccoonNav: 'SenseTime Raccoon',
+      raccoonTitle: 'SenseTime Raccoon',
+      raccoonIntro: 'Reuses the Raccoon desktop app’s local login and serves the account’s models directly. Changes apply immediately.',
+    }
+
+    const BRANDS = [
+      { id: 'loomy', settingsId: 'loomy', order: 40, titleKey: 'loomyTitle', navKey: 'loomyNav', introKey: 'loomyIntro' },
+      { id: 'raccoon', settingsId: 'raccoon', order: 41, titleKey: 'raccoonTitle', navKey: 'raccoonNav', introKey: 'raccoonIntro' },
+    ]
+
+    const FIELDS = {
+      loomy: {
+        enabled: 'loomyEnabled',
+        displayName: 'loomyDisplayName',
+        authFile: 'loomyAuthFile',
+        disabled: 'loomyDisabledModels',
+        windows: 'loomyModelContextWindows',
+        aliases: 'loomyModelAliases',
+        vision: 'loomyVisionModelIds',
+        textOnly: 'loomyTextOnlyModelIds',
+      },
+      raccoon: {
+        enabled: 'raccoonEnabled',
+        displayName: 'raccoonDisplayName',
+        authFile: 'raccoonAuthFile',
+        disabled: 'raccoonDisabledModels',
+        windows: 'raccoonModelContextWindows',
+        aliases: 'raccoonModelAliases',
+        vision: 'raccoonVisionModelIds',
+        textOnly: 'raccoonTextOnlyModelIds',
+      },
+    }
+
+    const css = {
+      page: { maxWidth: '860px', display: 'flex', flexDirection: 'column', gap: '14px', color: 'var(--dsw-alias-label-primary)' },
+      h2: { margin: '0', fontSize: '1.25em' },
+      h3: { margin: 0, fontSize: '0.95em' },
+      intro: { margin: '0', opacity: 0.72, lineHeight: 1.55, fontSize: '0.92em' },
+      bar: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' },
+      btn: { padding: '6px 12px', borderRadius: '7px', border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.35))', background: 'transparent', color: 'inherit', cursor: 'pointer', font: 'inherit', fontSize: '0.88em' },
+      input: { padding: '6px 10px', borderRadius: '7px', border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.35))', background: 'var(--dsw-alias-bg-base, transparent)', color: 'inherit', font: 'inherit', fontSize: '0.88em' },
+      search: { flex: '1 1 180px', minWidth: '140px' },
+      count: { fontSize: '0.85em', opacity: 0.7, marginLeft: 'auto' },
+      list: { display: 'flex', flexDirection: 'column', border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.25))', borderRadius: '10px', overflow: 'hidden' },
+      row: { display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', borderTop: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.15))' },
+      rowFirst: { borderTop: 'none' },
+      rowOff: { opacity: 0.5 },
+      name: { flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column', gap: '2px' },
+      nameText: { fontSize: '0.92em', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+      id: { fontSize: '0.76em', opacity: 0.55, fontFamily: 'ui-monospace, monospace' },
+      tag: { fontSize: '0.72em', padding: '1px 6px', borderRadius: '5px', border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.35))', opacity: 0.75 },
+      price: { fontSize: '0.9em', opacity: 0.7, fontWeight: 400 },
+      select: { padding: '5px 8px', borderRadius: '7px', border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.35))', background: 'var(--dsw-alias-bg-base, transparent)', color: 'inherit', font: 'inherit', fontSize: '0.85em', minWidth: '104px' },
+      switch: { width: '17px', height: '17px', cursor: 'pointer', accentColor: 'var(--dsw-alias-brand-primary, #4c6ef5)' },
+      note: { fontSize: '0.82em', opacity: 0.62, lineHeight: 1.5 },
+      err: { fontSize: '0.86em', color: 'var(--dsw-alias-label-danger, #e03131)' },
+      guide: { display: 'flex', flexDirection: 'column', gap: '8px', padding: '12px 14px', borderRadius: '10px', border: '1px solid var(--dsw-alias-label-danger, #e03131)', background: 'rgba(224,49,49,0.07)' },
+      guideText: { fontSize: '0.88em', lineHeight: 1.5, color: 'var(--dsw-alias-label-danger, #e03131)' },
+      group: { display: 'flex', flexDirection: 'column', gap: '10px', border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.25))', borderRadius: '10px', padding: '14px 16px' },
+      card: { display: 'flex', flexDirection: 'column', gap: '10px', padding: '14px 16px', borderRadius: '10px', border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.25))', background: 'var(--dsw-alias-bg-base, rgba(128,128,128,0.03))' },
+      cardHead: { display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' },
+      line: { display: 'flex', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap', fontSize: '0.86em' },
+      label: { opacity: 0.62, minWidth: '78px' },
+      value: { fontWeight: 500 },
+      mono: { fontFamily: 'ui-monospace, monospace', fontSize: '0.8em', opacity: 0.7, wordBreak: 'break-all' },
+      link: { color: 'var(--dsw-alias-brand-primary, #4c6ef5)', textDecoration: 'none', fontSize: '0.86em' },
+      foot: { display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap', fontSize: '0.8em', opacity: 0.6 },
+      optionRow: { display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 0', borderTop: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.15))' },
+      optionFirst: { borderTop: 'none', paddingTop: 0 },
+      optionText: { flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column', gap: '2px' },
+      optionName: { fontSize: '0.92em', fontWeight: 500 },
+      optionStatus: { fontSize: '0.82em', opacity: 0.62 },
+      advLabel: { fontSize: '0.88em' },
+      advHelp: { fontSize: '0.78em', opacity: 0.55, lineHeight: 1.4 },
+    }
+
+    const API = (() => {
+      try { return new URL('api/llm-adapters', document.baseURI).pathname } catch { return '/api/llm-adapters' }
+    })()
+
+    const CACHE_PREFIX = 'dsh-llm-adapters/cache/v1'
+    const cacheMemory = new Map()
+
+    function cacheKey(brand, kind) {
+      return `${CACHE_PREFIX}:${brand}:${kind}`
+    }
+
+    function readCache(brand, kind) {
+      const key = cacheKey(brand, kind)
+      if (cacheMemory.has(key)) return cacheMemory.get(key)
+      try {
+        const raw = window.localStorage.getItem(key)
+        if (raw === null) return undefined
+        const parsed = JSON.parse(raw)
+        cacheMemory.set(key, parsed)
+        return parsed
+      } catch {
+        return undefined
+      }
+    }
+
+    function writeCache(brand, kind, value) {
+      const key = cacheKey(brand, kind)
+      cacheMemory.set(key, value)
+      try { window.localStorage.setItem(key, JSON.stringify(value)) } catch { /* private mode */ }
+    }
+
+    async function api(path, options) {
+      const { timeout = 30_000, ...rest } = options ?? {}
+      const ctrl = new AbortController()
+      const timer = setTimeout(() => ctrl.abort(), timeout)
+      try {
+        const response = await fetch(`${API}${path}`, { ...rest, signal: ctrl.signal })
+        const text = await response.text()
+        let payload
+        try { payload = text === '' ? {} : JSON.parse(text) } catch { payload = { error: text.slice(0, 200) } }
+        if (!response.ok) throw new Error(payload?.error ?? `HTTP ${response.status}`)
+        return payload
+      } finally {
+        clearTimeout(timer)
+      }
+    }
+
+    const WRITE_TIMEOUT_MS = 20_000
+
+    function withDeadline(promise, ms, message) {
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(message)), ms)
+        promise.then(
+          value => { clearTimeout(timer); resolve(value) },
+          error => { clearTimeout(timer); reject(error) },
+        )
+      })
+    }
+
+    function windowLabel(n) {
+      if (typeof n !== 'number' || !Number.isFinite(n)) return '—'
+      if (n >= 1_000_000) return `${Number((n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1))}M`
+      if (n >= 1000) return `${Math.round(n / 1000)}K`
+      return String(n)
+    }
+
+    function creditsOf(value) {
+      if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
+      return value.toLocaleString('zh-CN', { maximumFractionDigits: 2 })
+    }
+
+    function dateLabel(value) {
+      if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
+      if (value > Date.now() + 100 * 365 * 24 * 3600 * 1000) return '—'
+      return new Date(value).toLocaleString('zh-CN', {
+        year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+      })
+    }
+
+    function priceText(t, factor) {
+      if (typeof factor !== 'number' || !Number.isFinite(factor) || factor < 0) return ''
+      if (factor === 0) return t('free')
+      return `x${Number(factor.toFixed(2))}`
+    }
+
+    function ownerLabel(t, owner) {
+      if (typeof owner !== 'string' || owner === '') return '—'
+      if (owner === 'users' || owner === 'user' || owner === 'personal') return t('ownerPersonal')
+      if (owner === 'org' || owner === 'enterprise') return t('ownerEnterprise')
+      return owner
+    }
+
+    function AccountCard({ t, brand, reloadSignal, onStatus, onAfterRefresh }) {
+      const cached = readCache(brand.id, 'status')
+      const [status, setStatus] = useState(cached)
+      const [busy, setBusy] = useState(false)
+      const [error, setError] = useState(undefined)
+      const seenReload = useRef(reloadSignal)
+      const mounted = useRef(true)
+
+      const load = useCallback(async (fresh, notify) => {
+        setBusy(true)
+        setError(undefined)
+        try {
+          const payload = await api(`/status?brand=${brand.id}${fresh ? '&fresh=1' : ''}`, { timeout: 35_000 })
+          if (!mounted.current) return
+          setStatus(payload)
+          writeCache(brand.id, 'status', { ...payload, cachedAt: Date.now() })
+          onStatus?.(payload)
+          if (notify && payload?.signedIn === true) onAfterRefresh?.()
+        } catch (err) {
+          if (!mounted.current) return
+          setError(String(err?.message ?? err))
+        } finally {
+          if (mounted.current) setBusy(false)
+        }
+      }, [brand.id, onStatus, onAfterRefresh])
+
+      useEffect(() => {
+        mounted.current = true
+        void load(false, false)
+        return () => { mounted.current = false }
+      }, [load])
+
+      useEffect(() => {
+        if (reloadSignal === seenReload.current) return
+        seenReload.current = reloadSignal
+        void load(true, true)
+      }, [reloadSignal, load])
+
+      const signedIn = status?.signedIn === true
+      const account = status?.account ?? {}
+      const accountText = [account.name, account.phone, account.ownerType === undefined ? undefined : ownerLabel(t, account.ownerType)]
+        .filter(part => typeof part === 'string' && part.length > 0)
+        .join(' · ') || t('accountUnknown')
+      const quota = status?.quota
+      const source = typeof status?.source === 'string' ? status.source : undefined
+
+      const quotaContent = (() => {
+        if (busy && quota === undefined) return h('div', { style: css.note }, t('quotaRefreshing'))
+        if (status?.quotaError !== undefined) return h('div', { style: css.err }, `${t('quotaFailed')}：${status.quotaError}`)
+        if (quota === undefined) return h('div', { style: css.note }, signedIn ? t('quotaUnavailable') : t('quotaRefreshing'))
+        if (brand.id === 'loomy') {
+          return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '5px' } },
+            h('div', { style: css.line },
+              h('span', { style: css.label }, t('loomyAvailable')),
+              h('span', { style: css.value }, `${creditsOf(quota.available ?? quota.total)} ${t('points')}`),
+            ),
+            h('div', { style: css.line },
+              h('span', { style: css.label }, t('loomyPermanent')),
+              h('span', { style: css.value }, creditsOf(quota.permanent)),
+              quota.daily === undefined ? null : h('span', { style: css.label }, t('loomyDaily')),
+              quota.daily === undefined ? null : h('span', { style: css.value }, creditsOf(quota.daily)),
+            ),
+            quota.cycle === undefined ? null : h('div', { style: css.line },
+              h('span', { style: css.label }, t('loomyCycle')),
+              h('span', { style: css.value }, quota.cycle),
+            ),
+          )
+        }
+        return h('div', { style: css.line },
+          h('span', { style: css.label }, t('quota')),
+          h('span', { style: css.value }, `${creditsOf(quota.total)} ${t('points')}`),
+        )
+      })()
+
+      return h('div', { style: css.card },
+        h('div', { style: css.cardHead },
+          h('h3', { style: css.h3 }, t('accountTitle')),
+          h('span', { style: { ...css.note, opacity: 0.75 } }, signedIn ? t('signedIn') : t('notLoggedIn')),
+          h('button', {
+            style: { ...css.btn, marginLeft: 'auto' },
+            disabled: busy,
+            onClick: () => { void load(true, true) },
+          }, busy ? t('reading') : t('reread')),
+        ),
+        h('div', { style: css.note }, brand.id === 'loomy' ? t('loomyHint') : t('raccoonHint')),
+        h('div', { style: css.line },
+          h('span', { style: css.label }, t('source')),
+          h('span', { style: css.mono }, source ?? t('sourceAuto')),
+        ),
+        signedIn
+          ? h('div', { style: css.line },
+              h('span', { style: css.label }, t('account')),
+              h('span', { style: css.value }, accountText),
+            )
+          : null,
+        signedIn
+          ? h('div', { style: css.line },
+              h('span', { style: css.label }, t('expires')),
+              h('span', { style: css.value },
+                `${status?.expiryEstimated === true ? `${t('expiresEstimated')} ` : ''}${dateLabel(status?.expiresAt)}`),
+              brand.id === 'raccoon' && status?.refreshExpiresAt !== undefined
+                ? h('span', { style: css.label }, t('refreshExpires'))
+                : null,
+              brand.id === 'raccoon' && status?.refreshExpiresAt !== undefined
+                ? h('span', { style: css.value }, dateLabel(status.refreshExpiresAt))
+                : null,
+            )
+          : null,
+        signedIn && brand.id === 'raccoon'
+          ? h('div', { style: css.line },
+              h('span', { style: css.label }, t('raccoonOwner')),
+              h('span', { style: css.value }, ownerLabel(t, account.ownerType)),
+            )
+          : null,
+        signedIn ? quotaContent : null,
+        status?.needsRefresh === true ? h('div', { style: css.note }, t('needsRefresh')) : null,
+        status?.possiblyExpired === true ? h('div', { style: css.err }, t('possiblyExpired')) : null,
+        !signedIn && status !== undefined
+          ? h('div', { style: css.guide },
+              h('div', { style: css.guideText }, status?.error ?? (brand.id === 'loomy' ? t('loomyLoginMissing') : t('raccoonLoginMissing'))),
+              h('div', { style: css.note }, t('loginGuide')),
+            )
+          : null,
+        error !== undefined ? h('div', { style: css.err }, `${t('loadFailed')}：${error}`) : null,
+      )
+    }
+
+    function AdvancedInput({ t, form, fieldKey, label, kind, value, writable }) {
+      const [draft, setDraft] = useState(undefined)
+      const initial = kind === 'number'
+        ? value === undefined ? '' : String(value)
+        : kind === 'json'
+          ? value === undefined ? (fieldKey.includes('Aliases') ? '{}' : '[]') : JSON.stringify(value, null, 2)
+          : value === undefined ? '' : String(value)
+      const shown = draft === undefined ? initial : draft
+
+      const commit = () => {
+        const raw = shown
+        if (raw.trim() === '') {
+          form.unset(fieldKey).catch(() => undefined)
+          return
+        }
+        if (kind === 'number') {
+          const number = Number(raw)
+          if (!Number.isFinite(number) || number <= 0) { setDraft(initial); return }
+          form.set(fieldKey, Math.floor(number)).catch(() => undefined)
+          return
+        }
+        if (kind === 'json') {
+          try {
+            const parsed = JSON.parse(raw)
+            const expectedArray = fieldKey.includes('Aliases') ? false : true
+            if (expectedArray && !Array.isArray(parsed)) { setDraft(initial); return }
+            if (!expectedArray && (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed))) { setDraft(initial); return }
+            form.set(fieldKey, parsed).catch(() => undefined)
+          } catch {
+            setDraft(initial)
+          }
+          return
+        }
+        form.set(fieldKey, raw).catch(() => undefined)
+      }
+
+      return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+          h('span', { style: css.advLabel }, label),
+          value === undefined || !writable
+            ? null
+            : h('button', {
+                style: { fontSize: '0.75em', opacity: 0.55, background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', padding: 0, font: 'inherit', color: 'inherit' },
+                onClick: () => { form.unset(fieldKey).catch(() => undefined) },
+              }, t('reset')),
+        ),
+        kind === 'json'
+          ? h('textarea', {
+              style: { ...css.input, minHeight: '64px', fontFamily: 'ui-monospace, monospace', resize: 'vertical' },
+              value: shown,
+              disabled: !writable,
+              onChange: event => setDraft(event.target.value),
+              onBlur: commit,
+            })
+          : h('input', {
+              style: css.input,
+              type: kind === 'number' ? 'number' : 'text',
+              value: shown,
+              disabled: !writable,
+              onChange: event => setDraft(event.target.value),
+              onBlur: commit,
+            }),
+        h('div', { style: css.advHelp }, t('advancedHint')),
+      )
+    }
+
+    function Advanced({ ctx, t, brand, show, onToggle }) {
+      const form = ctx.configForms.get(NS)
+      const subscribe = useCallback(listener => form.subscribe(listener), [form])
+      const read = useCallback(() => form.getSnapshot(), [form])
+      const snapshot = useSyncExternalStore(subscribe, read)
+      const value = snapshot?.value ?? {}
+      const writable = snapshot?.writable !== false
+      const fields = FIELDS[brand.id]
+      const labels = t('advancedFields')
+      const items = [
+        [fields.displayName, labels.displayName, 'text', value[fields.displayName]],
+        [fields.authFile, labels.authFile, 'text', value[fields.authFile]],
+        [fields.vision, labels.visionModelIds, 'json', value[fields.vision]],
+        [fields.textOnly, labels.textOnlyModelIds, 'json', value[fields.textOnly]],
+        [fields.aliases, labels.modelAliases, 'json', value[fields.aliases]],
+        ['defaultMaxTokens', labels.defaultMaxTokens, 'number', value.defaultMaxTokens],
+      ]
+      return h('div', { style: css.group },
+        h('h3', { style: css.h3 }, t('advanced')),
+        h('div', { style: css.bar },
+          h('button', { style: css.btn, onClick: onToggle }, show ? t('hide') : t('show')),
+          h('span', { style: css.note }, t('advancedHint')),
+        ),
+        show
+          ? items.map(([key, label, kind, current]) => h(AdvancedInput, {
+              key,
+              t,
+              form,
+              fieldKey: key,
+              label,
+              kind,
+              value: current,
+              writable,
+            }))
+          : null,
+      )
+    }
+
+    function SettingsPage({ ctx, t, brand }) {
+      const form = ctx.configForms.get(NS)
+      const subscribe = useCallback(listener => form.subscribe(listener), [form])
+      const read = useCallback(() => form.getSnapshot(), [form])
+      const snapshot = useSyncExternalStore(subscribe, read)
+      const fields = FIELDS[brand.id]
+      const cached = readCache(brand.id, 'models')
+      const [models, setModels] = useState(() => Array.isArray(cached?.rows) ? cached.rows : undefined)
+      const [notice, setNotice] = useState(() => typeof cached?.notice === 'string' ? cached.notice : undefined)
+      const [signedIn, setSignedIn] = useState(() => cached?.signedIn === true ? true : undefined)
+      const [error, setError] = useState(undefined)
+      const [saveStatus, setSaveStatus] = useState(undefined)
+      const [busy, setBusy] = useState(false)
+      const [query, setQuery] = useState('')
+      const [onlyEnabled, setOnlyEnabled] = useState(false)
+      const [showAdvanced, setShowAdvanced] = useState(false)
+      const [reloadSignal, setReloadSignal] = useState(0)
+      const ticket = useRef(0)
+      const writeTicket = useRef(0)
+
+      const fetchModels = useCallback(async (fresh = false) => {
+        const payload = await api(`/models?brand=${brand.id}${fresh ? '&fresh=1' : ''}`)
+        return {
+          rows: Array.isArray(payload?.models) ? payload.models : [],
+          notice: typeof payload?.notice === 'string' ? payload.notice : undefined,
+          signedIn: typeof payload?.signedIn === 'boolean' ? payload.signedIn : undefined,
+        }
+      }, [brand.id])
+
+      const adopt = useCallback((rows, nextNotice, nextSignedIn) => {
+        setModels(rows)
+        setNotice(nextNotice)
+        if (nextSignedIn !== undefined) setSignedIn(nextSignedIn)
+        writeCache(brand.id, 'models', { rows, notice: nextNotice, signedIn: nextSignedIn, at: Date.now() })
+      }, [brand.id])
+
+      const load = useCallback(async (fresh = false) => {
+        const mine = ++ticket.current
+        setError(undefined)
+        try {
+          const payload = await fetchModels(fresh)
+          if (mine !== ticket.current) return
+          adopt(payload.rows, payload.notice, payload.signedIn)
+        } catch (err) {
+          if (mine !== ticket.current) return
+          setError(String(err?.message ?? err))
+          setModels(previous => previous ?? [])
+        }
+      }, [adopt, fetchModels])
+
+      useEffect(() => {
+        const saved = readCache(brand.id, 'models')
+        if (Array.isArray(saved?.rows)) {
+          setModels(saved.rows)
+          setNotice(typeof saved.notice === 'string' ? saved.notice : undefined)
+        }
+        setError(undefined)
+        void load(false)
+      }, [brand.id, load])
+
+      const handleStatus = useCallback((payload) => {
+        if (typeof payload?.signedIn === 'boolean') setSignedIn(payload.signedIn)
+      }, [])
+
+      const afterRefresh = useCallback(() => {
+        void load(true)
+      }, [load])
+
+      const loadUntil = useCallback(async (verify, attempts = 5) => {
+        let rows
+        for (let attempt = 0; attempt < attempts; attempt++) {
+          try {
+            const payload = await fetchModels()
+            rows = payload.rows
+            adopt(rows, payload.notice, payload.signedIn)
+          } catch (err) {
+            setError(String(err?.message ?? err))
+            return undefined
+          }
+          if (verify === undefined || verify(rows)) return rows
+          await new Promise(resolve => setTimeout(resolve, 120 + attempt * 120))
+        }
+        return rows
+      }, [adopt, fetchModels])
+
+      const write = useCallback(async (key, next, verify) => {
+        const mine = ++writeTicket.current
+        setBusy(true)
+        setSaveStatus(t('saving'))
+        setError(undefined)
+        try {
+          const accepted = await withDeadline(next === undefined ? form.unset(key) : form.set(key, next), WRITE_TIMEOUT_MS, t('timeout'))
+          if (accepted === false) throw new Error(t('saveFailed'))
+          const rows = await loadUntil(verify)
+          if (rows !== undefined && verify !== undefined && !verify(rows)) throw new Error(t('notApplied'))
+          if (mine === writeTicket.current) setSaveStatus(t('saved'))
+        } catch (err) {
+          if (mine !== writeTicket.current) return
+          setError(`${t('saveFailed')}：${String(err?.message ?? err)}`)
+          setSaveStatus(undefined)
+          await load()
+        } finally {
+          if (mine === writeTicket.current) setBusy(false)
+        }
+      }, [form, load, loadUntil, t])
+
+      const writeDisabled = useCallback((rows, id, enabled) => {
+        const next = new Set(rows.filter(model => !model.enabled).map(model => model.id))
+        if (enabled) next.delete(id)
+        else next.add(id)
+        setModels(current => current?.map(model => model.id === id ? { ...model, enabled } : model))
+        return write(fields.disabled, [...next], list => list.some(model => model.id === id && model.enabled === enabled))
+      }, [fields.disabled, write])
+
+      const writeWindow = useCallback((rows, id, window) => {
+        const next = {}
+        for (const model of rows) if (model.override !== undefined) next[model.id] = model.override
+        if (window === undefined) delete next[id]
+        else next[id] = window
+        setModels(current => current?.map(model => model.id === id
+          ? { ...model, override: window, contextWindow: window ?? model.defaultContextWindow }
+          : model))
+        return write(fields.windows, next, list => list.some(model => model.id === id
+          && (window === undefined ? model.override === undefined : model.override === window)))
+      }, [fields.windows, write])
+
+      const writeAll = useCallback((enabled) => {
+        const ids = (models ?? []).map(model => model.id)
+        setModels(current => current?.map(model => ({ ...model, enabled })))
+        return write(fields.disabled, enabled ? [] : ids, list => list.every(model => model.enabled === enabled))
+      }, [fields.disabled, models, write])
+
+      const all = models ?? []
+      const enabledTotal = all.filter(model => model.enabled).length
+      const shown = useMemo(() => {
+        const q = query.trim().toLowerCase()
+        return all.filter(model => {
+          if (onlyEnabled && !model.enabled) return false
+          if (q === '') return true
+          return String(model.name).toLowerCase().includes(q) || String(model.id).toLowerCase().includes(q)
+        })
+      }, [all, query, onlyEnabled])
+
+      const accountCard = h(AccountCard, {
+        t,
+        brand,
+        reloadSignal,
+        onStatus: handleStatus,
+        onAfterRefresh: afterRefresh,
+      })
+
+      const refreshButton = h('button', {
+        style: css.btn,
+        disabled: busy,
+        onClick: () => {
+          setReloadSignal(value => value + 1)
+          void load(true)
+        },
+      }, busy ? t('refreshing') : t('refresh'))
+
+      const advanced = h(Advanced, {
+        ctx, t, brand, show: showAdvanced,
+        onToggle: () => setShowAdvanced(value => !value),
+      })
+
+      if (models === undefined) {
+        return h('div', { style: css.page },
+          h('h2', { style: css.h2 }, t(brand.titleKey)),
+          h('p', { style: css.intro }, t(brand.introKey)),
+          accountCard,
+          error === undefined
+            ? h('div', { style: css.note }, t('reading'))
+            : h('div', null,
+                h('div', { style: css.err }, `${t('loadFailed')}：${error}`),
+                h('button', { style: { ...css.btn, marginTop: '8px' }, onClick: () => void load(true) }, t('retry')),
+              ),
+        )
+      }
+
+      if (signedIn !== true) {
+        return h('div', { style: css.page },
+          h('h2', { style: css.h2 }, t(brand.titleKey)),
+          h('p', { style: css.intro }, t(brand.introKey)),
+          accountCard,
+          h('div', { style: css.guide },
+            h('div', { style: css.guideText }, signInGuide(t, brand)),
+            h('div', { style: css.note }, t('modelsHint')),
+          ),
+          refreshButton,
+          advanced,
+          error !== undefined ? h('div', { style: css.err }, error) : null,
+        )
+      }
+
+      const rows = shown.map((model, index) => {
+        const choices = Array.isArray(model.contextWindows) ? model.contextWindows : []
+        const price = priceText(t, model.priceFactor)
+        return h('div', {
+          key: model.id,
+          style: { ...css.row, ...(index === 0 ? css.rowFirst : {}), ...(model.enabled ? {} : css.rowOff) },
+        },
+          h('input', {
+            type: 'checkbox',
+            style: css.switch,
+            checked: model.enabled === true,
+            disabled: busy,
+            title: t('colEnabled'),
+            onChange: event => { void writeDisabled(all, model.id, event.target.checked) },
+          }),
+          h('div', { style: css.name },
+            h('div', { style: css.nameText },
+              model.name,
+              model.vision === true ? h('span', { key: 'v', style: { ...css.tag, marginLeft: '6px' } }, t('vision')) : null,
+              model.reasoning === true ? h('span', { key: 'r', style: { ...css.tag, marginLeft: '6px' } }, t('reasoning')) : null,
+              model.badge !== undefined
+                ? h('span', { key: 'b', style: { ...css.tag, marginLeft: '6px' } }, model.badge)
+                : null,
+              price !== '' ? h('span', { key: 'p', style: css.price }, ` · ${price}`) : null,
+            ),
+            h('div', { style: css.id }, model.id),
+          ),
+          h('select', {
+            style: css.select,
+            value: model.override === undefined ? '' : String(model.override),
+            disabled: busy,
+            title: t('windowDefaultHint'),
+            onChange: event => {
+              const value = event.target.value
+              void writeWindow(all, model.id, value === '' ? undefined : Number(value))
+            },
+          },
+            h('option', { key: 'default', value: '' }, `${t('windowDefault')} · ${windowLabel(model.defaultContextWindow)}`),
+            choices.map(value => h('option', { key: String(value), value: String(value) }, windowLabel(value))),
+          ),
+        )
+      })
+
+      return h('div', { style: css.page },
+        h('h2', { style: css.h2 }, t(brand.titleKey)),
+        h('p', { style: css.intro }, t(brand.introKey)),
+        accountCard,
+        h('div', { style: css.bar },
+          h('input', {
+            style: { ...css.input, ...css.search },
+            placeholder: t('search'),
+            value: query,
+            onChange: event => setQuery(event.target.value),
+          }),
+          h('label', { style: { ...css.note, display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' } },
+            h('input', { type: 'checkbox', checked: onlyEnabled, onChange: event => setOnlyEnabled(event.target.checked) }),
+            t('onlyEnabled'),
+          ),
+        ),
+        h('div', { style: { ...css.bar, flexWrap: 'nowrap' } },
+          refreshButton,
+          h('button', {
+            style: css.btn,
+            disabled: busy || all.every(model => model.enabled),
+            onClick: () => void writeAll(true),
+          }, t('selectAll')),
+          h('button', {
+            style: css.btn,
+            disabled: busy || enabledTotal === 0,
+            onClick: () => void writeAll(false),
+          }, t('selectNone')),
+          h('span', { style: css.count }, `${t('enabledCount')} ${enabledTotal} / ${all.length}`),
+        ),
+        all.length === 0
+          ? h('div', { style: css.guide },
+              h('div', { style: css.guideText }, brand.id === 'loomy' ? t('modelsEmptyLoomy') : t('modelsEmptyRaccoon')),
+            )
+          : h('div', { style: css.list }, rows.length > 0
+              ? rows
+              : h('div', { style: { ...css.note, padding: '12px 14px' } }, '—')),
+        notice !== undefined ? h('div', { style: css.note }, `${t('catalogNotice')}：${notice}`) : null,
+        all.length > 0 ? h('div', { style: css.note }, t('windowWarn')) : null,
+        error !== undefined ? h('div', { style: css.err }, error) : null,
+        saveStatus !== undefined && error === undefined
+          ? h('div', { style: css.note }, saveStatus)
+          : null,
+        advanced,
+      )
+    }
+
+    function signInGuide(t, brand) {
+      return brand.id === 'loomy' ? t('loomyLoginMissing') : t('raccoonLoginMissing')
+    }
+
+    function BundleSettings({ ctx, t, view }) {
+      const form = ctx.configForms.get(NS)
+      const subscribe = useCallback(listener => form.subscribe(listener), [form])
+      const read = useCallback(() => form.getSnapshot(), [form])
+      const snapshot = useSyncExternalStore(subscribe, read)
+      const value = snapshot?.value ?? {}
+      const writable = snapshot?.writable !== false
+      const [busy, setBusy] = useState(false)
+      const [error, setError] = useState(undefined)
+      const [status, setStatus] = useState(undefined)
+      const ticket = useRef(0)
+
+      const toggle = useCallback(async (key, next) => {
+        const mine = ++ticket.current
+        setBusy(true)
+        setStatus(t('saving'))
+        setError(undefined)
+        try {
+          const accepted = await withDeadline(form.set(key, next), WRITE_TIMEOUT_MS, t('timeout'))
+          if (accepted === false) throw new Error(t('pluginOptionsRejected'))
+          if (mine === ticket.current) setStatus(t('saved'))
+        } catch (err) {
+          if (mine !== ticket.current) return
+          setError(`${t('saveFailed')}：${String(err?.message ?? err)}`)
+          setStatus(undefined)
+        } finally {
+          if (mine === ticket.current) setBusy(false)
+        }
+      }, [form, t])
+
+      if (view !== undefined && view !== 'page') {
+        const names = BRANDS
+          .filter(brand => value[FIELDS[brand.id].enabled] !== false)
+          .map(brand => {
+            const stored = value[FIELDS[brand.id].displayName]
+            return typeof stored === 'string' && stored !== '' ? stored : t(brand.navKey)
+          })
+        return h('span', null, names.join(' · '))
+      }
+
+      return h('div', { style: css.group },
+        h('h3', { style: css.h3 }, t('pluginOptionsTitle')),
+        h('div', { style: css.note }, t('pluginOptionsHint')),
+        BRANDS.map((brand, index) => {
+          const key = FIELDS[brand.id].enabled
+          const enabled = value[key] !== false
+          const stored = value[FIELDS[brand.id].displayName]
+          const name = typeof stored === 'string' && stored !== '' ? stored : t(brand.navKey)
+          return h('div', { key: brand.id, style: { ...css.optionRow, ...(index === 0 ? css.optionFirst : {}) } },
+            h('input', {
+              type: 'checkbox',
+              style: css.switch,
+              checked: enabled,
+              disabled: busy || !writable,
+              onChange: event => { void toggle(key, event.target.checked) },
+            }),
+            h('div', { style: css.optionText },
+              h('div', { style: css.optionName }, name),
+              h('div', { style: css.optionStatus }, enabled ? t('pluginOptionsOn') : t('pluginOptionsOff')),
+            ),
+          )
+        }),
+        !writable ? h('div', { style: css.note }, t('pluginOptionsReadOnly')) : null,
+        error !== undefined ? h('div', { style: css.err }, error) : null,
+        status !== undefined && error === undefined ? h('div', { style: css.note }, status) : null,
+      )
+    }
+
+    function apply(ctx) {
+      const t = ctx.locale.bind(NS)
+      ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'llm-adapters: dictionaries')
+
+      ctx.effect(() => ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
+        name: 'plugins.bundle.config',
+        key: 'dsh-llm-adapters',
+        locale: NS,
+      }, props => h(BundleSettings, { ...props, ctx, t }))), 'llm-adapters: bundle options')
+
+      ctx.effect(() => ctx.configForms.whileServed([NS], () => {
+        const form = ctx.configForms.get(NS)
+        const live = new Map()
+
+        const sync = () => {
+          const snapshot = form.getSnapshot()
+          if (snapshot.status !== 'ready') return
+          const value = snapshot.value ?? {}
+          for (const brand of BRANDS) {
+            const enabled = value[FIELDS[brand.id].enabled] !== false
+            const current = live.get(brand.id)
+            if (enabled && current === undefined) {
+              live.set(brand.id, ctx.slots.inject('settings.section', () => ctx.slots.register({
+                name: 'settings.section',
+                id: brand.settingsId,
+                order: brand.order,
+                label: () => t(brand.navKey),
+                locale: NS,
+              }, props => h(SettingsPage, { ...props, ctx, t, brand }))))
+            } else if (!enabled && current !== undefined) {
+              current()
+              live.delete(brand.id)
+            }
+          }
+        }
+
+        const unsubscribe = form.subscribe(sync)
+        sync()
+        return () => {
+          unsubscribe()
+          for (const off of live.values()) off()
+          live.clear()
+        }
+      }), 'llm-adapters: pages')
+    }
+
+    exports.apply = apply
+    exports.inject = inject
+    exports.name = 'dsh-llm-adapters'
+    exports.__test = {
+      BRANDS, FIELDS, zh, en, windowLabel, creditsOf, ownerLabel, priceText, dateLabel, readCache, writeCache,
+      AccountCard, SettingsPage, BundleSettings,
+    }
+    return module.exports
+  },
+})
