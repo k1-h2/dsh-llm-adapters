@@ -14,7 +14,7 @@ src/
   login-page.ts      本地登录页：随机端口/路径、二维码下发、状态轮询、可选绑手机
   qr.ts              零依赖二维码（byte 模式、纠错 M、版本 1–10）
   loomy-login.ts     Loomy 微信扫码：uuid、长轮询、讯飞账号 HMAC 接口
-  raccoon-login.ts   小浣熊扫码：本地 code、扫码页 URL、2 秒轮询
+  raccoon-login.ts   小浣熊扫码：服务端签发二维码、轮询、业务会话确认
   account-profile.ts 小浣熊账号展示字段
   loomy.ts           Loomy 目录 / 积分 / 流式调用
   raccoon.ts         小浣熊目录 / 余额 / 流式调用
@@ -65,11 +65,19 @@ test/                vitest，不访问真实上游
 
 ### 小浣熊（`raccoon-login.ts`）
 
-1. 生成 32 位 hex `code`（官方网页版是时间戳 + 随机串，服务端接受任意自造值）。
-2. 二维码内容是 `https://xiaohuanxiong.com/login/mp?code=<code>&appname=小浣熊官网`。
-3. 每 2 秒 `POST /api/web/auth/v1/login_with_qrcode_code`（`qrcode_code`）；`pending` /
-   `logging` / `canceled` / `success`，成功后拿 `access_token` + `refresh_token`。
-4. 刷新令牌由 `RaccoonAuth` 正常轮换；本流程只负责首次登录。
+1. `POST /api/iam/v1/auth/mp/qrcode`（空对象）取服务端签发的二维码：
+   `qrcode_code`（形如 `qr-…`）、`scan_path`、`expires_in`、`poll_interval`。
+2. 二维码内容由 `scan_path` 与 `https://xiaohuanxiong.com` 拼成，并附加 `code`、
+   `appname=商汤小浣熊`、`source=platform` —— 与官网登录页实际生成的值一致。
+3. 按 `poll_interval`（通常 2 秒）`POST /api/iam/v1/auth/mp/qrcode/login`（`qrcode_code`）；
+   `pending` / `logging` / `canceled` / `success`。`AUTH_QRCODE_EXPIRED` 视为过期，网络抖动仍
+   继续轮询。
+4. 成功后先用 `POST /api/web/auth/v1/iam/confirm` 建立业务会话（失败不致命），再向
+   `model_catalog` 校验令牌；只有网关接受的令牌才写入账号存储。响应若带 `refresh_token` 就
+   一并保存，没有时到期后重新扫码。
+
+⚠️ 不能像旧版那样在本地随机生成 `code`：轮询会返回 `pending`，但微信扫到的落地页会把该码判为
+“过期或已被使用”。码必须来自第 1 步。
 
 不走官方桌面端的 `office-raccoon://auth/callback`，也不改网页里写死的回调地址。
 
