@@ -117,6 +117,12 @@ Trae 的签到是「每账号每天一次」，但它同时按设备记录 `did_
 聊天会返回 `4001 binding: expr_path=app_version_code, cause=missing required parameter`，
 模型详情接口则可能返回空列表。插件现在用固定的数字构建号补上这两个头；重装/重启后再试即可。
 
+**Trae 一调用工具就失败（`requires toolCallId matching its tool source`）？**
+Trae 的工具调用只在首帧给出 `id`，之后的参数分片会带 `id: ""`。旧代码把空串当成有效值写回，
+真实 id 被清空，宿主因此拒绝工具结果。现在空 id / 空 name 一律忽略，并在发出前保证每个调用
+都有唯一非空 id；工具结果也统一发 block 数组（空数组会被上游判为参数无效）。升级并重启后
+即可正常调用工具。
+
 **Trae 的倍率为什么没了 / 为什么没有 Max、没有 1M？**
 倍率在目录的 `features` 字段里，而它是 JSON **字符串**（`features.consumption_rate.data.rate`），
 现在会解析后显示成 `x0.06` 这样的倍率。Max 档在目录里经常不发布，但网关实际接受

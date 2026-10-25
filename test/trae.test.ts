@@ -205,6 +205,84 @@ describe('Trae catalog', () => {
     expect(wireOnly.meta.get('custom_model_gemini')).toMatchObject({ function: 'solo_work_remote' })
   })
 
+  it('unions efforts from every group for one model', () => {
+    // Live case: solo_work_lite reports `options: null` while chat_v3 publishes
+    // light/high for the same id and the wider Max tier.
+    const remote = parseTraeRemoteModels({
+      data: {
+        list: [
+          {
+            function: 'solo_work_lite',
+            models: [{
+              name: 'deepseek-v4.1-flash',
+              display_name: 'DeepSeek-V4.1-Flash',
+              context_window_tokens: { dev: 200_000, max: 0 },
+              max_mode: false,
+              reasoning_effort_config: { options: null },
+            }],
+          },
+          {
+            function: 'chat_v3',
+            models: [{
+              name: 'deepseek-v4.1-flash',
+              display_name: 'DeepSeek-V4.1-Flash',
+              context_window_tokens: { dev: 116_000, max: 1_000_000 },
+              max_mode: true,
+              multimodal: true,
+              reasoning_effort_config: { options: ['light', 'high', 'extra_high'] },
+            }],
+          },
+        ],
+      },
+    })
+    expect(remote).toHaveLength(1)
+    expect(remote[0]).toMatchObject({
+      contextWindow: 116_000,
+      maxContextWindow: 1_000_000,
+      multimodal: true,
+      efforts: ['low', 'high', 'xhigh', 'max'],
+    })
+  })
+
+  it('promotes a wider snapshot that shares a display name', () => {
+    const remote = [{
+      id: 'kimi-k2', name: 'Kimi-K2', contextWindow: 28_000, multimodal: false, efforts: [],
+    }]
+    const wire = [
+      { configName: 'kimi-k2-0905', name: 'Kimi-K2', contextWindow: 168_000, function: 'chat_v3', efforts: [] },
+      { configName: 'glm-4.7', name: 'GLM-4.7', contextWindow: 100_000, function: 'solo_work_remote', efforts: [] },
+      { configName: 'glm-4.7-auto', name: 'GLM-4.7', contextWindow: 100_000, function: 'chat_v3', efforts: [] },
+    ]
+    const { models } = mergeTraeModels(remote, wire)
+    expect(models.map(model => model.id)).toEqual(['kimi-k2', 'kimi-k2-0905', 'glm-4.7'])
+    // The promoted snapshot keeps its id in the name so the two rows differ.
+    expect(models[1]).toMatchObject({
+      name: 'Kimi K2 (kimi-k2-0905)',
+      contextWindow: 168_000,
+    })
+  })
+
+  it('disambiguates two directory rows that share a display name', () => {
+    // Live case: the plain and `-Official` variants both normalize to
+    // `DeepSeek V4 Flash`; showing the same name twice is a picker that lies.
+    const remote = parseTraeRemoteModels({
+      data: {
+        list: [{
+          function: 'solo_work_remote',
+          models: [
+            { name: 'DeepSeek-V4-Flash-Official', display_name: 'DeepSeek-V4-Flash' },
+            { name: 'DeepSeek-V4-Flash', display_name: 'DeepSeek-V4-Flash' },
+          ],
+        }],
+      },
+    })
+    const { models } = mergeTraeModels(remote, [])
+    expect(models.map(model => model.name)).toEqual([
+      'DeepSeek V4 Flash',
+      'DeepSeek V4 Flash (DeepSeek-V4-Flash)',
+    ])
+  })
+
   it('keeps a wire-only model out of the list when its name already exists', () => {
     const remote = parseTraeRemoteModels(remotePayload)
     const wire = parseTraeWireModels(wirePayload, 'solo_work_remote')
@@ -229,6 +307,17 @@ describe('Trae request shape', () => {
       { id: 'call_1', type: 'function', function_call: { name: 'read', arguments: '{"p":1}' } },
     ])
     expect(messages[2]).toMatchObject({ role: 'tool', tool_call_id: 'call_1' })
+  })
+
+  it('never sends an empty tool content array', () => {
+    // An empty array is rejected as an invalid parameter; an empty text block
+    // is the shape the gateway accepts when a tool produced no text.
+    const messages = traeMessages([{ role: 'tool', content: [], tool_call_id: 'call_1' }])
+    expect(messages[0]).toEqual({
+      role: 'tool',
+      tool_call_id: 'call_1',
+      content: [{ type: 'text', text: '' }],
+    })
   })
 
   it('sends tool parameters as a JSON string and promotes per-property required flags', () => {
@@ -259,7 +348,8 @@ describe('Trae stream', () => {
       'event: output\ndata: {"response":"he"}',
       'event: output\ndata: {"response":"llo"}',
       'event: output\ndata: {"tool_calls":[{"index":0,"id":"call_9","function_call":{"name":"read","arguments":"{\\"p\\":"}}]}',
-      'event: output\ndata: {"tool_calls":[{"index":0,"function_call":{"arguments":"1}"}}]}',
+      // Live shape: argument fragments repeat the index with `id: ""`.
+      'event: output\ndata: {"tool_calls":[{"index":0,"id":"","type":"","function_call":{"name":"","arguments":"1}"}}]}',
       'event: token_usage\ndata: {"prompt_tokens":100,"completion_tokens":20,"cache_read_input_tokens":40,"reasoning_tokens":5}',
       'event: done\ndata: {"finish_reason":"tool_calls"}',
     ]), 'gpt-5'))
@@ -274,6 +364,34 @@ describe('Trae stream', () => {
       usage: { inputTokens: 60, outputTokens: 20, totalTokens: 120, cacheReadTokens: 40, reasoningTokens: 5 },
     })
     expect(chunks.at(-1)).toEqual({ type: 'finish', reason: { kind: 'tool-calls' } })
+  })
+
+  it('keeps one call per index with unique non-empty ids', async () => {
+    const chunks = await collect(openTraeStream(stream([
+      'event: output\ndata: {"tool_calls":[{"index":0,"id":"call_a","function_call":{"name":"read","arguments":"{}"}},{"index":1,"id":"call_b","function_call":{"name":"list","arguments":"{}"}}]}',
+      'event: output\ndata: {"tool_calls":[{"index":0,"id":"","function_call":{"name":"","arguments":""}},{"index":1,"id":"","function_call":{"arguments":""}}]}',
+      'event: done\ndata: {"finish_reason":"stop"}',
+    ]), 'x'))
+    const blocks = chunks
+      .filter(chunk => chunk.type === 'block-end' && chunk.block.type === 'tool-call')
+      .map(chunk => chunk.block)
+    expect(blocks.map(block => [block.id, block.name])).toEqual([
+      ['call_a', 'read'],
+      ['call_b', 'list'],
+    ])
+    expect(chunks.at(-1)).toEqual({ type: 'finish', reason: { kind: 'tool-calls' } })
+  })
+
+  it('never emits an empty or duplicate call id', async () => {
+    const chunks = await collect(openTraeStream(stream([
+      'event: output\ndata: {"tool_calls":[{"index":0,"function_call":{"name":"read","arguments":"{}"}},{"index":1,"id":"call_same","function_call":{"name":"list","arguments":"{}"}},{"index":2,"id":"call_same","function_call":{"name":"list2","arguments":"{}"}}]}',
+    ]), 'x'))
+    const ids = chunks
+      .filter(chunk => chunk.type === 'block-end' && chunk.block.type === 'tool-call')
+      .map(chunk => chunk.block.id)
+    expect(ids).toHaveLength(3)
+    for (const id of ids) expect(String(id).length).toBeGreaterThan(0)
+    expect(new Set(ids).size).toBe(3)
   })
 
   it('maps a plan gate to 402 and a quota error to 429', async () => {
@@ -441,13 +559,14 @@ describe('TraeProvider', () => {
       seen.url = url
       seen.headers = init.headers as Record<string, string>
       seen.body = JSON.parse(String(init.body)) as Record<string, unknown>
-      return new Response(stream(['event: output\ndata: {"response":"ok"}', 'event: done\ndata: {"finish_reason":"stop"}']).getReader()
-        ? stream(['event: output\ndata: {"response":"ok"}', 'event: done\ndata: {"finish_reason":"stop"}'])
-        : null, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+      return new Response(
+        stream(['event: output\ndata: {"response":"ok"}', 'event: done\ndata: {"finish_reason":"stop"}']),
+        { status: 200, headers: { 'content-type': 'text/event-stream' } },
+      )
     })
     const { provider } = make('cn', fetchMock as unknown as typeof fetch)
     const chunks = await collect(provider.stream(
-      { ...options, reasoningEffort: 'high' as never },
+      { ...options, reasoningEffort: 'high' as never, maxTokens: 4096 },
       'gpt-5',
       undefined,
       () => undefined,
@@ -468,9 +587,32 @@ describe('TraeProvider', () => {
       config_name: 'gpt-5-2026',
       function: 'solo_work_remote',
       reasoning_effort: 'high',
+      max_tokens: 4096,
       stream: true,
     })
     expect(chunks.at(-1)).toEqual({ type: 'finish', reason: { kind: 'stop' } })
+  })
+
+  it('applies forced vision and text-only IDs', async () => {
+    const provider = new TraeProvider({
+      auth: {
+        status: async () => ({ signedIn: true }),
+        accessToken: async () => 'tok',
+        identity: async () => ({ deviceId: 'dev-1', machineId: 'mach-1' }),
+        logout: async () => undefined,
+      } as never,
+      store: { saveTrae: vi.fn() } as never,
+      region: () => 'cn',
+      ttlMs: () => 1000,
+      timeoutMs: () => 1000,
+      textOnly: () => new Set(['claude-4.5-sonnet']),
+      forceVision: () => new Set(['kimi-k2']),
+      fetchImpl: catalogFetch(),
+    })
+    const models = await provider.models()
+    expect(models.find(model => model.id === 'claude-4.5-sonnet')?.vision).toBe(false)
+    expect(models.find(model => model.id === 'kimi-k2')?.vision).toBe(true)
+    expect(models.find(model => model.id === 'gpt-5')?.vision).toBe(false)
   })
 
   it('reads the mainland quota and the check-in state', async () => {
