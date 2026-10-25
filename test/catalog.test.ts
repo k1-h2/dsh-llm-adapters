@@ -77,7 +77,8 @@ describe('parseRaccoonCatalog', () => {
           models: [
             {
               name: 'sn-sensenova-6-8-flash-lite',
-              display_description: 'SenseNova-6.8-Flash-Lite',
+              description: 'SenseNova-6.8-Flash-Lite',
+              display_description: '适合简单问答和摘要等轻量任务',
               context_window: 1,
               visible: true,
               tags: ['vision'],
@@ -89,7 +90,8 @@ describe('parseRaccoonCatalog', () => {
             },
             {
               name: 'sn-glm-5-3',
-              display_description: 'GLM-5-3',
+              description: 'GLM-5-3',
+              display_description: '适合复杂办公任务和代码开发',
               visible: true,
               tags: ['vision', 'reasoning'],
               params: { context_window: 1_000_000, max_tokens: 100_000 },
@@ -97,7 +99,8 @@ describe('parseRaccoonCatalog', () => {
             },
             {
               name: 'sn-glm-5-3-flash',
-              display_description: 'GLM-5-3-Flash',
+              description: 'GLM-5-3-Flash',
+              display_description: '适合通用对话和轻量代码',
               visible: true,
               tags: ['fast'],
               params: { context_window: 1_000_000, max_tokens: 100_000 },
@@ -119,10 +122,15 @@ describe('parseRaccoonCatalog', () => {
     ])
     expect(models[0]).toMatchObject({
       name: 'SenseNova-6.8-Flash-Lite',
+      description: '适合简单问答和摘要等轻量任务',
       contextWindow: 256_000,
       maxTokens: 63_999,
       priceFactor: 0,
       badge: '限免一个月',
+      reasoning: true,
+      reasoningEfforts: ['on', 'off'],
+      defaultReasoningEffort: 'off',
+      reasoningEffortNames: { on: '开启思考', off: '关闭思考' },
     })
     expect(models[2]!.badge).toBe('折扣')
   })

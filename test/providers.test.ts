@@ -157,17 +157,59 @@ describe('RaccoonProvider', () => {
     expect(seen.headers).toMatchObject({
       authorization: 'Bearer token-1',
       'x-org-code': '',
-      'x-client-platform': 'desktop',
+      'x-client-platform': expect.stringMatching(/^desktop-/),
+      'x-client-version': 'v1.0.35',
+      'x-raccoon-language': 'zh',
     })
   })
 
-  it('reads the points balance', async () => {
+  it('reads the real points balance shape', async () => {
     const fetchMock = vi.fn(async (url: string) => {
       expect(url).toContain('/points/v1/balance')
-      return json({ code: 0, data: { total: 4321 } })
+      return json({
+        code: 0,
+        data: {
+          available_points: 4321,
+          reward_points: 3000,
+          daily_points: 300,
+          topup_points: 0,
+        },
+      })
     })
     const { provider } = make(fetchMock as unknown as typeof fetch)
-    expect(await provider.quota(true)).toMatchObject({ total: 4321 })
+    expect(await provider.quota(true)).toMatchObject({
+      total: 4321,
+      available: 4321,
+      permanent: 3000,
+      daily: 300,
+    })
+  })
+
+  it('maps the thinking switch onto extra_body.thinking', async () => {
+    const bodies: Record<string, unknown>[] = []
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>)
+      return sse()
+    })
+    const { provider } = make(fetchMock as unknown as typeof fetch)
+    await collect(provider.stream(
+      { ...options, provider: 'raccoon', reasoningEffort: 'off' as never },
+      'sn-kimi-k3',
+      undefined,
+    ))
+    await collect(provider.stream(
+      { ...options, provider: 'raccoon', reasoningEffort: 'on' as never },
+      'sn-kimi-k3',
+      undefined,
+    ))
+    await collect(provider.stream(
+      { ...options, provider: 'raccoon' },
+      'sn-kimi-k3',
+      undefined,
+    ))
+    expect(bodies[0]!.extra_body).toEqual({ thinking: { type: 'disabled' } })
+    expect(bodies[1]!.extra_body).toEqual({ thinking: { type: 'enabled' } })
+    expect(bodies[2]!.extra_body).toEqual({ thinking: { type: 'disabled' } })
   })
 
   it('retries once with a rotated token when the first attempt is rejected', async () => {

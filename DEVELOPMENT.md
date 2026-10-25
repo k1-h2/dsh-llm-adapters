@@ -81,6 +81,16 @@ test/                vitest，不访问真实上游
 
 不走官方桌面端的 `office-raccoon://auth/callback`，也不改网页里写死的回调地址。
 
+模型清单里 `name` 取远端的 `description`（`Kimi-K3`），`display_description` 只作说明；旧版
+把中文任务描述当成了模型名。
+
+思考开关是**两态**，不是强度档位：请求体写 `extra_body.thinking.type = enabled | disabled`。
+`reasoning_effort` 虽被服务端接受但不影响行为。`on` / `off` 由 `catalog.ts` 声明，默认 `off`；
+即使 DSH 没有物化默认值，`raccoon.ts` 也会显式发送 `disabled`，保证实际行为与 UI 一致。
+
+额度接口是 `GET /points/v1/balance`，核心字段为 `available_points`（另有 `reward_points`、
+`daily_points`、`topup_points`）。没有 `available_points` 时按旧字段回退，绝不编造数字。
+
 ### 失败与清理
 
 - 超时、二维码失效、用户取消都会终止页面轮询并把状态写进 `LoginStatus`；设置页显示原因。

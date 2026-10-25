@@ -36,10 +36,12 @@ export async function raccoonAccountInfo(
       ? root.data as Record<string, unknown>
       : {}
     const name = textField(data.name) ?? textField(data.nickname)
+    const ownerType = textField(data.owner_type)
+      ?? (Array.isArray(data.orgs) && data.orgs.length === 0 ? 'personal' : undefined)
     return {
       ...name === undefined ? {} : { name },
       ...textField(data.phone) === undefined ? {} : { phone: textField(data.phone)! },
-      ...textField(data.owner_type) === undefined ? {} : { ownerType: textField(data.owner_type)! },
+      ...ownerType === undefined ? {} : { ownerType },
     }
   } catch {
     return {}

@@ -13,7 +13,9 @@ import type { AccountStore } from './account-store.ts'
 import { RaccoonAuth } from './auth.ts'
 import { RaccoonQrLogin } from './raccoon-login.ts'
 import type { LoginStatus } from './login-page.ts'
-import { ModelCatalog, parseRaccoonCatalog } from './catalog.ts'
+import {
+  ModelCatalog, RACCOON_EFFORT_ON, parseRaccoonCatalog,
+} from './catalog.ts'
 import type { ProviderModel } from './catalog.ts'
 import { fetchJson } from './http.ts'
 import type { QuotaSnapshot } from './types.ts'
@@ -21,7 +23,14 @@ import { ProviderHttpError, buildBody, buildMessages, buildTools, openAiStream }
 import type { ReadImage } from './wire.ts'
 
 export const RACCOON_BASE = 'https://xiaohuanxiong.com/api/web'
-export const RACCOON_CLIENT_VERSION = '1.0.0'
+export const RACCOON_CLIENT_VERSION = 'v1.0.35'
+
+/** Desktop identity the official client sends; the gateway varies by platform. */
+function raccoonClientPlatform(): string {
+  if (process.platform === 'darwin') return 'desktop-macos'
+  if (process.platform === 'linux') return 'desktop-linux'
+  return 'desktop-windows'
+}
 
 export interface RaccoonProviderOptions {
   auth: RaccoonAuth
@@ -49,8 +58,8 @@ function raccoonHeaders(token: string): Record<string, string> {
   return {
     authorization: `Bearer ${token}`,
     'x-org-code': '',
-    'x-raccoon-language': 'zh-CN',
-    'x-client-platform': 'desktop',
+    'x-raccoon-language': 'zh',
+    'x-client-platform': raccoonClientPlatform(),
     'x-client-version': RACCOON_CLIENT_VERSION,
   }
 }
@@ -254,9 +263,20 @@ export class RaccoonProvider {
         const data = root.data !== null && typeof root.data === 'object'
           ? root.data as Record<string, unknown>
           : root
-        const total = numeric(data.total) ?? numeric(data.balance) ?? numeric(data.points)
-        if (total === undefined) throw new Error('小浣熊额度响应格式无法识别。')
-        const snapshot: QuotaSnapshot = { at: Date.now(), total }
+        // Raccoon reports `available_points`; the other keys are legacy shapes.
+        const available = numeric(data.available_points)
+          ?? numeric(data.total_chargeable_points)
+          ?? numeric(data.total)
+          ?? numeric(data.balance)
+          ?? numeric(data.points)
+        if (available === undefined) throw new Error('小浣熊额度响应格式无法识别。')
+        const snapshot: QuotaSnapshot = {
+          at: Date.now(),
+          total: available,
+          available,
+          ...numeric(data.reward_points) === undefined ? {} : { permanent: numeric(data.reward_points)! },
+          ...numeric(data.daily_points) === undefined ? {} : { daily: numeric(data.daily_points)! },
+        }
         this.quotaCache = { at: snapshot.at, value: snapshot }
         return snapshot
       } finally {
@@ -280,6 +300,12 @@ export class RaccoonProvider {
     const messages = await buildMessages(options, readImage)
     const tools = buildTools(options)
     const body = buildBody(options, model, messages, tools)
+    // The gateway ignores `reasoning_effort` but honours this nested object.
+    // Send it even when no effort was materialized so the declared default
+    // (off) is what the request actually uses.
+    body.extra_body = {
+      thinking: { type: options.reasoningEffort === RACCOON_EFFORT_ON ? 'enabled' : 'disabled' },
+    }
     for (let attempt = 0; attempt < 2; attempt++) {
       let emitted = false
       try {

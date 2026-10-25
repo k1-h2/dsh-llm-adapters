@@ -242,13 +242,23 @@ describe('account-store credentials', () => {
     expect(await fs.readFile(desktopFile, 'utf8')).toContain('access_token')
   })
 
-  it('treats an opaque QR-login token as signed in until the gateway rejects it', async () => {
+  it('treats an opaque QR-login token as signed in and shows its stored account', async () => {
     const root = mkdtempSync(path.join(tmpdir(), 'raccoon-opaque-'))
     const store = new AccountStore(() => root)
-    await store.saveRaccoon({ accessToken: 'opaque-browser-token-1234567890', loginAt: Date.now() })
+    await store.saveRaccoon({
+      accessToken: 'opaque-browser-token-1234567890',
+      name: 'RaccoonBenjamin',
+      phone: '13800138000',
+      ownerType: 'personal',
+      loginAt: Date.now(),
+    })
     const auth = new RaccoonAuth(() => path.join(root, 'missing.json'), store)
     const status = await auth.status()
-    expect(status).toMatchObject({ signedIn: true, sourceKind: 'account' })
+    expect(status).toMatchObject({
+      signedIn: true,
+      sourceKind: 'account',
+      account: { name: 'RaccoonBenjamin', phone: '13800138000', ownerType: 'personal' },
+    })
     expect(status.possiblyExpired).toBeUndefined()
     expect(await auth.accessToken()).toBe('opaque-browser-token-1234567890')
   })

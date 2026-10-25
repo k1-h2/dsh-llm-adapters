@@ -389,9 +389,22 @@ export class RaccoonAuth {
     if (accessFacts.phone !== undefined) account.phone = accessFacts.phone
     if (accessFacts.ownerType !== undefined) account.ownerType = accessFacts.ownerType
     if (accessFacts.sessionId !== undefined) account.sessionId = accessFacts.sessionId
+    // The QR login stores the display fields separately; the opaque token has
+    // no claims to read them from, so without this the card says "unknown".
+    if (loaded.kind === 'account') {
+      const name = firstString(loaded.raw, ['name', 'nickname'])
+      const phone = firstString(loaded.raw, ['phone', 'maskedPhone', 'masked_phone'])
+      const ownerType = firstString(loaded.raw, ['owner_type', 'ownerType'])
+      if (account.name === undefined && name !== undefined) account.name = name
+      if (account.phone === undefined && phone !== undefined) account.phone = phone
+      if (account.ownerType === undefined && ownerType !== undefined) account.ownerType = ownerType
+    }
     const needsRefresh = signedIn && !opaqueAccess
       && (!accessValid || (accessFacts.expiresAt ?? 0) <= now + RACCOON_REFRESH_MARGIN_MS)
     const sourceKind = loaded.kind ?? 'file'
+    // The QR path is a personal web account and every request uses an empty
+    // X-Org-Code, so an unlabelled plugin account is personal.
+    if (sourceKind === 'account' && account.ownerType === undefined) account.ownerType = 'personal'
     return {
       signedIn,
       source: sourceKind === 'account' ? '账号登录' : loaded.path,
