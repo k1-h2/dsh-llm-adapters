@@ -76,6 +76,10 @@ describe('client bundle', () => {
     // The device flag and the account flag must never share a label.
     expect(zh.checkinDevice).not.toBe(zh.checkinClaimed)
     expect(zh.browserOpenTrae).toBe('打开浏览器登录')
+    expect(zh.packUsage).toBe('已用 / 总额')
+    expect(zh.packExpand).toBe('展开全部')
+    expect(zh.packCollapse).toBe('收起')
+    expect(en.packUsage).toBe('used / total')
   })
 
   it('has the same top-level copy keys in Chinese and English', () => {

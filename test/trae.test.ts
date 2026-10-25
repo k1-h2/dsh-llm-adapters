@@ -44,7 +44,7 @@ const remotePayload = {
             multimodal: true,
             context_window_tokens: { dev: 200_000, max: 1_000_000 },
             max_mode: true,
-            features: { consumption_rate: { enable: true, data: { rate: 1.2 } } },
+            features: JSON.stringify({ consumption_rate: { enable: true, data: { rate: 1.2 } } }),
             reasoning_effort_config: { options: ['light', 'medium', 'high', 'extra_high', 'max'] },
           },
           // A weaker duplicate inside an IDE-only group must not win.
@@ -103,7 +103,8 @@ describe('Trae catalog', () => {
     expect(models.map(model => model.id)).toEqual(['gpt-5', 'kimi-k2', 'claude-4.5-sonnet'])
     const gpt = models.find(model => model.id === 'gpt-5')!
     expect(gpt).toMatchObject({ name: 'GPT-5', contextWindow: 272_000, function: 'solo_work_remote' })
-    expect(gpt.efforts).toEqual(['low', 'medium', 'high', 'xhigh'])
+    // `max` is appended even though the directory omits it: the gateway accepts it.
+    expect(gpt.efforts).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
     const claude = models.find(model => model.id === 'claude-4.5-sonnet')!
     expect(claude).toMatchObject({
       multimodal: true, contextWindow: 200_000, maxContextWindow: 1_000_000, creditMultiplier: 1.2,
@@ -144,13 +145,13 @@ describe('Trae catalog', () => {
       maxTokens: 64_000,
       priceFactor: 0.8,
       reasoning: true,
-      reasoningEfforts: ['low', 'medium', 'high'],
-      defaultReasoningEffort: 'medium',
+      reasoningEfforts: ['low', 'medium', 'high', 'max'],
+      defaultReasoningEffort: 'high',
     })
     expect(meta.get('gpt-5')).toEqual({
       configName: 'gpt-5-2026',
       function: 'solo_work_remote',
-      wireEfforts: { low: 'light', medium: 'medium', high: 'high' },
+      wireEfforts: { low: 'light', medium: 'medium', high: 'high', max: 'max' },
     })
 
     const claude = models.find(model => model.id === 'claude-4.5-sonnet')!
@@ -163,7 +164,11 @@ describe('Trae catalog', () => {
     })
     // Matched by display name, so the callable config name is the dated one
     // Trae actually lists — not the directory id, which may not be accepted.
-    expect(meta.get('claude-4.5-sonnet')).toMatchObject({ configName: 'claude-4.5-sonnet-20260101' })
+    expect(meta.get('claude-4.5-sonnet')).toMatchObject({
+      configName: 'claude-4.5-sonnet-20260101',
+      // The wire roster owns the call function; `solo_agent` rejected it live.
+      function: 'solo_work_remote',
+    })
 
     const gemini = models.find(model => model.id === 'gemini-3-pro')!
     expect(gemini).toMatchObject({ name: 'Gemini 3 Pro', maxTokens: 32_000, vision: false })
@@ -424,6 +429,9 @@ describe('TraeProvider', () => {
       'x-machine-id': 'mach-1',
       'x-uid': 'u-1',
       'x-trae-client-type': 'web',
+      // The gateway binds this as a number and answers 4001 when it is absent.
+      'x-app-version-code': '20260716',
+      'x-ide-version-code': '20260716',
     })
     expect(seen.body).toMatchObject({
       model: 'gpt-5-2026',

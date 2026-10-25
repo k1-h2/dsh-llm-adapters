@@ -23,6 +23,8 @@ export interface ModelRow {
   enabled: boolean
   vision: boolean
   contextWindow: number
+  /** Widest window the model offers; the row's `<select>` may go up to it. */
+  maxContextWindow?: number
   contextWindows: number[]
   defaultContextWindow: number
   override?: number
@@ -53,6 +55,11 @@ export async function buildRows(adapter: LocalAdapter): Promise<ModelRow[]> {
     for (const choice of WINDOW_CHOICES) {
       if (choice < model.contextWindow) choices.add(choice)
     }
+    // Trae publishes a Max tier wider than the default window; it is the only
+    // larger number we offer, because it is the only one the model declares.
+    if (model.maxContextWindow !== undefined && model.maxContextWindow > model.contextWindow) {
+      choices.add(model.maxContextWindow)
+    }
     if (override !== undefined) choices.add(override)
     return {
       id: model.id,
@@ -62,6 +69,7 @@ export async function buildRows(adapter: LocalAdapter): Promise<ModelRow[]> {
       enabled: !adapter.isModelDisabled(model.id),
       vision: model.vision,
       contextWindow: override ?? model.contextWindow,
+      ...model.maxContextWindow === undefined ? {} : { maxContextWindow: model.maxContextWindow },
       contextWindows: [...choices].sort((a, b) => a - b),
       defaultContextWindow: model.contextWindow,
       ...override === undefined ? {} : { override },

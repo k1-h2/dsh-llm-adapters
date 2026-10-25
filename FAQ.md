@@ -112,6 +112,17 @@ Trae 的签到是「每账号每天一次」，但它同时按设备记录 `did_
 `Free`、试用）。两者都没有统一的「剩余积分」字段，所以卡片按区域显示对应结构；读不到时只影响
 额度这一行，不影响对话。
 
+**Trae 发消息报 `expr_path=app_version_code` / 模型列表少一半？**
+聊天和 `get_detail_param` 都要带数字版本头 `x-app-version-code` / `x-ide-version-code`。缺了它，
+聊天会返回 `4001 binding: expr_path=app_version_code, cause=missing required parameter`，
+模型详情接口则可能返回空列表。插件现在用固定的数字构建号补上这两个头；重装/重启后再试即可。
+
+**Trae 的倍率为什么没了 / 为什么没有 Max、没有 1M？**
+倍率在目录的 `features` 字段里，而它是 JSON **字符串**（`features.consumption_rate.data.rate`），
+现在会解析后显示成 `x0.06` 这样的倍率。Max 档在目录里经常不发布，但网关实际接受
+`reasoning_effort: "max"`，所以只要模型支持思考就会列出来。1M 来自同一模型更宽的分组
+（`context_window_tokens.max`），会作为上下文下拉里的一个选项出现，默认仍是 200K。
+
 **Trae 模型列表为什么比客户端少？**
 插件把两份目录合并：远端目录（`/api/remote/v1/models`）提供显示名、上下文窗口与多模态标签，
 `get_detail_param` 提供真正可调用的 `config_name` 与输出上限。目录是按账号下发的，账号没有的
