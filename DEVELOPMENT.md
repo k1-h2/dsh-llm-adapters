@@ -9,7 +9,7 @@ src/
   index.ts           注册 loomy / raccoon 路由、设置接口与配置目录
   adapter.ts         把 DSH 请求接到 provider client，模型解析与上下文窗口
   api.ts             /models、/status、/account/browser、/account
-  auth.ts            凭据优先级、桌面文件读取、小浣熊刷新与回写
+  auth.ts            插件凭据状态、JWT 到期判定、退出登录
   account-store.ts   插件自己的凭据文件（原子写、0600、串行读改写）
   login-page.ts      本地登录页：随机端口/路径、二维码下发、状态轮询、可选绑手机
   qr.ts              零依赖二维码（byte 模式、纠错 M、版本 1–10）
@@ -73,8 +73,8 @@ test/                vitest，不访问真实上游
    `pending` / `logging` / `canceled` / `success`。`AUTH_QRCODE_EXPIRED` 视为过期，网络抖动仍
    继续轮询。
 4. 成功后先用 `POST /api/web/auth/v1/iam/confirm` 建立业务会话（失败不致命），再向
-   `model_catalog` 校验令牌；只有网关接受的令牌才写入账号存储。响应若带 `refresh_token` 就
-   一并保存，没有时到期后重新扫码。
+   `model_catalog` 校验令牌；只有网关接受的令牌才写入账号存储。扫码登录没有刷新流程，到期后
+   重新扫码。
 
 ⚠️ 不能像旧版那样在本地随机生成 `code`：轮询会返回 `pending`，但微信扫到的落地页会把该码判为
 “过期或已被使用”。码必须来自第 1 步。
@@ -84,9 +84,14 @@ test/                vitest，不访问真实上游
 模型清单里 `name` 取远端的 `description`（`Kimi-K3`），`display_description` 只作说明；旧版
 把中文任务描述当成了模型名。
 
-思考开关是**两态**，不是强度档位：请求体写 `extra_body.thinking.type = enabled | disabled`。
-`reasoning_effort` 虽被服务端接受但不影响行为。`on` / `off` 由 `catalog.ts` 声明，默认 `off`；
-即使 DSH 没有物化默认值，`raccoon.ts` 也会显式发送 `disabled`，保证实际行为与 UI 一致。
+思考开关是**两态**：请求体写 `extra_body.thinking.type = enabled | disabled`。`on` / `off` 由
+`catalog.ts` 声明，默认 `off`；即使 DSH 没有物化默认值，`raccoon.ts` 也会显式发送 `disabled`，
+保证实际行为与 UI 一致。
+
+`reasoning_effort` 是另一条通道，服务端接受 8 个枚举。旧参考实现的多轮实验认为它几乎无效果；
+在 `sn-deepseek-v4-1-flash-1017` 上做 3 组配对（temperature 0）时，`max` 的 reasoning token
+为 56/54/62，`minimal` 为 52/50/42，差异很小。因此 UI 不把 High/Max 做成可调档位，避免暗示
+不存在的明显差异。
 
 额度接口是 `GET /points/v1/balance`，核心字段为 `available_points`（另有 `reward_points`、
 `daily_points`、`topup_points`）。没有 `available_points` 时按旧字段回退，绝不编造数字。
@@ -98,22 +103,20 @@ test/                vitest，不访问真实上游
   凭据（`advance()` 在落定前检查 `terminal`）。
 - 登录页的 QR 与状态接口不带任何令牌；账号写入仍走 `AccountStore`。
 
-## 凭据与刷新
+## 凭据
 
-`AuthStatus.sourceKind` 只有两种：`account`（插件存储）与 `file`（桌面客户端）。
+凭据只有一个来源：`AccountStore`（`$DSH_HOME/llm-adapters/accounts.json`）。插件不发现、不
+读取、也不回写任何客户端登录文件，也没有客户端路径配置项。
 
-读取顺序固定：插件存储优先，其次桌面文件。小浣熊刷新时按来源回写：
-
-- `account` → `AccountStore.saveRaccoon()`；
-- `file` → 保留原文件其他字段，临时文件 + rename 原子替换。
-
-`AccountStore` 的读-改-写全部串行在同一条 Promise 链里；并发登录与刷新不会互相覆盖。
+`AccountStore` 的读-改-写全部串行在同一条 Promise 链里；并发登录与退出不会互相覆盖。
 文件权限 0600；目录由 `DSH_LLM_ADAPTERS_HOME` 或 `$DSH_HOME/llm-adapters` 决定。
 
-小浣熊的 access token 若没有 JWT 声明（浏览器登录可能返回不透明令牌），`account` 来源按
-已登录处理，等网关 401 时再强制刷新；`file` 来源仍要求可解码的过期时间，避免把坏文件当登录。
+- Loomy：登录时声明 14 天有效期并把到期时间存进记录；过期后状态变为未登录，提示重新扫码。
+- 小浣熊：扫码得到的 access token 若是 JWT，按 `exp` 判断；没有 JWT 声明的不透明令牌按
+  已登录处理，等网关 401 再提示重新扫码。两者都没有刷新流程。
 
-Loomy 没有 refresh token；插件存储里按登录时间 + 14 天估算到期，过期后状态提示重新登录。
+`RaccoonAuth.accessToken(true)` 只用于网关明确拒绝令牌的路径，它会直接报“登录已失效”，
+不再尝试刷新或回读任何文件。
 
 ## 设置接口
 
@@ -135,7 +138,7 @@ URL）、文件（占位文本）、assistant 工具调用、tool 结果。SSE �
 
 - 上游只给 `[DONE]`、不给 `finish_reason` 时（Loomy 会这样截断），标记为 `max-tokens`。
 - usage 全部向上取整并保证 `reasoningTokens <= outputTokens`；DSH 的持久化校验不接受小数。
-- 小浣熊在 401 时最多重试一次，且只在还没有向调用方输出任何字节时重试，避免重复回答。
+- 小浣熊在 401 时不再重放请求：扫码登录没有刷新流程，直接提示重新扫码，避免重复回答。
 
 ## 测试与构建
 
@@ -147,16 +150,15 @@ npm run build
 ```
 
 `vitest` 覆盖目录解析、登录页状态机、Loomy 长轮询与扫码绑定、小浣熊扫码轮询、凭据存储与
-并发、凭据优先级、刷新回写、SSE 与工具调用、设置 API。登录相关的测试全部注入假 `fetch`，
-不访问真实上游，也不启动浏览器。需要真机验证时，手动点一次「打开扫码登录」，确认二维码、
-手机确认后的接回、模型列表与一次对话。
+并发、过期判定、SSE 与工具调用、设置 API。登录相关的测试全部注入假 `fetch`，不访问真实
+上游，也不启动浏览器。需要真机验证时，手动点一次「打开扫码登录」，确认二维码、手机确认后的
+接回、模型列表与一次对话。
 
 ## 易变点
 
 - Loomy 依赖微信授权页的 HTML 里仍内嵌 `/connect/qrcode/<uuid>`，以及讯飞账号端点的签名规则
   和 `accessKeyId` / `accessKeySecret` / `appId` 常量。页面改版先看 `extractWechatUuid()`。
-- 小浣熊依赖扫码页 URL 形态、`login_with_qrcode_code` 的状态值与 `auth.json` 字段名；扫码页
-  或状态值改名会使二维码扫不出结果。
-- 小浣熊 refresh 仍是单次使用；Rotated pair 必须原子回写。
+- 小浣熊依赖 `/auth/mp/qrcode` 的签发字段、`scan_path` 形态与 `auth/mp/qrcode/login` 的
+  状态值；扫码页或状态值改名会使二维码扫不出结果。
 - 目录字段：Loomy 的倍率在展示名称里，小浣熊的 `billing_*` / `params.*` 可能改名。
 - 图片能力不能只信标签；小浣熊使用 `RACCOON_MEASURED_VISION`，Loomy 以目录 capabilities 为准。

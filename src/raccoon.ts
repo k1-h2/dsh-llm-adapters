@@ -167,7 +167,6 @@ export class RaccoonProvider {
         await this.options.store.saveRaccoon({
           accessToken: account.token,
           loginAt: Date.now(),
-          ...(account.refreshToken === undefined ? {} : { refreshToken: account.refreshToken }),
           ...(account.phone === undefined ? {} : { phone: account.phone }),
           ...(account.name === undefined ? {} : { name: account.name }),
           ...(account.ownerType === undefined ? {} : { ownerType: account.ownerType }),
@@ -189,9 +188,9 @@ export class RaccoonProvider {
     return raccoonHeaders(token)
   }
 
-  /** Run one JSON call, refreshing once when the gateway rejects the token. */
+  /** Run one JSON call; a rejected token means this login needs a new scan. */
   private async authorizedJson<T>(path: string, init: { method?: string, body?: unknown } = {}): Promise<T> {
-    let token = await this.options.auth.accessToken()
+    const token = await this.options.auth.accessToken()
     try {
       return await fetchJson<T>(`${RACCOON_BASE}${path}`, {
         ...init,
@@ -200,23 +199,12 @@ export class RaccoonProvider {
         fetchImpl: this.options.fetchImpl,
       })
     } catch (error) {
-      if (!(error instanceof ProviderHttpError) || error.status !== 401) throw error
-      token = await this.options.auth.accessToken(true)
-      try {
-        return await fetchJson<T>(`${RACCOON_BASE}${path}`, {
-          ...init,
-          headers: this.headers(token),
-          timeoutMs: this.options.timeoutMs(),
-          fetchImpl: this.options.fetchImpl,
-        })
-      } catch (retryError) {
-        if (retryError instanceof ProviderHttpError && retryError.status === 401) {
-          this.invalidateModels()
-          this.invalidateQuota()
-          throw new Error('小浣熊登录态被上游拒绝。请在设置页重新登录，或打开小浣熊桌面端重新登录。')
-        }
-        throw retryError
+      if (error instanceof ProviderHttpError && (error.status === 401 || error.status === 403)) {
+        this.invalidateModels()
+        this.invalidateQuota()
+        throw new Error('小浣熊登录已失效，请在设置页点「打开扫码登录」。')
       }
+      throw error
     }
   }
 
@@ -296,7 +284,7 @@ export class RaccoonProvider {
     readImage: ReadImage | undefined,
     onUnauthorized?: () => void,
   ): AsyncGenerator<StreamChunk> {
-    let token = await this.options.auth.accessToken()
+    const token = await this.options.auth.accessToken()
     const messages = await buildMessages(options, readImage)
     const tools = buildTools(options)
     const body = buildBody(options, model, messages, tools)
@@ -306,39 +294,24 @@ export class RaccoonProvider {
     body.extra_body = {
       thinking: { type: options.reasoningEffort === RACCOON_EFFORT_ON ? 'enabled' : 'disabled' },
     }
-    for (let attempt = 0; attempt < 2; attempt++) {
-      let emitted = false
-      try {
-        for await (const chunk of openAiStream({
-          url: `${RACCOON_BASE}/llm/v2/chat/completions`,
-          headers: this.headers(token),
-          body,
-          signal: options.signal,
-          fetchImpl: this.options.fetchImpl,
-          onUnauthorized: () => {
-            this.invalidateModels()
-            this.invalidateQuota()
-            onUnauthorized?.()
-          },
-        })) {
-          emitted = true
-          yield chunk
-        }
-        return
-      } catch (error) {
-        // The token can expire between the local expiry check and the wire
-        // request. Retry once with a rotated token, but never after any byte
-        // reached the caller: a second stream would duplicate the answer.
-        if (!emitted && attempt === 0 && error instanceof ProviderHttpError
-          && (error.status === 401 || error.status === 403)) {
-          token = await this.options.auth.accessToken(true)
-          continue
-        }
-        if (error instanceof ProviderHttpError && (error.status === 401 || error.status === 403)) {
-          throw new Error('小浣熊登录态被上游拒绝。请在设置页重新登录，或打开小浣熊桌面端重新登录后再点“重新读取登录态”。')
-        }
-        throw error
+    try {
+      yield* openAiStream({
+        url: `${RACCOON_BASE}/llm/v2/chat/completions`,
+        headers: this.headers(token),
+        body,
+        signal: options.signal,
+        fetchImpl: this.options.fetchImpl,
+        onUnauthorized: () => {
+          this.invalidateModels()
+          this.invalidateQuota()
+          onUnauthorized?.()
+        },
+      })
+    } catch (error) {
+      if (error instanceof ProviderHttpError && (error.status === 401 || error.status === 403)) {
+        throw new Error('小浣熊登录已失效，请在设置页点「打开扫码登录」。')
       }
+      throw error
     }
   }
 }

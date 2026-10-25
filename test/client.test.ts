@@ -59,13 +59,14 @@ describe('client bundle', () => {
     expect(Object.keys(exports.__test.zh).sort()).toEqual(Object.keys(exports.__test.en).sort())
   })
 
-  it('ships QR sign-in copy for both providers', () => {
+  it('ships QR sign-in copy without a desktop credential path', () => {
     expect(exports.__test.zh.browserOpen).toBe('打开扫码登录')
-    expect(exports.__test.zh.sourceAccount).toBe('插件账号登录')
     expect(exports.__test.zh.browserPolling).toContain('自动接回')
     expect(exports.__test.en.browserOpen).toBe('Open QR sign-in')
-    expect(exports.__test.en.sourceAccount).toBe('Plugin account')
     expect(exports.__test.zh.loginSubmit).toBeUndefined()
+    expect(exports.__test.zh.authFile).toBeUndefined()
+    expect(exports.__test.zh.loginFileSourceNote).toBeUndefined()
+    expect(exports.__test.zh.advancedFields.authFile).toBeUndefined()
   })
 
   it('keeps the primary button dark with white text on both themes', () => {

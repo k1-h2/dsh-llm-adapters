@@ -1,9 +1,9 @@
 /**
  * Identity of the two providers this plugin serves.
  *
- * Both speak OpenAI Chat Completions over HTTP and both reuse a locally signed
- * in desktop application, so they differ in endpoints, credential files and
- * catalog shapes rather than in transport.
+ * Both speak OpenAI Chat Completions over HTTP and both sign in through a
+ * WeChat QR flow, so they differ in endpoints, login protocol and catalog
+ * shapes rather than in transport.
  *
  * @module dsh-llm-adapters/brand
  */
@@ -17,8 +17,6 @@ export interface BrandProfile {
   defaultDisplayName: string
   /** Config field that switches this provider on or off. */
   enabledKey: 'loomyEnabled' | 'raccoonEnabled'
-  /** Desktop application whose local login is reused. */
-  appName: string
 }
 
 export const LOOMY_PROVIDER = 'loomy'
@@ -29,7 +27,6 @@ export const LOOMY_BRAND: BrandProfile = {
   provider: LOOMY_PROVIDER,
   defaultDisplayName: 'Loomy',
   enabledKey: 'loomyEnabled',
-  appName: 'Loomy',
 }
 
 export const RACCOON_BRAND: BrandProfile = {
@@ -37,7 +34,6 @@ export const RACCOON_BRAND: BrandProfile = {
   provider: RACCOON_PROVIDER,
   defaultDisplayName: '商汤小浣熊',
   enabledKey: 'raccoonEnabled',
-  appName: '商汤小浣熊',
 }
 
 export const BRANDS: readonly BrandProfile[] = [LOOMY_BRAND, RACCOON_BRAND]

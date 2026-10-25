@@ -183,6 +183,8 @@ export const RACCOON_MEASURED_VISION: Readonly<Record<string, boolean>> = {
   'sn-kimi-k3': true,
   'sn-glm-5-3-flash': true,
   'sn-deepseek-v4-1-flash': true,
+  // The 1017 build omits the vision tag but reads a random digit image 3/3.
+  'sn-deepseek-v4-1-flash-1017': true,
 }
 
 function raccoonBadge(record: Record<string, unknown>): string | undefined {

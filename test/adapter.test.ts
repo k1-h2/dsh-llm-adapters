@@ -25,7 +25,7 @@ function fakeClient(overrides: Record<string, unknown> = {}) {
     catalogError: () => undefined,
     invalidateModels: vi.fn(),
     invalidateQuota: vi.fn(),
-    status: async () => ({ signedIn: true, source: 'C:/auth.json', account: { name: 'Alice' } }),
+    status: async () => ({ signedIn: true, account: { name: 'Alice' } }),
     quota: async () => ({ at: 1, total: 100, available: 100, permanent: 40, daily: 60 }),
     stream: async function* (): AsyncGenerator<StreamChunk> {
       yield { type: 'finish', reason: { kind: 'stop' } }

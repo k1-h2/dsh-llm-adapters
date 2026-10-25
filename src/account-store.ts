@@ -1,14 +1,10 @@
 /**
  * Plugin-owned credentials for account login.
  *
- * A user who does not install either desktop client signs in through the
- * provider's own web account service. The resulting session or token pair is
- * stored here instead of in the app's file. The file is written atomically and
- * restricted to the current user; tokens are never logged or returned to the
- * browser.
- *
- * `source: 'account'` in a status snapshot means these credentials are in use,
- * while `'file'` means the desktop application's own login is being reused.
+ * Sign-in happens in the provider's own web page through the plugin's QR flow.
+ * The resulting session or token is stored here — the only credential source.
+ * The file is written atomically and restricted to the current user; tokens are
+ * never logged or returned to the browser.
  *
  * @module dsh-llm-adapters/account-store
  */
@@ -31,7 +27,6 @@ export interface LoomyAccountRecord {
 
 export interface RaccoonAccountRecord {
   accessToken: string
-  refreshToken?: string
   phone?: string
   name?: string
   ownerType?: string
@@ -42,8 +37,6 @@ export interface StoredAccounts {
   loomy?: LoomyAccountRecord
   raccoon?: RaccoonAccountRecord
 }
-
-export type AccountSource = 'account' | 'file'
 
 const FILE_NAME = 'accounts.json'
 
@@ -107,7 +100,6 @@ export class AccountStore {
       out.raccoon = {
         accessToken: access,
         loginAt: number(raccoon?.loginAt) ?? Date.now(),
-        ...text(raccoon?.refreshToken) === undefined ? {} : { refreshToken: text(raccoon?.refreshToken)! },
         ...text(raccoon?.phone) === undefined ? {} : { phone: text(raccoon?.phone)! },
         ...text(raccoon?.name) === undefined ? {} : { name: text(raccoon?.name)! },
         ...text(raccoon?.ownerType) === undefined ? {} : { ownerType: text(raccoon?.ownerType)! },
