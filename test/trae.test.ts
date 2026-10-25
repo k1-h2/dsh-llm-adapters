@@ -175,6 +175,36 @@ describe('Trae catalog', () => {
     expect(meta.get('gemini-3-pro')).toMatchObject({ configName: 'gemini-3-pro' })
   })
 
+  it('never emits two rows with one id', () => {
+    // Live case: the gateway lists `custom_model_gemini` under several functions
+    // with different display names, and spells ids in both cases. DSH rejects
+    // the whole provider when an id repeats.
+    const remote = parseTraeRemoteModels({
+      data: {
+        list: [
+          { function: 'solo_work_remote', models: [{ name: 'custom_model_gemini', display_name: 'Gemini 3.1 Pro Preview' }] },
+          { function: 'chat_v3', models: [{ name: 'Custom_Model_Gemini', display_name: 'Gemini 3 Pro Preview' }] },
+        ],
+      },
+    })
+    expect(remote).toHaveLength(1)
+    expect(remote[0]!.function).toBe('solo_work_remote')
+
+    const wire = [
+      { configName: 'custom_model_gemini', name: 'Gemini 3.1 Pro Preview', function: 'solo_work_remote', efforts: [] },
+      { configName: 'custom_model_gemini', name: 'Gemini 3 Pro Preview', function: 'chat_v3', efforts: [] },
+    ]
+    const merged = mergeTraeModels(remote, wire)
+    expect(merged.models).toHaveLength(1)
+    expect(merged.models[0]).toMatchObject({ id: 'custom_model_gemini', name: 'Gemini 3.1 Pro Preview' })
+
+    // The same config only in the wire roster must still collapse to one row,
+    // keeping the function the priority order prefers.
+    const wireOnly = mergeTraeModels([], wire)
+    expect(wireOnly.models).toHaveLength(1)
+    expect(wireOnly.meta.get('custom_model_gemini')).toMatchObject({ function: 'solo_work_remote' })
+  })
+
   it('keeps a wire-only model out of the list when its name already exists', () => {
     const remote = parseTraeRemoteModels(remotePayload)
     const wire = parseTraeWireModels(wirePayload, 'solo_work_remote')

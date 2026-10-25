@@ -260,17 +260,22 @@ export function parseTraeRemoteModels(payload: unknown): TraeRemoteModel[] {
           : { creditMultiplier: creditRate(features?.consumption_rate)! },
         ...chatFunction === undefined ? {} : { function: chatFunction },
       }
-      const existing = byId.get(id)
+      // Keyed case-insensitively: the gateway spells the same config differently
+      // across groups (`DeepSeek-V4-Flash` vs `deepseek-v4-flash`), and two rows
+      // for one id make DSH reject the whole provider as "duplicate model
+      // metadata".
+      const key = id.toLowerCase()
+      const existing = byId.get(key)
       if (existing === undefined) {
-        byId.set(id, candidate)
+        byId.set(key, candidate)
         continue
       }
       if ((candidate.maxContextWindow ?? 0) > (existing.maxContextWindow ?? 0)
         || ((candidate.maxContextWindow ?? 0) === (existing.maxContextWindow ?? 0)
           && (candidate.contextWindow ?? 0) > (existing.contextWindow ?? 0))) {
-        byId.set(id, { ...candidate, function: candidate.function ?? existing.function })
+        byId.set(key, { ...candidate, function: candidate.function ?? existing.function })
       } else if (existing.function === undefined && candidate.function !== undefined) {
-        byId.set(id, { ...existing, function: candidate.function })
+        byId.set(key, { ...existing, function: candidate.function })
       }
     }
   }
@@ -339,6 +344,9 @@ export function mergeTraeModels(remote: readonly TraeRemoteModel[], wire: readon
     if (!wireByName.has(model.name.toLowerCase())) wireByName.set(model.name.toLowerCase(), model)
   }
   const usedNames = new Set<string>()
+  // DSH refuses a provider whose list contains two models with one id, so ids
+  // are deduped case-insensitively here rather than left to the picker.
+  const usedIds = new Set<string>()
   const models: ProviderModel[] = []
   const meta = new Map<string, TraeModelMeta>()
 
@@ -387,7 +395,9 @@ export function mergeTraeModels(remote: readonly TraeRemoteModel[], wire: readon
   }
 
   for (const model of remote) {
+    if (usedIds.has(model.id.toLowerCase())) continue
     const wireModel = wireById.get(model.id.toLowerCase()) ?? wireByName.get(model.name.toLowerCase())
+    usedIds.add(model.id.toLowerCase())
     usedNames.add(model.name.toLowerCase())
     push({
       id: model.id,
@@ -409,8 +419,12 @@ export function mergeTraeModels(remote: readonly TraeRemoteModel[], wire: readon
 
   const remoteIds = new Set(remote.map(model => model.id.toLowerCase()))
   for (const model of wire) {
-    if (remoteIds.has(model.configName.toLowerCase())) continue
+    const id = model.configName.toLowerCase()
+    // A wire roster lists one config under several functions with different
+    // display names (`custom_model_gemini`); only the first is a real row.
+    if (remoteIds.has(id) || usedIds.has(id)) continue
     if (usedNames.has(model.name.toLowerCase())) continue
+    usedIds.add(id)
     usedNames.add(model.name.toLowerCase())
     push({
       id: model.configName,

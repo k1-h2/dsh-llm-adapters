@@ -77,8 +77,11 @@ describe('client bundle', () => {
     expect(zh.checkinDevice).not.toBe(zh.checkinClaimed)
     expect(zh.browserOpenTrae).toBe('打开浏览器登录')
     expect(zh.packUsage).toBe('已用 / 总额')
-    expect(zh.packExpand).toBe('展开全部')
+    // Collapsed is the default: one summary row plus a details toggle.
+    expect(zh.packNearest).toBe('最近到期')
+    expect(zh.packDetail).toBe('详细信息')
     expect(zh.packCollapse).toBe('收起')
+    expect(zh.packExpand).toBeUndefined()
     expect(en.packUsage).toBe('used / total')
   })
 
