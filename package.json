@@ -1,8 +1,8 @@
 {
   "name": "dsh-llm-adapters",
   "displayName": "Local LLM Adapters",
-  "description": "DeepSeek Harness adapters for Loomy and SenseTime Raccoon. Reuses the desktop apps' local login state, exposes their model catalogs, quota, and per-model settings pages without asking for an API key.",
-  "version": "0.1.0",
+  "description": "DeepSeek Harness adapters for Loomy and SenseTime Raccoon. Sign in with a phone number inside the settings page, or reuse a desktop app's local login, then use the account's models with quota and per-model settings pages.",
+  "version": "0.2.0",
   "type": "module",
   "license": "MIT",
   "author": "k1-h2",
@@ -15,6 +15,8 @@
     "raccoon",
     "sensenova",
     "xiaohuanxiong",
+    "phone-login",
+    "web-login",
     "openai-compatible",
     "model-provider"
   ],

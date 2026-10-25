@@ -57,9 +57,11 @@ window.__ModuleLoader__.load({
       hide: '收起',
       reset: '恢复默认',
       windowWarn: '窗口越大，DSH 的自动压缩触发得越晚。若对话经常超限，请选较小的窗口。',
-      accountTitle: '本机登录态',
-      source: '登录态文件',
+      accountTitle: '登录与账号',
+      source: '登录方式',
       sourceAuto: '自动查找',
+      sourceAccount: '插件账号登录',
+      sourceFile: '桌面客户端登录态',
       account: '账号',
       accountUnknown: '账号信息未在本地登录态中提供',
       expires: '预计到期',
@@ -80,16 +82,39 @@ window.__ModuleLoader__.load({
       notLoggedIn: '未登录',
       reread: '重新读取登录态',
       reading: '读取中…',
-      loginGuide: '请先打开并登录对应桌面应用。本插件只复用它的本机登录态，不需要也不接受手动填写密码或 Token。',
-      loomyHint: 'Loomy 的登录态来自客户端的 auth-session.json，有效期约 14 天且无法自动续期；过期后在客户端重新登录，再点“重新读取登录态”。',
-      raccoonHint: '小浣熊的登录态来自桌面端写给本地 agent 的 auth.json。访问令牌约 3 小时；插件在需要时刷新并原子回写，不会把令牌显示在页面上。',
-      loomyLoginMissing: '没有找到 Loomy 登录态。请启动 Loomy 并完成登录。',
-      raccoonLoginMissing: '没有找到小浣熊登录态。请启动小浣熊桌面端并完成登录。',
+      loginGuide: '不需要安装桌面客户端：用手机号登录官方网页账号即可。',
+      loomyHint: 'Loomy 会话约 14 天有效，且没有刷新令牌；过期后在这里重新登录即可，密码不会被保存。',
+      raccoonHint: '小浣熊的访问令牌约 3 小时、刷新令牌约 30 天；插件会在需要时自动续期并保存轮换后的令牌。',
+      loginTitle: '网页账号登录',
+      loginHintLoomy: '用手机号 + 密码或短信验证码登录 Loomy 账号。密码只用于本次登录，不写入磁盘。',
+      loginHintRaccoon: '用手机号 + 密码登录小浣熊网页账号。密码只用于本次登录，不写入磁盘。',
+      loginPasswordMode: '密码登录',
+      loginCodeMode: '验证码登录',
+      loginPhone: '手机号',
+      loginPhonePlaceholder: '11 位手机号',
+      loginPassword: '密码',
+      loginPasswordPlaceholder: '账号密码',
+      loginCode: '短信验证码',
+      loginCodePlaceholder: '验证码',
+      loginSendCode: '获取验证码',
+      loginResend: '秒后重发',
+      loginSubmit: '登录',
+      loginSubmitting: '登录中…',
+      loginLogout: '退出登录',
+      loginConfirmLogout: '确定要退出插件里的账号登录吗？桌面客户端不受影响。',
+      loginSmsUnsupported: '小浣熊的短信登录需要网页滑块验证，插件内不支持；请使用手机号 + 密码登录。',
+      loginRaccoonPasswordHint: '如果账号还没有密码，请先在网页版用短信登录并设置密码，再回到这里登录：',
+      loginOpenWeb: '打开小浣熊网页版',
+      loginCredentialNote: '令牌保存在本机 DSH 数据目录（仅当前用户可读），不会显示在页面上。',
+      loginFileSourceNote: '当前使用的是桌面客户端的登录态。若要改用插件内登录，请直接在上方用手机号登录覆盖。',
+      loginFailedPrefix: '登录失败',
+      loomyLoginMissing: 'Loomy 尚未登录。请在下方用手机号登录，或启动 Loomy 客户端完成登录。',
+      raccoonLoginMissing: '小浣熊尚未登录。请在下方用手机号与密码登录，或启动小浣熊桌面端完成登录。',
       expiresEstimated: '约',
       possiblyExpired: '登录态可能已过期',
       needsRefresh: '访问令牌即将过期；下一次请求或额度刷新会自动续期。',
-      modelsEmptyLoomy: 'Loomy 没有返回模型。请确认客户端已登录，然后重新读取登录态。',
-      modelsEmptyRaccoon: '小浣熊没有返回模型。请确认桌面端已登录，然后重新读取登录态。',
+      modelsEmptyLoomy: 'Loomy 没有返回模型。请确认账号已登录，然后点“重新读取登录态”。',
+      modelsEmptyRaccoon: '小浣熊没有返回模型。请确认账号已登录，然后点“重新读取登录态”。',
       modelsHint: '登录后才会读取并显示可用模型。',
       catalogNotice: '模型列表提示',
       advancedFields: {
@@ -102,10 +127,10 @@ window.__ModuleLoader__.load({
       },
       loomyNav: 'Loomy',
       loomyTitle: 'Loomy',
-      loomyIntro: '复用 Loomy 桌面客户端的本机登录态，直接使用账号里的模型。改动即时生效，无需重启。',
+      loomyIntro: '用手机号登录 Loomy 账号即可使用，无需安装桌面客户端；也可以直接复用客户端的本机登录态。改动即时生效，无需重启。',
       raccoonNav: '商汤小浣熊',
       raccoonTitle: '商汤小浣熊',
-      raccoonIntro: '复用商汤小浣熊桌面端的本机登录态，直接使用账号里的模型。改动即时生效，无需重启。',
+      raccoonIntro: '用手机号与密码登录小浣熊账号即可使用，无需安装桌面客户端；也可以直接复用桌面端的本机登录态。改动即时生效，无需重启。',
     }
     const en = {
       pluginOptionsTitle: 'Enabled providers',
@@ -140,11 +165,13 @@ window.__ModuleLoader__.load({
       hide: 'Hide',
       reset: 'Reset',
       windowWarn: 'A larger window delays automatic compaction. Choose a smaller value if conversations often overflow.',
-      accountTitle: 'Local login',
-      source: 'Credential file',
+      accountTitle: 'Sign-in',
+      source: 'Sign-in method',
       sourceAuto: 'auto-discovered',
+      sourceAccount: 'Plugin account',
+      sourceFile: 'Desktop app login',
       account: 'Account',
-      accountUnknown: 'The local login file does not expose account details',
+      accountUnknown: 'The login state does not expose account details',
       expires: 'Expires (estimated)',
       refreshExpires: 'Refresh token expires',
       quota: 'Quota',
@@ -163,17 +190,40 @@ window.__ModuleLoader__.load({
       notLoggedIn: 'Not signed in',
       reread: 'Re-read login state',
       reading: 'Reading…',
-      loginGuide: 'Open and sign in to the desktop app first. This plugin only reuses its local login and never asks you to type a password or token here.',
-      loomyHint: 'Loomy stores its session in the client’s auth-session.json. It lasts about 14 days and cannot be refreshed; sign in again in the client, then re-read it here.',
-      raccoonHint: 'Raccoon stores its login in the auth.json it writes for its local agent. Access tokens last about 3 hours; the plugin refreshes and writes the rotated pair back atomically, and never shows tokens here.',
-      loomyLoginMissing: 'No Loomy login found. Start Loomy and sign in.',
-      raccoonLoginMissing: 'No Raccoon login found. Start the Raccoon desktop app and sign in.',
+      loginGuide: 'No desktop app is required: sign in with your phone number below.',
+      loomyHint: 'A Loomy session lasts about 14 days and has no refresh token; sign in here again when it expires. Passwords are never stored.',
+      raccoonHint: 'Raccoon access tokens last about 3 hours and refresh tokens about 30 days; the plugin renews them and stores the rotated pair.',
+      loginTitle: 'Web account sign-in',
+      loginHintLoomy: 'Sign in to Loomy with your phone number and password or an SMS code. The password is used once and never written to disk.',
+      loginHintRaccoon: 'Sign in to the Raccoon web account with your phone number and password. The password is used once and never written to disk.',
+      loginPasswordMode: 'Password',
+      loginCodeMode: 'SMS code',
+      loginPhone: 'Phone',
+      loginPhonePlaceholder: '11-digit phone number',
+      loginPassword: 'Password',
+      loginPasswordPlaceholder: 'Account password',
+      loginCode: 'SMS code',
+      loginCodePlaceholder: 'Code',
+      loginSendCode: 'Send code',
+      loginResend: 's to resend',
+      loginSubmit: 'Sign in',
+      loginSubmitting: 'Signing in…',
+      loginLogout: 'Sign out',
+      loginConfirmLogout: 'Sign out of the plugin account? The desktop app is not affected.',
+      loginSmsUnsupported: 'Raccoon SMS sign-in requires a slider captcha, which this plugin does not solve; use phone and password.',
+      loginRaccoonPasswordHint: 'If the account has no password yet, sign in on the website with an SMS code, set a password, then return here:',
+      loginOpenWeb: 'Open the Raccoon website',
+      loginCredentialNote: 'Tokens are stored in the local DSH data directory (current user only) and never shown on this page.',
+      loginFileSourceNote: 'This login comes from the desktop app. Sign in above to switch to a plugin account.',
+      loginFailedPrefix: 'Sign-in failed',
+      loomyLoginMissing: 'Loomy is not signed in. Use the form below, or start the Loomy client and sign in.',
+      raccoonLoginMissing: 'Raccoon is not signed in. Use the form below, or start the Raccoon desktop app and sign in.',
       expiresEstimated: 'about',
       possiblyExpired: 'The login may have expired',
       needsRefresh: 'The access token is about to expire; the next request or quota refresh will renew it.',
-      modelsEmptyLoomy: 'Loomy returned no models. Confirm the client is signed in, then re-read the login state.',
-      modelsEmptyRaccoon: 'Raccoon returned no models. Confirm the desktop app is signed in, then re-read the login state.',
-      modelsHint: 'Models are read only after the local login is available.',
+      modelsEmptyLoomy: 'Loomy returned no models. Confirm the account is signed in, then re-read the login state.',
+      modelsEmptyRaccoon: 'Raccoon returned no models. Confirm the account is signed in, then re-read the login state.',
+      modelsHint: 'Models are read only after sign-in.',
       catalogNotice: 'Model list notice',
       advancedFields: {
         displayName: 'Group name',
@@ -185,10 +235,10 @@ window.__ModuleLoader__.load({
       },
       loomyNav: 'Loomy',
       loomyTitle: 'Loomy',
-      loomyIntro: 'Reuses the Loomy desktop client’s local login and serves the account’s models directly. Changes apply immediately.',
+      loomyIntro: 'Sign in with your phone number — no desktop client needed. A client login is reused when present. Changes apply immediately.',
       raccoonNav: 'SenseTime Raccoon',
       raccoonTitle: 'SenseTime Raccoon',
-      raccoonIntro: 'Reuses the Raccoon desktop app’s local login and serves the account’s models directly. Changes apply immediately.',
+      raccoonIntro: 'Sign in with your phone number and password — no desktop client needed. A desktop login is reused when present. Changes apply immediately.',
     }
 
     const BRANDS = [
@@ -226,6 +276,13 @@ window.__ModuleLoader__.load({
       intro: { margin: '0', opacity: 0.72, lineHeight: 1.55, fontSize: '0.92em' },
       bar: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' },
       btn: { padding: '6px 12px', borderRadius: '7px', border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.35))', background: 'transparent', color: 'inherit', cursor: 'pointer', font: 'inherit', fontSize: '0.88em' },
+      btnOn: { borderColor: 'var(--dsw-alias-brand-primary, #4c6ef5)', color: 'var(--dsw-alias-brand-primary, #4c6ef5)' },
+      btnPrimary: { borderColor: 'var(--dsw-alias-brand-primary, #4c6ef5)', background: 'var(--dsw-alias-brand-primary, #4c6ef5)', color: '#fff' },
+      btnAlert: { border: '1px solid var(--dsw-alias-label-danger, #e03131)', color: 'var(--dsw-alias-label-danger, #e03131)' },
+      fieldRow: { display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'flex-end' },
+      field: { display: 'flex', flexDirection: 'column', gap: '4px', flex: '1 1 190px', minWidth: '150px' },
+      loginBox: { display: 'flex', flexDirection: 'column', gap: '10px', padding: '12px 14px', borderRadius: '10px', border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.25))' },
+      h4: { margin: 0, fontSize: '0.92em' },
       input: { padding: '6px 10px', borderRadius: '7px', border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.35))', background: 'var(--dsw-alias-bg-base, transparent)', color: 'inherit', font: 'inherit', fontSize: '0.88em' },
       search: { flex: '1 1 180px', minWidth: '140px' },
       count: { fontSize: '0.85em', opacity: 0.7, marginLeft: 'auto' },
@@ -361,6 +418,14 @@ window.__ModuleLoader__.load({
       const [error, setError] = useState(undefined)
       const seenReload = useRef(reloadSignal)
       const mounted = useRef(true)
+      const [method, setMethod] = useState('password')
+      const [phone, setPhone] = useState('')
+      const [password, setPassword] = useState('')
+      const [code, setCode] = useState('')
+      const [msgid, setMsgid] = useState(undefined)
+      const [cooldown, setCooldown] = useState(0)
+      const [formBusy, setFormBusy] = useState(false)
+      const [formError, setFormError] = useState(undefined)
 
       const load = useCallback(async (fresh, notify) => {
         setBusy(true)
@@ -392,6 +457,12 @@ window.__ModuleLoader__.load({
         void load(true, true)
       }, [reloadSignal, load])
 
+      useEffect(() => {
+        if (cooldown <= 0) return undefined
+        const timer = setTimeout(() => setCooldown(value => Math.max(0, value - 1)), 1000)
+        return () => clearTimeout(timer)
+      }, [cooldown])
+
       const signedIn = status?.signedIn === true
       const account = status?.account ?? {}
       const accountText = [account.name, account.phone, account.ownerType === undefined ? undefined : ownerLabel(t, account.ownerType)]
@@ -399,6 +470,88 @@ window.__ModuleLoader__.load({
         .join(' · ') || t('accountUnknown')
       const quota = status?.quota
       const source = typeof status?.source === 'string' ? status.source : undefined
+      const sourceKind = status?.sourceKind
+      const sourceLabel = sourceKind === 'account'
+        ? t('sourceAccount')
+        : sourceKind === 'file' ? t('sourceFile') : undefined
+      const smsSupported = brand.id === 'loomy'
+
+      const accountRequest = useCallback(async body => api('/account', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ brand: brand.id, ...body }),
+        timeout: 45_000,
+      }), [brand.id])
+
+      const adoptLogin = useCallback(payload => {
+        setStatus(payload)
+        writeCache(brand.id, 'status', { ...payload, cachedAt: Date.now() })
+        onStatus?.(payload)
+        onAfterRefresh?.()
+      }, [brand.id, onStatus, onAfterRefresh])
+
+      const submitPassword = useCallback(async () => {
+        if (formBusy) return
+        setFormBusy(true)
+        setFormError(undefined)
+        try {
+          const payload = await accountRequest({ action: 'password', phone, password })
+          setPassword('')
+          adoptLogin(payload)
+        } catch (err) {
+          setFormError(`${t('loginFailedPrefix')}：${String(err?.message ?? err)}`)
+        } finally {
+          setFormBusy(false)
+        }
+      }, [accountRequest, adoptLogin, formBusy, password, phone, t])
+
+      const sendCode = useCallback(async () => {
+        if (formBusy || cooldown > 0) return
+        setFormBusy(true)
+        setFormError(undefined)
+        try {
+          const payload = await accountRequest({ action: 'sms-send', phone })
+          setMsgid(payload?.msgid)
+          setCooldown(typeof payload?.cooldownSeconds === 'number' ? payload.cooldownSeconds : 60)
+        } catch (err) {
+          setFormError(`${t('loginFailedPrefix')}：${String(err?.message ?? err)}`)
+        } finally {
+          setFormBusy(false)
+        }
+      }, [accountRequest, cooldown, formBusy, phone, t])
+
+      const submitCode = useCallback(async () => {
+        if (formBusy) return
+        setFormBusy(true)
+        setFormError(undefined)
+        try {
+          const payload = await accountRequest({ action: 'sms-login', phone, code, msgid })
+          setCode('')
+          setMsgid(undefined)
+          adoptLogin(payload)
+        } catch (err) {
+          setFormError(`${t('loginFailedPrefix')}：${String(err?.message ?? err)}`)
+        } finally {
+          setFormBusy(false)
+        }
+      }, [accountRequest, adoptLogin, code, formBusy, msgid, phone, t])
+
+      const logout = useCallback(async () => {
+        if (typeof window.confirm === 'function' && !window.confirm(t('loginConfirmLogout'))) return
+        setFormBusy(true)
+        setFormError(undefined)
+        try {
+          const payload = await accountRequest({ action: 'logout' })
+          setStatus(payload)
+          writeCache(brand.id, 'status', { ...payload, cachedAt: Date.now() })
+          onStatus?.(payload)
+          onAfterRefresh?.()
+        } catch (err) {
+          setFormError(`${t('loginFailedPrefix')}：${String(err?.message ?? err)}`)
+        } finally {
+          setFormBusy(false)
+        }
+      }, [accountRequest, brand.id, onStatus, onAfterRefresh, t])
 
       const quotaContent = (() => {
         if (busy && quota === undefined) return h('div', { style: css.note }, t('quotaRefreshing'))
@@ -428,6 +581,99 @@ window.__ModuleLoader__.load({
         )
       })()
 
+      const methodTabs = smsSupported
+        ? h('div', { style: { display: 'flex', gap: '6px' } },
+            h('button', {
+              style: { ...css.btn, ...(method === 'password' ? css.btnOn : {}) },
+              disabled: formBusy,
+              onClick: () => { setMethod('password'); setFormError(undefined) },
+            }, t('loginPasswordMode')),
+            h('button', {
+              style: { ...css.btn, ...(method === 'sms' ? css.btnOn : {}) },
+              disabled: formBusy,
+              onClick: () => { setMethod('sms'); setFormError(undefined) },
+            }, t('loginCodeMode')),
+          )
+        : null
+
+      const loginForm = h('div', { style: css.loginBox },
+        h('h4', { style: css.h4 }, t('loginTitle')),
+        h('div', { style: css.note }, brand.id === 'loomy' ? t('loginHintLoomy') : t('loginHintRaccoon')),
+        methodTabs,
+        h('div', { style: css.fieldRow },
+          h('label', { style: css.field },
+            h('span', { style: css.note }, t('loginPhone')),
+            h('input', {
+              style: css.input,
+              type: 'tel',
+              inputMode: 'numeric',
+              autoComplete: 'tel',
+              placeholder: t('loginPhonePlaceholder'),
+              value: phone,
+              disabled: formBusy,
+              onChange: event => setPhone(event.target.value.replace(/[^\d]/g, '').slice(0, 11)),
+            }),
+          ),
+          method === 'password'
+            ? h('label', { style: css.field },
+                h('span', { style: css.note }, t('loginPassword')),
+                h('input', {
+                  style: css.input,
+                  type: 'password',
+                  autoComplete: 'current-password',
+                  placeholder: t('loginPasswordPlaceholder'),
+                  value: password,
+                  disabled: formBusy,
+                  onChange: event => setPassword(event.target.value),
+                  onKeyDown: event => { if (event.key === 'Enter') void submitPassword() },
+                }),
+              )
+            : h('label', { style: css.field },
+                h('span', { style: css.note }, t('loginCode')),
+                h('div', { style: { display: 'flex', gap: '6px' } },
+                  h('input', {
+                    style: { ...css.input, flex: '1 1 auto', minWidth: 0 },
+                    inputMode: 'numeric',
+                    autoComplete: 'one-time-code',
+                    placeholder: t('loginCodePlaceholder'),
+                    value: code,
+                    disabled: formBusy,
+                    onChange: event => setCode(event.target.value.replace(/[^\d]/g, '').slice(0, 8)),
+                    onKeyDown: event => { if (event.key === 'Enter') void submitCode() },
+                  }),
+                  h('button', {
+                    style: css.btn,
+                    disabled: formBusy || cooldown > 0 || phone.length !== 11,
+                    onClick: () => void sendCode(),
+                  }, cooldown > 0 ? `${cooldown} ${t('loginResend')}` : t('loginSendCode')),
+                ),
+              ),
+        ),
+        h('div', { style: css.bar },
+          h('button', {
+            style: { ...css.btn, ...css.btnPrimary },
+            disabled: formBusy || phone.length !== 11
+              || (method === 'password' ? password.length === 0 : code.length === 0 || msgid === undefined),
+            onClick: () => { void (method === 'password' ? submitPassword() : submitCode()) },
+          }, formBusy ? t('loginSubmitting') : t('loginSubmit')),
+          h('span', { style: css.note }, t('loginCredentialNote')),
+        ),
+        !smsSupported ? h('div', { style: css.note }, t('loginSmsUnsupported')) : null,
+        brand.id === 'raccoon'
+          ? h('div', { style: css.note },
+              t('loginRaccoonPasswordHint'),
+              ' ',
+              h('a', {
+                href: 'https://www.xiaohuanxiong.com/work',
+                target: '_blank',
+                rel: 'noreferrer',
+                style: css.link,
+              }, t('loginOpenWeb')),
+            )
+          : null,
+        formError !== undefined ? h('div', { style: css.err }, formError) : null,
+      )
+
       return h('div', { style: css.card },
         h('div', { style: css.cardHead },
           h('h3', { style: css.h3 }, t('accountTitle')),
@@ -441,7 +687,8 @@ window.__ModuleLoader__.load({
         h('div', { style: css.note }, brand.id === 'loomy' ? t('loomyHint') : t('raccoonHint')),
         h('div', { style: css.line },
           h('span', { style: css.label }, t('source')),
-          h('span', { style: css.mono }, source ?? t('sourceAuto')),
+          h('span', { style: css.value }, sourceLabel ?? t('sourceAuto')),
+          source !== undefined && sourceKind === 'file' ? h('span', { style: css.mono }, source) : null,
         ),
         signedIn
           ? h('div', { style: css.line },
@@ -477,6 +724,19 @@ window.__ModuleLoader__.load({
               h('div', { style: css.note }, t('loginGuide')),
             )
           : null,
+        signedIn && sourceKind === 'account'
+          ? h('div', { style: css.bar },
+              h('button', {
+                style: { ...css.btn, ...css.btnAlert },
+                disabled: formBusy,
+                onClick: () => void logout(),
+              }, t('loginLogout')),
+            )
+          : null,
+        signedIn && sourceKind === 'file'
+          ? h('div', { style: css.note }, t('loginFileSourceNote'))
+          : null,
+        !signedIn || sourceKind !== 'account' || status?.possiblyExpired === true ? loginForm : null,
         error !== undefined ? h('div', { style: css.err }, `${t('loadFailed')}：${error}`) : null,
       )
     }

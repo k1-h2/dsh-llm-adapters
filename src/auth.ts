@@ -1,11 +1,15 @@
 /**
- * Local login reuse for the two desktop applications.
+ * Credential resolution for both providers.
  *
- * Neither provider offers an API key. Loomy writes its account session to
- * `auth-session.json`; Raccoon writes rotating OAuth tokens to
- * `~/.box-agent/config/auth.json`. This module only reads those files, except
- * for Raccoon's access-token refresh, whose rotated pair must be written back
- * atomically or the desktop app's own next refresh will conflict.
+ * Credentials come from one of two places, in this order:
+ *
+ * 1. The plugin's own account store, filled by the settings page's account
+ *    login. This is the path for users who do not install either desktop app.
+ * 2. The desktop application's login file, reused read-only.
+ *
+ * Raccoon tokens rotate on refresh, so whichever store supplied them is also
+ * written back atomically: the desktop app's file for file-sourced tokens, the
+ * plugin store for account-sourced ones.
  *
  * Tokens never leave this module in errors, diagnostics, or returned display
  * fields.
@@ -17,6 +21,7 @@ import { promises as fs } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { attributionHeaders } from '@deepseek-ai/dsh-llm'
+import type { AccountSource, AccountStore, LoomyAccountRecord, RaccoonAccountRecord } from './account-store.ts'
 
 export interface LocalAccount {
   name?: string
@@ -29,7 +34,10 @@ export interface LocalAccount {
 export interface AuthStatus {
   signedIn: boolean
   source?: string
+  /** `account` = signed in through the settings page; `file` = desktop app reuse. */
+  sourceKind?: AccountSource
   fileUpdatedAt?: number
+  loginAt?: number
   expiresAt?: number
   refreshExpiresAt?: number
   expiryEstimated?: boolean
@@ -41,6 +49,7 @@ export interface AuthStatus {
 
 interface SessionFile {
   path?: string
+  kind?: AccountSource
   raw?: Record<string, unknown>
   updatedAt?: number
   error?: string
@@ -164,28 +173,55 @@ function firstTimestamp(value: unknown, keys: readonly string[], depth = 0): num
 }
 
 export class LoomyAuth {
-  constructor(private readonly configuredPath: () => string) {}
+  constructor(
+    private readonly configuredPath: () => string,
+    private readonly store?: AccountStore,
+  ) {}
+
+  private async stored(): Promise<LoomyAccountRecord | undefined> {
+    return this.store?.loomy()
+  }
 
   private async load(): Promise<SessionFile> {
     const explicit = explicitPath(this.configuredPath()) ?? explicitPath(process.env.LOOMY_AUTH_FILE)
     const file = explicit ?? await discoverLoomySession()
     if (file === undefined) {
-      return { error: '未找到 Loomy 登录态。请先启动 Loomy 客户端并完成登录；若客户端装在非标准位置，可在高级设置里填写 auth-session.json 的路径。' }
+      return { error: '未找到 Loomy 登录态。请在下方用手机号登录，或启动 Loomy 客户端并完成登录；若客户端装在非标准位置，可在高级设置里填写 auth-session.json 的路径。' }
     }
     const raw = await readJson(file)
-    if (raw === undefined) return { path: file, error: `无法读取 Loomy 登录态文件：${file}` }
+    if (raw === undefined) return { path: file, kind: 'file', error: `无法读取 Loomy 登录态文件：${file}` }
     if (firstString(raw, ['session', 'sessionId', 'session_token', 'sessionToken', 'accessToken', 'access_token', 'token']) === undefined) {
-      return { path: file, error: 'Loomy 登录态文件里没有 session 字段，请确认已在客户端完成登录。' }
+      return { path: file, kind: 'file', error: 'Loomy 登录态文件里没有 session 字段，请确认已在客户端完成登录。' }
     }
-    return { path: file, raw, updatedAt: await mtime(file) }
+    return { path: file, kind: 'file', raw, updatedAt: await mtime(file) }
   }
 
   async status(): Promise<AuthStatus> {
+    const stored = await this.stored()
+    if (stored !== undefined) {
+      const account: LocalAccount = {}
+      if (stored.name !== undefined) account.name = stored.name
+      if (stored.phone !== undefined) account.phone = stored.phone
+      if (stored.userId !== undefined) account.userId = stored.userId
+      const expired = stored.expiresAt <= Date.now()
+      return {
+        signedIn: true,
+        source: '账号登录',
+        sourceKind: 'account',
+        loginAt: stored.loginAt,
+        expiresAt: stored.expiresAt,
+        ...Object.keys(account).length === 0 ? {} : { account },
+        ...expired
+          ? { possiblyExpired: true, error: 'Loomy 登录已过期，请在下方重新登录。' }
+          : {},
+      }
+    }
     const loaded = await this.load()
     if (loaded.raw === undefined) {
       return {
         signedIn: false,
         ...loaded.path === undefined ? {} : { source: loaded.path },
+        ...loaded.kind === undefined ? {} : { sourceKind: loaded.kind },
         ...loaded.error === undefined ? {} : { error: loaded.error },
       }
     }
@@ -203,6 +239,7 @@ export class LoomyAuth {
     return {
       signedIn: true,
       source: loaded.path,
+      sourceKind: 'file',
       ...updatedAt === undefined ? {} : { fileUpdatedAt: updatedAt },
       ...expiresAt === undefined ? {} : { expiresAt },
       ...declaredExpiry === undefined ? { expiryEstimated: true } : {},
@@ -211,11 +248,23 @@ export class LoomyAuth {
     }
   }
 
-  /** The bearer session, or undefined with the reason in status(). */
+  /**
+   * The bearer session, or undefined with the reason in status().
+   *
+   * A stored account session wins over the desktop file: the user chose the
+   * login the settings page can refresh and sign out of.
+   */
   async session(): Promise<string | undefined> {
+    const stored = await this.stored()
+    if (stored !== undefined) return stored.session
     const loaded = await this.load()
     if (loaded.raw === undefined) return undefined
     return firstString(loaded.raw, ['session', 'sessionId', 'session_token', 'sessionToken', 'accessToken', 'access_token', 'token'])
+  }
+
+  /** Sign out of the plugin's own account; the desktop app is untouched. */
+  async logout(): Promise<void> {
+    await this.store?.clear('loomy')
   }
 }
 
@@ -260,7 +309,10 @@ const RACCOON_REFRESH_URL = 'https://xiaohuanxiong.com/api/web/auth/v1/refresh'
 export class RaccoonAuth {
   private refreshing: Promise<string> | undefined
 
-  constructor(private readonly configuredPath: () => string) {}
+  constructor(
+    private readonly configuredPath: () => string,
+    private readonly store?: AccountStore,
+  ) {}
 
   path(): string {
     const explicit = explicitPath(this.configuredPath()) ?? explicitPath(process.env.RACCOON_AUTH_FILE)
@@ -272,13 +324,27 @@ export class RaccoonAuth {
   }
 
   private async load(): Promise<SessionFile> {
+    const stored = await this.store?.raccoon()
+    if (stored !== undefined) {
+      return {
+        kind: 'account',
+        raw: {
+          access_token: stored.accessToken,
+          ...stored.refreshToken === undefined ? {} : { refresh_token: stored.refreshToken },
+          ...stored.name === undefined ? {} : { name: stored.name },
+          ...stored.phone === undefined ? {} : { phone: stored.phone },
+          ...stored.ownerType === undefined ? {} : { owner_type: stored.ownerType },
+        },
+        updatedAt: stored.loginAt,
+      }
+    }
     const file = this.path()
     if (!(await exists(file))) {
-      return { path: file, error: `未找到小浣熊登录态：${file}。请先启动小浣熊桌面端并完成登录。` }
+      return { path: file, kind: 'file', error: '未登录小浣熊。请在下方用手机号与密码登录，或启动小浣熊桌面端完成登录。' }
     }
     const raw = await readJson(file)
-    if (raw === undefined) return { path: file, error: `无法读取小浣熊登录态文件：${file}` }
-    return { path: file, raw, updatedAt: await mtime(file) }
+    if (raw === undefined) return { path: file, kind: 'file', error: `无法读取小浣熊登录态文件：${file}` }
+    return { path: file, kind: 'file', raw, updatedAt: await mtime(file) }
   }
 
   private tokens(raw: Record<string, unknown>): RaccoonTokens {
@@ -302,6 +368,7 @@ export class RaccoonAuth {
       return {
         signedIn: false,
         source: loaded.path,
+        sourceKind: loaded.kind,
         ...loaded.error === undefined ? {} : { error: loaded.error },
       }
     }
@@ -318,16 +385,25 @@ export class RaccoonAuth {
     if (accessFacts.ownerType !== undefined) account.ownerType = accessFacts.ownerType
     if (accessFacts.sessionId !== undefined) account.sessionId = accessFacts.sessionId
     const needsRefresh = signedIn && (!accessValid || (accessFacts.expiresAt ?? 0) <= now + RACCOON_REFRESH_MARGIN_MS)
+    const sourceKind = loaded.kind ?? 'file'
     return {
       signedIn,
-      source: loaded.path,
+      source: sourceKind === 'account' ? '账号登录' : loaded.path,
+      sourceKind,
       ...loaded.updatedAt === undefined ? {} : { fileUpdatedAt: loaded.updatedAt },
+      ...sourceKind === 'account' && loaded.updatedAt !== undefined ? { loginAt: loaded.updatedAt } : {},
       ...accessFacts.expiresAt === undefined ? {} : { expiresAt: accessFacts.expiresAt },
       ...refreshFacts.expiresAt === undefined ? {} : { refreshExpiresAt: refreshFacts.expiresAt },
       ...signedIn ? { needsRefresh } : {},
       ...!accessValid && !refreshValid ? { possiblyExpired: true } : {},
       ...Object.keys(account).length === 0 ? {} : { account },
-      ...signedIn ? {} : { error: '小浣熊登录态已过期。请打开小浣熊桌面端重新登录。' },
+      ...signedIn
+        ? {}
+        : {
+            error: sourceKind === 'account'
+              ? '小浣熊登录已过期，请在下方重新登录。'
+              : '小浣熊登录态已过期。请打开小浣熊桌面端重新登录。',
+          },
     }
   }
 
@@ -349,12 +425,17 @@ export class RaccoonAuth {
     if (healthy && !force) return token.access!
 
     if (this.refreshing !== undefined) return this.refreshing
-    this.refreshing = this.refresh(token.refresh, loaded.path!).finally(() => { this.refreshing = undefined })
+    this.refreshing = this.refresh(token.refresh, loaded).finally(() => { this.refreshing = undefined })
     return this.refreshing
   }
 
-  private async refresh(refresh: string | undefined, file: string): Promise<string> {
-    if (refresh === undefined) throw new Error('小浣熊登录态缺少 refresh_token。请打开小浣熊桌面端重新登录。')
+  /** Sign out of the plugin's own account; the desktop app is untouched. */
+  async logout(): Promise<void> {
+    await this.store?.clear('raccoon')
+  }
+
+  private async refresh(refresh: string | undefined, loaded: SessionFile): Promise<string> {
+    if (refresh === undefined) throw new Error('小浣熊登录态缺少 refresh_token，请重新登录。')
     const response = await fetch(RACCOON_REFRESH_URL, {
       method: 'POST',
       headers: { ...attributionHeaders(), 'content-type': 'application/json', accept: 'application/json' },
@@ -376,7 +457,7 @@ export class RaccoonAuth {
     const nextRefresh = typeof data?.refresh_token === 'string' ? data.refresh_token : undefined
 
     if (response.ok && payload?.code === 0 && access !== undefined) {
-      await this.writeBack(file, access, nextRefresh)
+      await this.persist(loaded, access, nextRefresh)
       return access
     }
 
@@ -390,12 +471,29 @@ export class RaccoonAuth {
         const facts = current.access === undefined ? {} : decodeJwtFacts(current.access)
         if (current.access !== undefined && (facts.expiresAt ?? 0) > Date.now() + 30_000) return current.access
       }
-      throw new Error('小浣熊刷新令牌已被其他窗口使用，且本机登录态仍未更新。请打开小浣熊桌面端重新登录。')
+      throw new Error(loaded.kind === 'account'
+        ? '小浣熊刷新令牌已被其他客户端使用，请重新登录。'
+        : '小浣熊刷新令牌已被其他窗口使用，且本机登录态仍未更新。请打开小浣熊桌面端重新登录。')
     }
     const message = typeof payload?.message === 'string' && payload.message.length > 0
       ? payload.message
       : `HTTP ${response.status}`
     throw new Error(`小浣熊登录态刷新失败：${message}`)
+  }
+
+  private async persist(loaded: SessionFile, access: string, refresh: string | undefined): Promise<void> {
+    if (loaded.kind === 'account') {
+      const current = await this.store?.raccoon()
+      if (current === undefined) throw new Error('小浣熊账号凭据已丢失，请重新登录。')
+      const next: RaccoonAccountRecord = {
+        ...current,
+        accessToken: access,
+        ...refresh === undefined ? {} : { refreshToken: refresh },
+      }
+      await this.store?.saveRaccoon(next)
+      return
+    }
+    await this.writeBack(loaded.path!, access, refresh)
   }
 
   /** Preserve every field the desktop app keeps in the file, replacing only tokens. */
