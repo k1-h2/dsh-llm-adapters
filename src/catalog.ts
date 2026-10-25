@@ -8,6 +8,8 @@
  * @module dsh-llm-adapters/catalog
  */
 
+import type { OpenRouterIndex } from './openrouter.ts'
+
 export interface ProviderModel {
   id: string
   name: string
@@ -24,19 +26,28 @@ export interface ProviderModel {
   tags?: readonly string[]
 }
 
+/** Display names for every effort id either provider can return. */
+export const REASONING_EFFORT_NAMES: Readonly<Record<string, string>> = {
+  none: '关闭思考',
+  minimal: '最小',
+  low: '低',
+  medium: '中',
+  high: '高',
+  xhigh: '极高',
+  max: '最大',
+  on: '开启思考',
+  off: '关闭思考',
+}
+
 /**
- * Raccoon exposes a single provider-level switch, not intensity levels:
- * `extra_body.thinking.type` is the only field that changes its behaviour.
+ * The two-state switch used where the provider exposes no effort list. Raccoon's
+ * `extra_body.thinking` works for every model, so an unmatched model still gets
+ * on/off control; OpenRouter only ever *upgrades* this to real levels.
  */
 export const RACCOON_EFFORT_ON = 'on'
 export const RACCOON_EFFORT_OFF = 'off'
-export const RACCOON_REASONING_EFFORTS: readonly string[] = [RACCOON_EFFORT_ON, RACCOON_EFFORT_OFF]
-export const RACCOON_EFFORT_NAMES: Readonly<Record<string, string>> = {
-  [RACCOON_EFFORT_ON]: '开启思考',
-  [RACCOON_EFFORT_OFF]: '关闭思考',
-}
-/** Off by default so a chat reply is not held back by a reasoning pass. */
-export const RACCOON_DEFAULT_EFFORT = RACCOON_EFFORT_OFF
+export const RACCOON_SWITCH_EFFORTS: readonly string[] = [RACCOON_EFFORT_ON, RACCOON_EFFORT_OFF]
+export const RACCOON_SWITCH_DEFAULT = RACCOON_EFFORT_OFF
 
 export const DEFAULT_CONTEXT_WINDOW = 200_000
 
@@ -82,6 +93,18 @@ export function priceFactorOf(text: string): number | undefined {
   return Number.isFinite(value) ? value : undefined
 }
 
+/**
+ * Pick the lowest supported effort for a fast default. OpenRouter's own
+ * default is often `max`, which would make every first reply slower; the full
+ * list is still exposed so the user can opt into more reasoning.
+ */
+function preferredEffort(efforts: readonly string[]): string | undefined {
+  for (const candidate of ['none', 'off', 'low', 'minimal', 'medium', 'high', 'xhigh', 'max', 'on']) {
+    if (efforts.includes(candidate)) return candidate
+  }
+  return efforts[0]
+}
+
 function effortsOf(value: unknown): string[] {
   if (!Array.isArray(value)) return []
   const out: string[] = []
@@ -99,17 +122,18 @@ function effortsOf(value: unknown): string[] {
 function visionFrom(input: {
   capabilities: Record<string, unknown>
   tags: readonly string[]
+  /** Authoritative modality list from the provider or OpenRouter. */
+  modalities?: readonly string[]
   textOnly: ReadonlySet<string>
   forceVision: ReadonlySet<string>
-  measured?: boolean
   fallback: boolean
   id: string
 }): boolean {
   if (input.textOnly.has(input.id)) return false
   if (input.forceVision.has(input.id)) return true
-  // A measured result is stronger evidence than the catalog's own tag: the
-  // Raccoon tag has been wrong in both directions.
-  if (input.measured !== undefined) return input.measured
+  if (input.modalities !== undefined) {
+    return input.modalities.some(mode => mode.toLowerCase() === 'image')
+  }
   if (input.capabilities.vision === true) return true
   const tags = input.tags.map(tag => tag.toLowerCase())
   if (tags.some(tag => tag === 'vision' || tag === 'image' || tag === 'image-understanding' || tag === 'image_input')) return true
@@ -149,8 +173,10 @@ export function parseLoomyCatalog(
     const description = stringField(record, ['description', 'desc'])
     const capabilities = recordOf(record.capabilities)
     const tags = stringArray(record.tags)
+    const modalities = stringArray(capabilities.input_modalities ?? capabilities.inputModalities)
     const priceFactor = priceFactorOf(`${display} ${description ?? ''}`)
     const efforts = effortsOf(record.reasoning_efforts ?? record.reasoningEfforts)
+    const defaultEffort = stringField(record, ['default_reasoning_effort', 'defaultReasoningEffort'])
     out.push({
       id,
       name: display,
@@ -162,29 +188,27 @@ export function parseLoomyCatalog(
       vision: visionFrom({
         capabilities,
         tags,
+        ...modalities.length === 0 ? {} : { modalities },
         textOnly,
         forceVision,
         fallback: false,
         id,
       }),
       reasoning: capabilities.reasoning === true || efforts.length > 0,
-      ...efforts.length === 0 ? {} : { reasoningEfforts: efforts },
+      ...efforts.length === 0
+        ? {}
+        : {
+            reasoningEfforts: efforts,
+            reasoningEffortNames: REASONING_EFFORT_NAMES,
+            ...defaultEffort !== undefined && efforts.includes(defaultEffort)
+              ? { defaultReasoningEffort: defaultEffort }
+              : {},
+          },
       ...priceFactor === undefined ? {} : { priceFactor },
       ...tags.length === 0 ? {} : { tags },
     })
   }
   return out
-}
-
-/** Vision results measured against the live Raccoon gateway. */
-export const RACCOON_MEASURED_VISION: Readonly<Record<string, boolean>> = {
-  'sn-sensenova-6-8-flash-lite': true,
-  'sn-glm-5-3': false,
-  'sn-kimi-k3': true,
-  'sn-glm-5-3-flash': true,
-  'sn-deepseek-v4-1-flash': true,
-  // The 1017 build omits the vision tag but reads a random digit image 3/3.
-  'sn-deepseek-v4-1-flash-1017': true,
 }
 
 function raccoonBadge(record: Record<string, unknown>): string | undefined {
@@ -205,7 +229,12 @@ function raccoonBadge(record: Record<string, unknown>): string | undefined {
  */
 export function parseRaccoonCatalog(
   payload: unknown,
-  options: { textOnly?: ReadonlySet<string>, forceVision?: ReadonlySet<string> } = {},
+  options: {
+    textOnly?: ReadonlySet<string>
+    forceVision?: ReadonlySet<string>
+    /** Live OpenRouter index, matched by upstream id or product name. */
+    openRouter?: OpenRouterIndex
+  } = {},
 ): ProviderModel[] {
   const root = recordOf(payload)
   const data = recordOf(root.data)
@@ -229,7 +258,11 @@ export function parseRaccoonCatalog(
     const name = stringField(record, ['description', 'display_name', 'model_name']) ?? id
     const display = stringField(record, ['display_description', 'displayDescription'])
     const description = display === undefined || display === name ? undefined : display
-    const measured = RACCOON_MEASURED_VISION[id]
+    const live = options.openRouter?.match(id, name)
+    // OpenRouter upgrades the always-available on/off switch to real levels when
+    // it carries the model; otherwise the switch stays.
+    const efforts = live?.efforts ?? RACCOON_SWITCH_EFFORTS
+    const defaultEffort = preferredEffort(efforts)
     const base = billingMultiplier(record)
     out.push({
       id,
@@ -242,16 +275,16 @@ export function parseRaccoonCatalog(
       vision: visionFrom({
         capabilities: {},
         tags,
+        ...live === undefined ? {} : { modalities: live.inputModalities },
         textOnly,
         forceVision,
-        measured,
         fallback: false,
         id,
       }),
       reasoning: true,
-      reasoningEfforts: RACCOON_REASONING_EFFORTS,
-      reasoningEffortNames: RACCOON_EFFORT_NAMES,
-      defaultReasoningEffort: RACCOON_DEFAULT_EFFORT,
+      reasoningEfforts: efforts,
+      reasoningEffortNames: REASONING_EFFORT_NAMES,
+      defaultReasoningEffort: defaultEffort,
       ...base === undefined ? {} : { priceFactor: base },
       ...raccoonBadge(record) === undefined ? {} : { badge: raccoonBadge(record)! },
       ...tags.length === 0 ? {} : { tags },
