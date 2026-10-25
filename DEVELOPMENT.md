@@ -129,6 +129,29 @@ assistant 的工具调用放在 `function_call`，工具的 `parameters` 是 JSO
 上下文窗口同时保留上游的 dev 与 Max 两档：模型行默认用 dev，下拉里额外提供它声明的
 `maxContextWindow`（例如 1M），不再只显示 200K。
 
+宽窗模型还多一个 500K 中间档（与 `dsh-connect-trae` 一致）：只有当 Max ≥ 500K、且 500K 确实
+介于默认窗口与 Max 之间时才出现，落盘值不是该模型可选窗口时会被忽略，不会把模型撑到它没有
+的窗口。
+
+工具调用的流有三条必须遵守的细节，都是实测出来的：
+
+1. **id 只在首帧出现。** 参数分片的 `tool_calls[]` 会重复 `index`，但 `id` 与 `type` 是空串。
+   把空串当成值写入会把真实 id 覆盖掉，宿主随后就会报
+   `tool/result ... requires toolCallId matching its tool source`。因此空 id / 空 name 一律忽略，
+   并在发出前再兜一次：缺 id 的调用生成新 id，重复 id 重新生成，保证每次调用一个唯一非空 id。
+2. **工具结果必须是 block 数组。** `content` 传字符串会被上游拒绝：`cannot unmarshal string into
+   ... messages.content of type []*idecopilot.LLMRawMessageContent`；空数组则报
+   `param is invalid`。工具没有文本时补一个空 text block。
+3. **一次响应可以带多个工具调用**，`index` 0/1/… 各自独立；`finish_reason` 仍是 `stop`，
+   所以有工具调用时按 `tool-calls` 收尾，否则宿主不会执行它们。
+
+`max_tokens` 会被透传（上游接受）；图片走 `image_url` 的 data URL，实测被网关正常识别。
+高级设置里的 `traeVisionModelIds` / `traeTextOnlyModelIds` 在目录合并后生效，`textOnly` 优先。
+
+模型 id 与显示名都必须能区分：id 按小写去重（`custom_model_gemini` 这种跨分组重复），两条
+不同 id 归一到同一显示名时（`DeepSeek-V4-Flash` 与 `DeepSeek-V4-Flash-Official`），后来的
+一行会追加 id 后缀，避免设置页出现两行一模一样的模型名。
+
 模型 id 必须唯一：宿主对重复元数据直接拒绝整条 provider（“invalid or duplicate model
 metadata”）。远端目录在多个分组里用不同大小写/显示名重复列出同一 config，所以
 `parseTraeRemoteModels` 按小写 id 合并，`mergeTraeModels` 再用 `usedIds` 拦住只在 wire 里

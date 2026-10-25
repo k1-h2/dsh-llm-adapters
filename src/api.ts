@@ -57,7 +57,10 @@ export async function buildRows(adapter: LocalAdapter): Promise<ModelRow[]> {
     }
     // Trae publishes a Max tier wider than the default window; it is the only
     // larger number we offer, because it is the only one the model declares.
+    // A wide Max also gets the reference's 500K half-step: jumping straight
+    // from a 200K default to 1M is five times the budget.
     if (model.maxContextWindow !== undefined && model.maxContextWindow > model.contextWindow) {
+      if (model.maxContextWindow >= 500_000 && 500_000 > model.contextWindow) choices.add(500_000)
       choices.add(model.maxContextWindow)
     }
     if (override !== undefined) choices.add(override)

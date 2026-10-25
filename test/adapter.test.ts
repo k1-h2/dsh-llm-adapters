@@ -238,7 +238,8 @@ describe('context window choices', () => {
     })
     expect(rows[0]!.contextWindows).toContain(1_000_000)
     expect(rows[0]!.contextWindows).toContain(200_000)
-    expect(rows[0]!.contextWindows).not.toContain(500_000)
+    // The reference's half-step between a 200K default and a 1M Max.
+    expect(rows[0]!.contextWindows).toContain(500_000)
   })
 })
 

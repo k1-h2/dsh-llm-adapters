@@ -112,6 +112,7 @@ export interface TraeWireModel {
   maxTokens?: number
   contextWindow?: number
   creditMultiplier?: number
+  multimodal?: boolean
   efforts: string[]
   function: string
 }
@@ -270,12 +271,33 @@ export function parseTraeRemoteModels(payload: unknown): TraeRemoteModel[] {
         byId.set(key, candidate)
         continue
       }
+      // Groups disagree about a model's capability map: `solo_work_lite` can
+      // report `options: null` while `chat_v3` publishes light/high/xhigh for the
+      // same id. The capacity winner supplies the window, but efforts and the
+      // multimodal flag are unioned so a weaker group cannot hide them.
+      const merged = {
+        ...candidate,
+        function: candidate.function ?? existing.function,
+        multimodal: candidate.multimodal || existing.multimodal,
+        efforts: [...new Set([...candidate.efforts, ...existing.efforts])],
+        ...candidate.creditMultiplier === undefined && existing.creditMultiplier !== undefined
+          ? { creditMultiplier: existing.creditMultiplier }
+          : {},
+      }
       if ((candidate.maxContextWindow ?? 0) > (existing.maxContextWindow ?? 0)
         || ((candidate.maxContextWindow ?? 0) === (existing.maxContextWindow ?? 0)
           && (candidate.contextWindow ?? 0) > (existing.contextWindow ?? 0))) {
-        byId.set(key, { ...candidate, function: candidate.function ?? existing.function })
-      } else if (existing.function === undefined && candidate.function !== undefined) {
-        byId.set(key, { ...existing, function: candidate.function })
+        byId.set(key, merged)
+      } else {
+        byId.set(key, {
+          ...existing,
+          function: existing.function ?? candidate.function,
+          multimodal: existing.multimodal || candidate.multimodal,
+          efforts: merged.efforts,
+          ...existing.creditMultiplier === undefined && candidate.creditMultiplier !== undefined
+            ? { creditMultiplier: candidate.creditMultiplier }
+            : {},
+        })
       }
     }
   }
@@ -316,6 +338,7 @@ export function parseTraeWireModels(payload: unknown, functionName: string): Tra
       configName,
       name: text(display?.display_name) ?? configName,
       function: functionName,
+      multimodal: display?.multimodal === true,
       efforts: effortsOf(detail?.reasoning_effort_options ?? config?.reasoning_effort_options),
       ...num(detail?.max_tokens) === undefined ? {} : { maxTokens: num(detail?.max_tokens)! },
       ...num(detail?.prompt_max_tokens) === undefined && num(context?.dev) === undefined
@@ -362,17 +385,20 @@ export function mergeTraeModels(remote: readonly TraeRemoteModel[], wire: readon
     configName: string
     function?: string
     labels?: readonly string[]
+    /** Appended to the display name to tell two equally named rows apart. */
+    disambiguate?: string
   }): void => {
     const parsed = parseModelName(input.name)
-    const name = parsed.name.length > 0 ? parsed.name : input.id
+    const base = parsed.name.length > 0 ? parsed.name : input.id
+    const name = input.disambiguate === undefined ? base : `${base} (${input.disambiguate})`
     const efforts = effortsWithMax([...new Set(input.efforts)])
     const defaultEffort = defaultEffortOf(efforts)
     const price = input.creditMultiplier
+    const labels = [...new Set([...(input.labels ?? []), ...parsed.labels])]
     models.push({
       id: input.id,
       name,
-      ...input.labels === undefined || input.labels.length === 0 ? {} : { labels: input.labels },
-      ...parsed.labels.length === 0 ? {} : { labels: [...new Set([...(input.labels ?? []), ...parsed.labels])] },
+      ...labels.length === 0 ? {} : { labels },
       contextWindow: input.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
       ...input.maxContextWindow === undefined || input.maxContextWindow <= (input.contextWindow ?? 0)
         ? {}
@@ -398,10 +424,16 @@ export function mergeTraeModels(remote: readonly TraeRemoteModel[], wire: readon
     if (usedIds.has(model.id.toLowerCase())) continue
     const wireModel = wireById.get(model.id.toLowerCase()) ?? wireByName.get(model.name.toLowerCase())
     usedIds.add(model.id.toLowerCase())
-    usedNames.add(model.name.toLowerCase())
+    // Two directory rows can normalize to one display name (the `-Official`
+    // and plain variants of one model). Append the id to the later row so the
+    // picker does not show two identical entries.
+    const remoteNameKey = model.name.toLowerCase()
+    const collides = usedNames.has(remoteNameKey)
+    usedNames.add(remoteNameKey)
     push({
       id: model.id,
       name: model.name,
+      ...collides ? { disambiguate: model.id } : {},
       ...model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow },
       ...model.maxContextWindow === undefined ? {} : { maxContextWindow: model.maxContextWindow },
       ...wireModel?.maxTokens === undefined ? {} : { maxTokens: wireModel.maxTokens },
@@ -418,21 +450,34 @@ export function mergeTraeModels(remote: readonly TraeRemoteModel[], wire: readon
   }
 
   const remoteIds = new Set(remote.map(model => model.id.toLowerCase()))
+  // Names already claimed by the remote skeleton, with their best context. A
+  // dated snapshot sharing a display name is real only when it is WIDER than
+  // the row already shown under that name (Kimi-K2-0905 168K behind Kimi-K2
+  // 28K); an equally named, equally sized duplicate is skipped.
+  const claimedNames = new Map<string, number>()
+  for (const model of remote) {
+    const key = model.name.toLowerCase()
+    claimedNames.set(key, Math.max(claimedNames.get(key) ?? 0, model.contextWindow ?? 0))
+  }
   for (const model of wire) {
     const id = model.configName.toLowerCase()
     // A wire roster lists one config under several functions with different
     // display names (`custom_model_gemini`); only the first is a real row.
     if (remoteIds.has(id) || usedIds.has(id)) continue
-    if (usedNames.has(model.name.toLowerCase())) continue
+    const key = model.name.toLowerCase()
+    const claimed = claimedNames.get(key)
+    if (claimed !== undefined && (model.contextWindow ?? 0) <= claimed) continue
     usedIds.add(id)
-    usedNames.add(model.name.toLowerCase())
+    usedNames.add(key)
+    claimedNames.set(key, Math.max(claimed ?? 0, model.contextWindow ?? 0))
     push({
       id: model.configName,
       name: model.name,
+      ...claimed === undefined ? {} : { disambiguate: model.configName },
       ...model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow },
       ...model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens },
       ...model.creditMultiplier === undefined ? {} : { creditMultiplier: model.creditMultiplier },
-      multimodal: false,
+      multimodal: model.multimodal === true,
       efforts: model.efforts,
       configName: model.configName,
       function: model.function,
@@ -469,11 +514,16 @@ export function normalizeTraeToolSchema(value: unknown): unknown {
 /** Project the harness request onto Trae's message shape. */
 export function traeMessages(messages: readonly WireMessage[]): Record<string, unknown>[] {
   return messages.map(message => {
+    const content = typeof message.content === 'string'
+      ? [{ type: 'text', text: message.content }]
+      : message.content
     const out: Record<string, unknown> = {
       role: message.role,
-      content: typeof message.content === 'string'
-        ? [{ type: 'text', text: message.content }]
-        : message.content,
+      // The gateway rejects an empty content array on a tool row; an empty text
+      // block is the shape it accepts when a tool produced no text.
+      content: message.role === 'tool' && content.length === 0
+        ? [{ type: 'text', text: '' }]
+        : content,
     }
     if (message.role === 'assistant' && message.tool_calls !== undefined && message.tool_calls.length > 0) {
       out.tool_calls = message.tool_calls.map(call => ({
@@ -664,14 +714,19 @@ export async function* openTraeStream(body: ReadableStream<Uint8Array>, model: s
       yield { type: 'text-delta', index: current!.index, text: response }
     }
     if (Array.isArray(root.tool_calls)) {
-      for (const raw of root.tool_calls) {
+      // Trae sends the call id and name on the FIRST fragment and empty strings
+      // on every argument fragment. Treating '' as a value would erase the id,
+      // and a tool result keyed by an empty call id is rejected by the host.
+      for (const [position, raw] of root.tool_calls.entries()) {
         const call = record(raw)
         if (call === undefined) continue
-        const index = typeof call.index === 'number' ? call.index : tools.size
+        const index = typeof call.index === 'number' ? call.index : position
         const held = tools.get(index) ?? { arguments: '' }
         const fn = record(call.function_call) ?? record(call.function)
-        if (typeof call.id === 'string') held.id = call.id
-        if (typeof fn?.name === 'string') held.name = (held.name ?? '') + fn.name
+        const id = typeof call.id === 'string' ? call.id.trim() : ''
+        if (id !== '') held.id = id
+        const name = typeof fn?.name === 'string' ? fn.name : ''
+        if (name !== '') held.name = (held.name ?? '') + name
         const args = fn?.arguments
         if (typeof args === 'string') held.arguments += args
         else if (args !== undefined) held.arguments += JSON.stringify(args)
@@ -685,14 +740,26 @@ export async function* openTraeStream(body: ReadableStream<Uint8Array>, model: s
   if (ended !== undefined) yield ended
 
   let toolCalls = 0
-  for (const [index, tool] of [...tools.entries()].sort((left, right) => left[0] - right[0])) {
-    const callId = (tool.id ?? `call_${randomUUID().replaceAll('-', '').slice(0, 24)}`) as ToolCallId
+  const usedIds = new Set<string>()
+  for (const [, tool] of [...tools.entries()].sort((left, right) => left[0] - right[0])) {
+    const fallback = () => `call_${randomUUID().replaceAll('-', '').slice(0, 24)}`
+    const preferred = tool.id?.trim() ?? ''
+    let callId = preferred !== '' ? preferred : fallback()
+    // Two calls must not share an id: the host pairs every result with exactly
+    // one advertised call and rejects a repeated id.
+    while (usedIds.has(callId)) callId = fallback()
+    usedIds.add(callId)
+    const branded = callId as ToolCallId
     const name = tool.name ?? 'unknown_tool'
     const args = tool.arguments === '' ? '{}' : tool.arguments
     const blockIndex = nextIndex++
     yield { type: 'block-start', index: blockIndex, blockType: 'tool-call' }
-    yield { type: 'tool-call-delta', index: blockIndex, id: callId, name, argumentsDelta: args }
-    yield { type: 'block-end', index: blockIndex, block: { type: 'tool-call', id: callId, name, arguments: args } }
+    yield { type: 'tool-call-delta', index: blockIndex, id: branded, name, argumentsDelta: args }
+    yield {
+      type: 'block-end',
+      index: blockIndex,
+      block: { type: 'tool-call', id: branded, name, arguments: args },
+    }
     toolCalls++
   }
 
@@ -918,7 +985,7 @@ export class TraeProvider {
       try {
         const response = await this.fetchImpl(`${profile.chatBase}${TRAE_SOLO_MODELS_PATH}`, {
           method: 'POST',
-          headers: this.chatHeaders(token, identity, profile),
+          headers: { ...this.chatHeaders(token, identity, profile), accept: 'application/json' },
           body: JSON.stringify({
             function: functionName,
             config_names: null,
@@ -958,7 +1025,14 @@ export class TraeProvider {
     const catalog = mergeTraeModels(remote, wire)
     // A switch during the fetch leaves this result for the old region only.
     if (this.options.region() === region) this.meta = catalog.meta
-    return catalog.models
+    const textOnly = this.options.textOnly()
+    const forceVision = this.options.forceVision()
+    return catalog.models.map(model => ({
+      ...model,
+      // The directory's `multimodal` flag is advisory; the two ID lists are the
+      // explicit correction, with text-only winning as on every provider.
+      vision: textOnly.has(model.id) ? false : forceVision.has(model.id) ? true : model.vision,
+    }))
   }
 
   async quota(fresh = false): Promise<QuotaSnapshot> {
@@ -1074,6 +1148,7 @@ export class TraeProvider {
       config_name: meta.configName,
       function: meta.function,
       stream: true,
+      ...options.maxTokens === undefined ? {} : { max_tokens: Math.max(1, Math.floor(options.maxTokens)) },
       ...tools === undefined ? {} : { tools },
       ...effort === undefined ? {} : { reasoning_effort: effort },
     }
