@@ -7,13 +7,15 @@
  *  - the Remote directory (`/api/remote/v1/models`) is the model skeleton —
  *    display name, context window, multiplier, reasoning options, multimodal;
  *  - `get_detail_param` supplies the `config_name` the chat endpoint accepts and
- *    the output cap. A model the wire roster does not list is kept anyway: the
- *    roster is account-scoped, so hiding it would deny a paying account models
- *    its own Trae IDE offers. Such a call fails with Trae's own message.
+ *    the output cap. A directory row with no callable config is NOT offered:
+ *    Trae lists some client-only models (Qwen3.8-Flash, Kimi-K2.8-Preview) that
+ *    the SOLO chat endpoint rejects with `4001`, and an entry that can only
+ *    fail is worse than an absent one.
  *
- * No model is special-cased. Effort names are normalized once (`light` →
- * `low`, `extra_high` → `xhigh`) and the default is the shared second-strongest
- * rule, exactly like the other providers.
+ * Capabilities come from OpenRouter first, then from Trae's own directory, the
+ * same order the other providers use. Effort names are normalized once
+ * (`light` → `low`, `extra_high` → `xhigh`), and the default is the shared
+ * second-strongest rule.
  *
  * @module dsh-llm-adapters/trae
  */
@@ -23,11 +25,13 @@ import type { GenerateOptions, StreamChunk, ToolCallId } from '@deepseek-ai/dsh-
 import type { AccountStore } from './account-store.ts'
 import { TraeAuth } from './auth.ts'
 import type { TraeRegion } from './brand.ts'
-import { DEFAULT_CONTEXT_WINDOW, ModelCatalog, defaultEffortOf } from './catalog.ts'
+import { ALL_REASONING_EFFORTS, DEFAULT_CONTEXT_WINDOW, ModelCatalog, defaultEffortOf } from './catalog.ts'
 import type { ProviderModel } from './catalog.ts'
 import { responseError } from './http.ts'
 import type { LoginStatus } from './login-page.ts'
 import { parseModelName } from './model-name.ts'
+import { OpenRouterCatalog } from './openrouter.ts'
+import type { OpenRouterIndex, OpenRouterLookup } from './openrouter.ts'
 import type { TraeRegionProfile } from './trae-endpoints.ts'
 import {
   TRAE_APP_ID, TRAE_REGION_PROFILES, TRAE_SOLO_CHAT_PATH, TRAE_SOLO_MODELS_PATH, TRAE_VERSION_CODE,
@@ -67,6 +71,8 @@ export const TRAE_DIRECTORY_FUNCTIONS: readonly string[] = [
 export const TRAE_DEFAULT_FUNCTION = 'solo_work_lite'
 
 const EFFORT_ALIASES: Readonly<Record<string, string>> = {
+  none: 'none',
+  minimal: 'minimal',
   light: 'low',
   low: 'low',
   medium: 'medium',
@@ -78,6 +84,8 @@ const EFFORT_ALIASES: Readonly<Record<string, string>> = {
 
 /** Our effort id → the spelling `llm_utils_chat` accepts. */
 const WIRE_EFFORTS: Readonly<Record<string, string>> = {
+  none: 'none',
+  minimal: 'minimal',
   low: 'light',
   medium: 'medium',
   high: 'high',
@@ -113,6 +121,10 @@ export interface TraeWireModel {
   contextWindow?: number
   creditMultiplier?: number
   multimodal?: boolean
+  /** Upstream usage kind; only `chat_completion` rows are user-facing models. */
+  usage?: string
+  /** Upstream config source; 1 marks a first-party chat config. */
+  configSource?: number
   efforts: string[]
   function: string
 }
@@ -139,6 +151,8 @@ export interface TraeProviderOptions {
   fetchImpl?: typeof fetch
   loginTimeoutMs?: number
   logger?: (message: string) => void
+  /** Injectable OpenRouter lookup for tests; defaults to the live catalog. */
+  openRouter?: OpenRouterLookup
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -205,17 +219,29 @@ function jsonRecord(value: unknown): Record<string, unknown> | undefined {
   return record(value)
 }
 
+function effortRank(effort: string): number {
+  return ALL_REASONING_EFFORTS.indexOf(effort)
+}
+
+/** Keep only levels Trae can spell, de-duplicated and in menu order. */
+function sortEfforts(efforts: readonly string[]): string[] {
+  return [...new Set(efforts)]
+    .filter(effort => WIRE_EFFORTS[effort] !== undefined)
+    .sort((left, right) => effortRank(left) - effortRank(right))
+}
+
 /**
- * The effort levels a Trae model offers.
+ * Resolve one model's level menu.
  *
- * The directory frequently omits `max` even when the gateway accepts it (live
- * check: `light`, `high`, `extra_high` and `max` all stream on
- * `solo_work_remote`). Without it the model menu stops at `xhigh`, so every
- * model that publishes any level also gets `max`.
+ * OpenRouter's live `supported_efforts` wins when it knows the model, exactly
+ * as for Loomy and Raccoon; otherwise the levels Trae itself publishes are
+ * used. `max` appears only when one of those sources names it, so a model the
+ * Trae client exposes as light/high/extra_high is not silently given a fourth
+ * level.
  */
-function effortsWithMax(efforts: readonly string[]): string[] {
-  if (efforts.length === 0 || efforts.includes('max')) return [...efforts]
-  return [...efforts, 'max']
+function resolveEfforts(advertised: readonly string[], live: readonly string[] | undefined): string[] {
+  const fromLive = sortEfforts(live ?? [])
+  return fromLive.length > 0 ? fromLive : sortEfforts(advertised)
 }
 
 /**
@@ -248,7 +274,7 @@ export function parseTraeRemoteModels(payload: unknown): TraeRemoteModel[] {
       // `features` is a JSON *string* on the wire, not an object.
       const features = jsonRecord(model?.features)
       const reasoning = record(model?.reasoning_effort_config)
-      const efforts = effortsWithMax(effortsOf(reasoning?.options))
+      const efforts = effortsOf(reasoning?.options)
       const candidate: TraeRemoteModel = {
         id,
         name: display !== undefined && display !== '-' ? display : id,
@@ -339,6 +365,8 @@ export function parseTraeWireModels(payload: unknown, functionName: string): Tra
       name: text(display?.display_name) ?? configName,
       function: functionName,
       multimodal: display?.multimodal === true,
+      usage: text(config?.usage),
+      configSource: num(config?.config_source),
       efforts: effortsOf(detail?.reasoning_effort_options ?? config?.reasoning_effort_options),
       ...num(detail?.max_tokens) === undefined ? {} : { maxTokens: num(detail?.max_tokens)! },
       ...num(detail?.prompt_max_tokens) === undefined && num(context?.dev) === undefined
@@ -351,15 +379,38 @@ export function parseTraeWireModels(payload: unknown, functionName: string): Tra
 }
 
 /**
+ * Whether a wire-only row is a real chat model.
+ *
+ * `get_detail_param` also lists Trae's internal configurations: `custom_model_*`
+ * (usage `custom_model`), `summary`, helper agents and subagents. They are not
+ * models a user can pick in Trae, and DSH rejects a provider that carries them
+ * as ordinary entries. The reference plugin filters on `usage`/`config_source`
+ * plus an internal-looking name, and the same rule is applied here.
+ */
+export function isPromotableTraeWireModel(model: TraeWireModel): boolean {
+  if (model.usage !== 'chat_completion') return false
+  if (model.configSource !== 1) return false
+  const name = model.name.trim()
+  if (name === '' || name === '-') return false
+  if (name === model.configName.trim()) return false
+  if (!name.includes(' ') && name.includes('_')) return false
+  return true
+}
+
+/**
  * Merge the two sources into the rows DSH sees plus the call metadata.
  *
  * Remote wins the display name (it matches the IDE's own picker); wire wins the
- * config name, the output cap and the post-discount multiplier. A wire row with
- * no remote counterpart is promoted unless its display name would duplicate an
- * existing row, in which case the dated snapshot is skipped rather than shown
- * twice under one name.
+ * config name, the output cap and the post-discount multiplier. A remote row
+ * without a wire config is skipped: there is no callable route for it, so
+ * offering it only produces a `4001`. Wire-only rows are promoted only when
+ * they look like a real chat model, never an internal helper config.
  */
-export function mergeTraeModels(remote: readonly TraeRemoteModel[], wire: readonly TraeWireModel[]): TraeCatalog {
+export function mergeTraeModels(
+  remote: readonly TraeRemoteModel[],
+  wire: readonly TraeWireModel[],
+  openRouter?: OpenRouterIndex,
+): TraeCatalog {
   const wireById = new Map<string, TraeWireModel>()
   const wireByName = new Map<string, TraeWireModel>()
   for (const model of wire) {
@@ -391,10 +442,12 @@ export function mergeTraeModels(remote: readonly TraeRemoteModel[], wire: readon
     const parsed = parseModelName(input.name)
     const base = parsed.name.length > 0 ? parsed.name : input.id
     const name = input.disambiguate === undefined ? base : `${base} (${input.disambiguate})`
-    const efforts = effortsWithMax([...new Set(input.efforts)])
+    const live = openRouter?.match(base, input.id)
+    const efforts = resolveEfforts([...new Set(input.efforts)], live?.efforts)
     const defaultEffort = defaultEffortOf(efforts)
     const price = input.creditMultiplier
     const labels = [...new Set([...(input.labels ?? []), ...parsed.labels])]
+    const modalities = live?.inputModalities ?? []
     models.push({
       id: input.id,
       name,
@@ -404,7 +457,9 @@ export function mergeTraeModels(remote: readonly TraeRemoteModel[], wire: readon
         ? {}
         : { maxContextWindow: input.maxContextWindow },
       ...input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens },
-      vision: input.multimodal,
+      // OpenRouter's live modality list corrects the directory's advisory
+      // `multimodal` flag, exactly as it does for the other two providers.
+      vision: modalities.length > 0 ? modalities.includes('image') : input.multimodal,
       reasoning: efforts.length > 0,
       ...efforts.length === 0 ? {} : { reasoningEfforts: efforts },
       ...defaultEffort === undefined ? {} : { defaultReasoningEffort: defaultEffort },
@@ -423,6 +478,10 @@ export function mergeTraeModels(remote: readonly TraeRemoteModel[], wire: readon
   for (const model of remote) {
     if (usedIds.has(model.id.toLowerCase())) continue
     const wireModel = wireById.get(model.id.toLowerCase()) ?? wireByName.get(model.name.toLowerCase())
+    // Trae lists client-only models (Qwen3.8-Flash, Kimi-K2.8-Preview) that
+    // have no config in any chat roster. Calling one can only answer 4001, so
+    // it is not offered at all.
+    if (wireModel === undefined) continue
     usedIds.add(model.id.toLowerCase())
     // Two directory rows can normalize to one display name (the `-Official`
     // and plain variants of one model). Append the id to the later row so the
@@ -436,16 +495,16 @@ export function mergeTraeModels(remote: readonly TraeRemoteModel[], wire: readon
       ...collides ? { disambiguate: model.id } : {},
       ...model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow },
       ...model.maxContextWindow === undefined ? {} : { maxContextWindow: model.maxContextWindow },
-      ...wireModel?.maxTokens === undefined ? {} : { maxTokens: wireModel.maxTokens },
-      ...wireModel?.creditMultiplier === undefined && model.creditMultiplier === undefined
+      ...wireModel.maxTokens === undefined ? {} : { maxTokens: wireModel.maxTokens },
+      ...wireModel.creditMultiplier === undefined && model.creditMultiplier === undefined
         ? {}
-        : { creditMultiplier: wireModel?.creditMultiplier ?? model.creditMultiplier! },
-      multimodal: model.multimodal,
-      efforts: wireModel !== undefined && wireModel.efforts.length > 0 ? wireModel.efforts : model.efforts,
-      configName: wireModel?.configName ?? model.id,
+        : { creditMultiplier: wireModel.creditMultiplier ?? model.creditMultiplier! },
+      multimodal: model.multimodal || wireModel.multimodal === true,
+      efforts: [...new Set([...wireModel.efforts, ...model.efforts])],
+      configName: wireModel.configName,
       // The wire roster is what chat actually accepts; the directory group is
       // only a hint (and can name a function that rejects the model).
-      function: wireModel?.function ?? model.function,
+      function: wireModel.function,
     })
   }
 
@@ -464,6 +523,9 @@ export function mergeTraeModels(remote: readonly TraeRemoteModel[], wire: readon
     // A wire roster lists one config under several functions with different
     // display names (`custom_model_gemini`); only the first is a real row.
     if (remoteIds.has(id) || usedIds.has(id)) continue
+    // `custom_model_*`, `summary`, helper agents and subagents are internal
+    // configurations, not user-selectable models.
+    if (!isPromotableTraeWireModel(model)) continue
     const key = model.name.toLowerCase()
     const claimed = claimedNames.get(key)
     if (claimed !== undefined && (model.contextWindow ?? 0) <= claimed) continue
@@ -851,9 +913,11 @@ export class TraeProvider {
   private quotaInflightRegion: TraeRegion | undefined
   private loginFlow: TraeWebLogin | undefined
   private readonly fetchImpl: typeof fetch
+  private readonly openRouter: OpenRouterLookup
 
   constructor(private readonly options: TraeProviderOptions) {
     this.fetchImpl = options.fetchImpl ?? fetch
+    this.openRouter = options.openRouter ?? new OpenRouterCatalog(this.fetchImpl)
     this.catalogRegion = options.region()
     this.catalogInstance = new ModelCatalog(() => this.fetchCatalog(), options.ttlMs)
   }
@@ -896,6 +960,7 @@ export class TraeProvider {
 
   async models(fresh = false): Promise<readonly ProviderModel[]> {
     this.ensureRegion()
+    if (fresh) this.openRouter.invalidate()
     return this.catalogInstance.models(fresh)
   }
 
@@ -904,6 +969,9 @@ export class TraeProvider {
   }
 
   invalidateModels(): void {
+    // A settings refresh must also re-read OpenRouter: the effort/modality menu
+    // is served from it, and its own TTL would otherwise hide upstream changes.
+    this.openRouter.invalidate()
     this.catalogInstance.invalidate()
   }
 
@@ -1011,6 +1079,9 @@ export class TraeProvider {
     const token = await this.options.auth.accessToken()
     const identity = await this.options.auth.identity()
     const profile = this.profile()
+    // OpenRouter is the shared capability source; a failure falls back to the
+    // directory's own declaration rather than failing the refresh.
+    const openRouter = this.openRouter.models().catch(() => undefined)
     let remote: TraeRemoteModel[] = []
     let remoteError: unknown
     try {
@@ -1022,7 +1093,10 @@ export class TraeProvider {
     if (remote.length === 0 && wire.length === 0) {
       throw remoteError instanceof Error ? remoteError : new Error('Trae 没有返回任何模型')
     }
-    const catalog = mergeTraeModels(remote, wire)
+    const catalog = mergeTraeModels(remote, wire, await openRouter)
+    if (catalog.models.length === 0) {
+      throw new Error('Trae 目录里没有可调用的模型；请稍后刷新，或重新登录后再试。')
+    }
     // A switch during the fetch leaves this result for the old region only.
     if (this.options.region() === region) this.meta = catalog.meta
     const textOnly = this.options.textOnly()
@@ -1138,7 +1212,13 @@ export class TraeProvider {
     const token = await this.options.auth.accessToken()
     const identity = await this.options.auth.identity()
     await this.models()
-    const meta = this.meta.get(model) ?? { configName: model, function: TRAE_DEFAULT_FUNCTION, wireEfforts: {} }
+    const meta = this.meta.get(model)
+    if (meta === undefined) {
+      throw new ProviderHttpError(
+        `Trae 未在当前账号的可调用模型里找到「${model}」。它可能只存在于 Trae 客户端通道；请在模型菜单里换一个模型。`,
+        400,
+      )
+    }
     const messages = await buildMessages(options, readImage)
     const effort = options.reasoningEffort === undefined ? undefined : meta.wireEfforts[options.reasoningEffort]
     const tools = traeTools(options.tools)
