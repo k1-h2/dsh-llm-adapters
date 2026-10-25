@@ -185,7 +185,7 @@ describe('RaccoonProvider', () => {
     })
   })
 
-  it('maps the thinking switch onto extra_body.thinking', async () => {
+  it('maps the thinking switch and effort level onto the request body', async () => {
     const bodies: Record<string, unknown>[] = []
     const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
       bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>)
@@ -203,13 +203,32 @@ describe('RaccoonProvider', () => {
       undefined,
     ))
     await collect(provider.stream(
+      { ...options, provider: 'raccoon', reasoningEffort: 'max' as never },
+      'sn-kimi-k3',
+      undefined,
+    ))
+    await collect(provider.stream(
+      { ...options, provider: 'raccoon', reasoningEffort: 'none' as never },
+      'sn-kimi-k3',
+      undefined,
+    ))
+    // No effort at all (a one-shot caller that skipped resolveCallConfig)
+    // sends neither field, so the provider default applies.
+    await collect(provider.stream(
       { ...options, provider: 'raccoon' },
       'sn-kimi-k3',
       undefined,
     ))
     expect(bodies[0]!.extra_body).toEqual({ thinking: { type: 'disabled' } })
+    expect(bodies[0]!.reasoning_effort).toBeUndefined()
     expect(bodies[1]!.extra_body).toEqual({ thinking: { type: 'enabled' } })
-    expect(bodies[2]!.extra_body).toEqual({ thinking: { type: 'disabled' } })
+    expect(bodies[1]!.reasoning_effort).toBeUndefined()
+    expect(bodies[2]!.extra_body).toEqual({ thinking: { type: 'enabled' } })
+    expect(bodies[2]!.reasoning_effort).toBe('max')
+    expect(bodies[3]!.extra_body).toEqual({ thinking: { type: 'disabled' } })
+    expect(bodies[3]!.reasoning_effort).toBe('none')
+    expect(bodies[4]!.extra_body).toBeUndefined()
+    expect(bodies[4]!.reasoning_effort).toBeUndefined()
   })
 
   it('asks for a new scan when the gateway rejects the stored token', async () => {

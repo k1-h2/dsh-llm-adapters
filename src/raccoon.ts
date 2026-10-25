@@ -14,10 +14,12 @@ import { RaccoonAuth } from './auth.ts'
 import { RaccoonQrLogin } from './raccoon-login.ts'
 import type { LoginStatus } from './login-page.ts'
 import {
-  ModelCatalog, RACCOON_EFFORT_ON, parseRaccoonCatalog,
+  ModelCatalog, RACCOON_EFFORT_OFF, RACCOON_EFFORT_ON, parseRaccoonCatalog,
 } from './catalog.ts'
 import type { ProviderModel } from './catalog.ts'
 import { fetchJson } from './http.ts'
+import { OpenRouterCatalog } from './openrouter.ts'
+import type { OpenRouterLookup } from './openrouter.ts'
 import type { QuotaSnapshot } from './types.ts'
 import { ProviderHttpError, buildBody, buildMessages, buildTools, openAiStream } from './wire.ts'
 import type { ReadImage } from './wire.ts'
@@ -40,6 +42,8 @@ export interface RaccoonProviderOptions {
   textOnly: () => ReadonlySet<string>
   forceVision: () => ReadonlySet<string>
   fetchImpl?: typeof fetch
+  /** Injectable OpenRouter lookup for tests; defaults to the live catalog. */
+  openRouter?: OpenRouterLookup
 }
 
 function numeric(value: unknown): number | undefined {
@@ -123,8 +127,10 @@ export class RaccoonProvider {
   private quotaCache: { at: number, value: QuotaSnapshot } | undefined
   private quotaInflight: Promise<QuotaSnapshot> | undefined
   private loginFlow: RaccoonQrLogin | undefined
+  private readonly openRouter: OpenRouterLookup
 
   constructor(private readonly options: RaccoonProviderOptions) {
+    this.openRouter = options.openRouter ?? new OpenRouterCatalog(options.fetchImpl ?? fetch)
     this.catalog = new ModelCatalog(
       () => this.fetchModels(),
       options.ttlMs,
@@ -209,7 +215,10 @@ export class RaccoonProvider {
   }
 
   private async fetchModels(): Promise<ProviderModel[]> {
-    const payload = await this.authorizedJson<unknown>('/llm/v2/model_catalog')
+    const [openRouter, payload] = await Promise.all([
+      this.openRouter.models(),
+      this.authorizedJson<unknown>('/llm/v2/model_catalog'),
+    ])
     if (payload !== null && typeof payload === 'object') {
       const code = (payload as Record<string, unknown>).code
       if (typeof code === 'number' && code !== 0) {
@@ -219,12 +228,14 @@ export class RaccoonProvider {
     const models = parseRaccoonCatalog(payload, {
       textOnly: this.options.textOnly(),
       forceVision: this.options.forceVision(),
+      openRouter,
     })
     if (models.length === 0) throw new Error('小浣熊返回的模型目录为空。')
     return models
   }
 
   async models(fresh = false): Promise<readonly ProviderModel[]> {
+    if (fresh) this.openRouter.invalidate()
     return this.catalog.models(fresh)
   }
 
@@ -233,6 +244,7 @@ export class RaccoonProvider {
   }
 
   invalidateModels(): void {
+    this.openRouter.invalidate()
     this.catalog.invalidate()
   }
 
@@ -288,11 +300,17 @@ export class RaccoonProvider {
     const messages = await buildMessages(options, readImage)
     const tools = buildTools(options)
     const body = buildBody(options, model, messages, tools)
-    // The gateway ignores `reasoning_effort` but honours this nested object.
-    // Send it even when no effort was materialized so the declared default
-    // (off) is what the request actually uses.
-    body.extra_body = {
-      thinking: { type: options.reasoningEffort === RACCOON_EFFORT_ON ? 'enabled' : 'disabled' },
+    const effort = options.reasoningEffort
+    if (effort !== undefined) {
+      // `thinking.type` is the on/off switch; `reasoning_effort` carries the
+      // level that OpenRouter's live metadata says the model accepts.
+      if (effort === RACCOON_EFFORT_OFF || effort === 'none') {
+        body.extra_body = { thinking: { type: 'disabled' } }
+        if (effort === 'none') body.reasoning_effort = 'none'
+      } else {
+        body.extra_body = { thinking: { type: 'enabled' } }
+        if (effort !== RACCOON_EFFORT_ON) body.reasoning_effort = effort
+      }
     }
     try {
       yield* openAiStream({

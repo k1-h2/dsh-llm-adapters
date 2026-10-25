@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   ModelCatalog, parseLoomyCatalog, parseRaccoonCatalog, priceFactorOf,
 } from '../src/catalog.ts'
+import { buildOpenRouterIndex, type OpenRouterModel } from '../src/openrouter.ts'
 
 describe('priceFactorOf', () => {
   it('reads x/× and 倍 multipliers', () => {
@@ -135,11 +136,13 @@ describe('parseRaccoonCatalog', () => {
     expect(models[2]!.badge).toBe('折扣')
   })
 
-  it('uses the measured vision table instead of unreliable tags', () => {
+  it('reads vision from upstream tags when no OpenRouter entry is given', () => {
     const models = parseRaccoonCatalog(payload)
     const byId = Object.fromEntries(models.map(model => [model.id, model]))
-    expect(byId['sn-glm-5-3']!.vision).toBe(false)
-    expect(byId['sn-glm-5-3-flash']!.vision).toBe(true)
+    // Without live metadata the parser trusts the catalog tag; the OpenRouter
+    // tests below cover the correction path.
+    expect(byId['sn-glm-5-3']!.vision).toBe(true)
+    expect(byId['sn-glm-5-3-flash']!.vision).toBe(false)
   })
 
   it('lets explicit overrides win', () => {
@@ -152,22 +155,93 @@ describe('parseRaccoonCatalog', () => {
     expect(byId['sn-glm-5-3']!.vision).toBe(true)
   })
 
-  it('marks the 1017 build as vision from measured evidence', () => {
+  it('adopts effort levels and modalities from the live OpenRouter metadata', () => {
+    const openRouter = buildOpenRouterIndex([
+      {
+        id: 'moonshotai/kimi-k3', name: 'MoonshotAI: Kimi K3',
+        inputModalities: ['text', 'image', 'video'],
+        efforts: ['max', 'high', 'low', 'none'], defaultEffort: 'max', mandatory: false,
+      },
+      {
+        id: 'z-ai/glm-5.3', name: 'Z.ai: GLM 5.3',
+        inputModalities: ['text'],
+        efforts: ['max', 'high', 'low'], defaultEffort: 'max', mandatory: true,
+      },
+      {
+        id: 'z-ai/glm-5.3-flash', name: 'Z.ai: GLM 5.3 Flash',
+        inputModalities: ['text', 'image', 'video'],
+        efforts: ['max', 'high', 'low'], defaultEffort: 'max', mandatory: true,
+      },
+      {
+        id: 'deepseek/deepseek-v4.1-flash-1017', name: 'DeepSeek: DeepSeek V4.1 Flash 1017',
+        inputModalities: ['text', 'image'],
+        efforts: ['max', 'high', 'low', 'none'], defaultEffort: 'high', mandatory: false,
+      },
+    ])
     const models = parseRaccoonCatalog({
       data: {
         categories: [{
           type: 'chat',
-          models: [{
-            name: 'sn-deepseek-v4-1-flash-1017',
-            description: 'DeepSeek-V4.1-Flash-1017',
-            visible: true,
-            tags: ['general', 'code', 'reasoning'],
-            params: { context_window: 1_000_000, max_tokens: 100_000 },
-          }],
+          models: [
+            { name: 'sn-deepseek-v4-1-flash-1017', description: 'DeepSeek-V4.1-Flash-1017', visible: true, tags: ['code'], params: { context_window: 1_000_000, max_tokens: 100_000 } },
+            { name: 'sn-glm-5-3', description: 'GLM-5-3', visible: true, tags: ['vision', 'reasoning'], params: { context_window: 1_000_000, max_tokens: 100_000 } },
+            { name: 'sn-glm-5-3-flash', description: 'GLM-5-3-Flash', visible: true, tags: ['fast'], params: { context_window: 1_000_000, max_tokens: 100_000 } },
+            { name: 'sn-kimi-k3', description: 'Kimi-K3', visible: true, tags: ['vision'], params: { context_window: 1_000_000, max_tokens: 100_000 } },
+          ],
         }],
       },
+    }, { openRouter })
+    // OpenRouter says: 1017 has image, GLM-5.3 is text-only, Flash has image, Kimi has image.
+    const byId = Object.fromEntries(models.map(model => [model.id, model]))
+    expect(byId['sn-deepseek-v4-1-flash-1017']!.vision).toBe(true)
+    expect(byId['sn-glm-5-3']!.vision).toBe(false)
+    expect(byId['sn-glm-5-3-flash']!.vision).toBe(true)
+    expect(byId['sn-kimi-k3']!.vision).toBe(true)
+    // Effort lists come from OpenRouter, not from upstream (which has none).
+    expect(byId['sn-deepseek-v4-1-flash-1017']!.reasoningEfforts).toEqual(['max', 'high', 'low', 'none'])
+    expect(byId['sn-glm-5-3']!.reasoningEfforts).toEqual(['max', 'high', 'low'])
+    expect(byId['sn-kimi-k3']!.reasoningEfforts).toEqual(['max', 'high', 'low', 'none'])
+    // Default is the cheapest available level, not OpenRouter's `max`.
+    expect(byId['sn-deepseek-v4-1-flash-1017']!.defaultReasoningEffort).toBe('none')
+    expect(byId['sn-glm-5-3']!.defaultReasoningEffort).toBe('low')
+  })
+
+  it('keeps the two-state switch for models that have no OpenRouter entry', () => {
+    const openRouter = buildOpenRouterIndex([
+      { id: 'other/model', name: 'Other Model', inputModalities: ['text'], efforts: ['none'], mandatory: false },
+    ])
+    const models = parseRaccoonCatalog({
+      data: {
+        categories: [{
+          type: 'chat',
+          models: [
+            { name: 'sn-sensenova-6-8-flash-lite', description: 'SenseNova-6.8-Flash-Lite', visible: true, tags: ['vision'], params: { context_window: 256_000, max_tokens: 63_999 } },
+          ],
+        }],
+      },
+    }, { openRouter })
+    expect(models[0]).toMatchObject({
+      vision: true,
+      reasoningEfforts: ['on', 'off'],
+      defaultReasoningEffort: 'off',
     })
-    expect(models[0]!.vision).toBe(true)
+  })
+
+  it('lets explicit overrides win over OpenRouter modalities', () => {
+    const openRouter = buildOpenRouterIndex([
+      { id: 'z-ai/glm-5.3', name: 'Z.ai: GLM 5.3', inputModalities: ['text', 'image'], efforts: ['none'], mandatory: false },
+    ])
+    const models = parseRaccoonCatalog({
+      data: {
+        categories: [{
+          type: 'chat',
+          models: [
+            { name: 'sn-glm-5-3', description: 'GLM-5-3', visible: true, tags: ['vision'], params: { context_window: 1_000_000, max_tokens: 100_000 } },
+          ],
+        }],
+      },
+    }, { openRouter, textOnly: new Set(['sn-glm-5-3']), forceVision: new Set(['sn-glm-5-3']) })
+    expect(models[0]!.vision).toBe(false)
   })
 })
 

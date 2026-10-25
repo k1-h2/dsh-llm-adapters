@@ -19,6 +19,7 @@ src/
   loomy.ts           Loomy 目录 / 积分 / 流式调用
   raccoon.ts         小浣熊目录 / 余额 / 流式调用
   catalog.ts         目录解析、模型缓存
+  openrouter.ts      实时拉取 OpenRouter 模型表，校正思考档位与模态（不写死）
   wire.ts            OpenAI 兼容 SSE、工具调用、usage
   config.ts          volatile 配置与 live 读取
 client.js            设置页（ModuleLoader bundle，无构建步骤）
@@ -84,14 +85,26 @@ test/                vitest，不访问真实上游
 模型清单里 `name` 取远端的 `description`（`Kimi-K3`），`display_description` 只作说明；旧版
 把中文任务描述当成了模型名。
 
-思考开关是**两态**：请求体写 `extra_body.thinking.type = enabled | disabled`。`on` / `off` 由
-`catalog.ts` 声明，默认 `off`；即使 DSH 没有物化默认值，`raccoon.ts` 也会显式发送 `disabled`，
-保证实际行为与 UI 一致。
+思考控制有两条通道，都要发：
 
-`reasoning_effort` 是另一条通道，服务端接受 8 个枚举。旧参考实现的多轮实验认为它几乎无效果；
-在 `sn-deepseek-v4-1-flash-1017` 上做 3 组配对（temperature 0）时，`max` 的 reasoning token
-为 56/54/62，`minimal` 为 52/50/42，差异很小。因此 UI 不把 High/Max 做成可调档位，避免暗示
-不存在的明显差异。
+- `extra_body.thinking.type = enabled | disabled`：真正的开关，`disabled` 实测能把
+  `reasoning_tokens` 压到 0。
+- `reasoning_effort`：强度档，小浣熊网关**确实生效**（Kimi-K3 上 `low` 约 2.7k、`max` 约
+  8.4k completion token，3 倍差距）。但小浣熊自己的 `model_catalog` **不下发**可选档位。
+
+因此档位与模态都从 **OpenRouter 实时获取**（`src/openrouter.ts`）：每次「刷新状态与模型」都会
+清缓存重拉 `GET /api/v1/models`，按归一化后的模型名/ id 匹配（`sn-kimi-k3` ↔
+`moonshotai/kimi-k3`），读取 `reasoning.supported_efforts` 与 `architecture.input_modalities`。
+**不写死任何模型清单** —— OpenRouter 和上游都会变。匹配不到（如 SenseNova 未被收录）时，
+回退到上游自己的 `vision` 标签，思考退化为「开启 / 关闭」两态。默认档取列表里**最省**的一档
+（有 `none` 用 `none`，否则 `low`/`minimal`…），而非 OpenRouter 的 `max`，避免默认回复过慢。
+
+`raccoon.ts` 只在 DSH 传下 `reasoningEffort` 时才写这两个字段；DSH 会用适配器声明的
+`defaultReasoningEffort` 物化它，所以「用户没选」和「选了关闭」都落到 `disabled`。
+
+Loomy 相反：它的 `GET /models` **自带** `reasoning_efforts` 与
+`default_reasoning_effort`（实测 `['none','low','medium','high','xhigh']`、默认 `low`），
+所以直接用上游值，**不查 OpenRouter**；请求体透传 `reasoning_effort`。
 
 额度接口是 `GET /points/v1/balance`，核心字段为 `available_points`（另有 `reward_points`、
 `daily_points`、`topup_points`）。没有 `available_points` 时按旧字段回退，绝不编造数字。
@@ -161,4 +174,6 @@ npm run build
 - 小浣熊依赖 `/auth/mp/qrcode` 的签发字段、`scan_path` 形态与 `auth/mp/qrcode/login` 的
   状态值；扫码页或状态值改名会使二维码扫不出结果。
 - 目录字段：Loomy 的倍率在展示名称里，小浣熊的 `billing_*` / `params.*` 可能改名。
-- 图片能力不能只信标签；小浣熊使用 `RACCOON_MEASURED_VISION`，Loomy 以目录 capabilities 为准。
+- 图片能力不能只信标签；小浣熊在刷新时用 OpenRouter 的实时模态/档位表校正，匹配不到才回退
+  上游标签；Loomy 直接用目录 `capabilities` 与 `reasoning_efforts`。OpenRouter 表本身会变，
+  所以每次「刷新状态与模型」都重拉，不写死任何模型清单。
