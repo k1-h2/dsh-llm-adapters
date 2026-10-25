@@ -1,0 +1,210 @@
+/**
+ * SenseTime Raccoon (小浣熊) gateway client.
+ *
+ * The desktop app exposes an OpenAI-compatible endpoint for its own local
+ * agent. Authentication is an OAuth access token with a single-use refresh
+ * token; a refresh is written back to the app's auth file by {@link RaccoonAuth}
+ * before the new token is used.
+ *
+ * @module dsh-llm-adapters/raccoon
+ */
+
+import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
+import { RaccoonAuth } from './auth.ts'
+import { ModelCatalog, parseRaccoonCatalog } from './catalog.ts'
+import type { ProviderModel } from './catalog.ts'
+import { fetchJson } from './http.ts'
+import type { QuotaSnapshot } from './types.ts'
+import { ProviderHttpError, buildBody, buildMessages, buildTools, openAiStream } from './wire.ts'
+import type { ReadImage } from './wire.ts'
+
+export const RACCOON_BASE = 'https://xiaohuanxiong.com/api/web'
+export const RACCOON_CLIENT_VERSION = '1.0.0'
+
+export interface RaccoonProviderOptions {
+  auth: RaccoonAuth
+  ttlMs: () => number
+  timeoutMs: () => number
+  textOnly: () => ReadonlySet<string>
+  forceVision: () => ReadonlySet<string>
+  fetchImpl?: typeof fetch
+}
+
+function numeric(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && /^-?\d+(?:\.\d+)?$/.test(value.trim())) return Number(value)
+  return undefined
+}
+
+function messageOf(payload: unknown): string | undefined {
+  if (payload === null || typeof payload !== 'object') return undefined
+  const record = payload as Record<string, unknown>
+  return typeof record.message === 'string' && record.message.length > 0 ? record.message : undefined
+}
+
+export class RaccoonProvider {
+  readonly catalog: ModelCatalog
+  private quotaCache: { at: number, value: QuotaSnapshot } | undefined
+  private quotaInflight: Promise<QuotaSnapshot> | undefined
+
+  constructor(private readonly options: RaccoonProviderOptions) {
+    this.catalog = new ModelCatalog(
+      () => this.fetchModels(),
+      options.ttlMs,
+    )
+  }
+
+  async status() {
+    return this.options.auth.status()
+  }
+
+  async signedIn(): Promise<boolean> {
+    return (await this.options.auth.status()).signedIn
+  }
+
+  private headers(token: string): Record<string, string> {
+    return {
+      authorization: `Bearer ${token}`,
+      'x-org-code': '',
+      'x-raccoon-language': 'zh-CN',
+      'x-client-platform': 'desktop',
+      'x-client-version': RACCOON_CLIENT_VERSION,
+    }
+  }
+
+  /** Run one JSON call, refreshing once when the gateway rejects the token. */
+  private async authorizedJson<T>(path: string, init: { method?: string, body?: unknown } = {}): Promise<T> {
+    let token = await this.options.auth.accessToken()
+    try {
+      return await fetchJson<T>(`${RACCOON_BASE}${path}`, {
+        ...init,
+        headers: this.headers(token),
+        timeoutMs: this.options.timeoutMs(),
+        fetchImpl: this.options.fetchImpl,
+      })
+    } catch (error) {
+      if (!(error instanceof ProviderHttpError) || error.status !== 401) throw error
+      token = await this.options.auth.accessToken(true)
+      try {
+        return await fetchJson<T>(`${RACCOON_BASE}${path}`, {
+          ...init,
+          headers: this.headers(token),
+          timeoutMs: this.options.timeoutMs(),
+          fetchImpl: this.options.fetchImpl,
+        })
+      } catch (retryError) {
+        if (retryError instanceof ProviderHttpError && retryError.status === 401) {
+          this.invalidateModels()
+          this.invalidateQuota()
+          throw new Error('小浣熊登录态被上游拒绝。请打开小浣熊桌面端重新登录。')
+        }
+        throw retryError
+      }
+    }
+  }
+
+  private async fetchModels(): Promise<ProviderModel[]> {
+    const payload = await this.authorizedJson<unknown>('/llm/v2/model_catalog')
+    if (payload !== null && typeof payload === 'object') {
+      const code = (payload as Record<string, unknown>).code
+      if (typeof code === 'number' && code !== 0) {
+        throw new Error(messageOf(payload) ?? `小浣熊模型目录返回 code=${code}`)
+      }
+    }
+    const models = parseRaccoonCatalog(payload, {
+      textOnly: this.options.textOnly(),
+      forceVision: this.options.forceVision(),
+    })
+    if (models.length === 0) throw new Error('小浣熊返回的模型目录为空。')
+    return models
+  }
+
+  async models(fresh = false): Promise<readonly ProviderModel[]> {
+    return this.catalog.models(fresh)
+  }
+
+  catalogError(): string | undefined {
+    return this.catalog.error()
+  }
+
+  invalidateModels(): void {
+    this.catalog.invalidate()
+  }
+
+  async quota(fresh = false): Promise<QuotaSnapshot> {
+    if (!fresh && this.quotaCache !== undefined && Date.now() - this.quotaCache.at < 60_000) {
+      return this.quotaCache.value
+    }
+    if (this.quotaInflight !== undefined) return this.quotaInflight
+    this.quotaInflight = (async () => {
+      try {
+        const payload = await this.authorizedJson<unknown>('/points/v1/balance')
+        const root = payload !== null && typeof payload === 'object' ? payload as Record<string, unknown> : {}
+        if (typeof root.code === 'number' && root.code !== 0) {
+          throw new Error(messageOf(payload) ?? `小浣熊额度接口返回 code=${root.code}`)
+        }
+        const data = root.data !== null && typeof root.data === 'object'
+          ? root.data as Record<string, unknown>
+          : root
+        const total = numeric(data.total) ?? numeric(data.balance) ?? numeric(data.points)
+        if (total === undefined) throw new Error('小浣熊额度响应格式无法识别。')
+        const snapshot: QuotaSnapshot = { at: Date.now(), total }
+        this.quotaCache = { at: snapshot.at, value: snapshot }
+        return snapshot
+      } finally {
+        this.quotaInflight = undefined
+      }
+    })()
+    return this.quotaInflight
+  }
+
+  invalidateQuota(): void {
+    this.quotaCache = undefined
+  }
+
+  async *stream(
+    options: GenerateOptions,
+    model: string,
+    readImage: ReadImage | undefined,
+    onUnauthorized?: () => void,
+  ): AsyncGenerator<StreamChunk> {
+    let token = await this.options.auth.accessToken()
+    const messages = await buildMessages(options, readImage)
+    const tools = buildTools(options)
+    const body = buildBody(options, model, messages, tools)
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let emitted = false
+      try {
+        for await (const chunk of openAiStream({
+          url: `${RACCOON_BASE}/llm/v2/chat/completions`,
+          headers: this.headers(token),
+          body,
+          signal: options.signal,
+          fetchImpl: this.options.fetchImpl,
+          onUnauthorized: () => {
+            this.invalidateModels()
+            this.invalidateQuota()
+            onUnauthorized?.()
+          },
+        })) {
+          emitted = true
+          yield chunk
+        }
+        return
+      } catch (error) {
+        // The token can expire between the local expiry check and the wire
+        // request. Retry once with a rotated token, but never after any byte
+        // reached the caller: a second stream would duplicate the answer.
+        if (!emitted && attempt === 0 && error instanceof ProviderHttpError
+          && (error.status === 401 || error.status === 403)) {
+          token = await this.options.auth.accessToken(true)
+          continue
+        }
+        if (error instanceof ProviderHttpError && (error.status === 401 || error.status === 403)) {
+          throw new Error('小浣熊登录态被上游拒绝。请打开小浣熊桌面端重新登录，然后在设置页点“重新读取登录态”。')
+        }
+        throw error
+      }
+    }
+  }
+}
