@@ -1,5 +1,6 @@
-# The dsh-llm-adapters bundle patch. The plugin registers the `loomy` and
-# `raccoon` provider routes and contributes one settings page per provider.
+# The dsh-llm-adapters bundle patch. The plugin registers the `loomy`,
+# `raccoon` and `trae` provider routes and contributes one settings page per
+# provider (Trae's two regions share a single page).
 - insert:
     - id: llm-adapters
       name: 'dsh-llm-adapters'

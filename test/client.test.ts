@@ -47,12 +47,35 @@ function loadClient(): ClientExports {
 describe('client bundle', () => {
   const exports = loadClient()
 
-  it('declares the two settings sections and matching config fields', () => {
+  it('declares one settings section per provider and matching config fields', () => {
     expect(exports.name).toBe('dsh-llm-adapters')
     expect(exports.inject).toEqual(['slots', 'locale', 'configForms'])
-    expect(exports.__test.BRANDS.map(brand => brand.id)).toEqual(['loomy', 'raccoon'])
+    expect(exports.__test.BRANDS.map(brand => brand.id)).toEqual(['loomy', 'raccoon', 'trae'])
     expect(exports.__test.FIELDS.loomy.enabled).toBe('loomyEnabled')
     expect(exports.__test.FIELDS.raccoon.enabled).toBe('raccoonEnabled')
+    expect(exports.__test.FIELDS.trae.enabled).toBe('traeEnabled')
+    expect(exports.__test.FIELDS.trae.region).toBe('traeRegion')
+  })
+
+  it('keeps Trae as one card with a region switch and a check-in button', () => {
+    const { zh, en, REGIONS, regionOf } = exports.__test as unknown as {
+      zh: Record<string, string>
+      en: Record<string, string>
+      REGIONS: { id: string }[]
+      regionOf: (value: unknown) => string
+    }
+    expect(REGIONS.map(region => region.id)).toEqual(['cn', 'global'])
+    expect(regionOf('global')).toBe('global')
+    expect(regionOf(undefined)).toBe('cn')
+    expect(regionOf('mars')).toBe('cn')
+    expect(zh.regionCn).toContain('trae.cn')
+    expect(zh.regionGlobal).toContain('trae.ai')
+    expect(en.regionCn).toContain('trae.cn')
+    expect(zh.checkinClaim).toBe('签到领积分')
+    expect(zh.checkinClaimed).toBe('今日已签到')
+    // The device flag and the account flag must never share a label.
+    expect(zh.checkinDevice).not.toBe(zh.checkinClaimed)
+    expect(zh.browserOpenTrae).toBe('打开浏览器登录')
   })
 
   it('has the same top-level copy keys in Chinese and English', () => {

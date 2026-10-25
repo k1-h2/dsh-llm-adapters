@@ -339,3 +339,68 @@ describe('account API', () => {
     expect(unknownBrand.captured.status).toBe(400)
   })
 })
+
+describe('Trae check-in', () => {
+  const traeOptions: Partial<AdapterOptions> = { brand: 'trae', provider: 'trae' }
+
+  it('attaches the check-in state to the account reading', async () => {
+    const { adapter } = makeAdapter({
+      checkinStatus: async () => ({ available: true, claimed: false, deviceClaimed: true, reward: 20 }),
+    }, traeOptions)
+    const status = await adapter.usageInfo()
+    expect(status).toMatchObject({
+      brand: 'trae',
+      checkin: { available: true, claimed: false, deviceClaimed: true, reward: 20 },
+    })
+  })
+
+  it('leaves the other providers without a check-in field', async () => {
+    const { adapter } = makeAdapter()
+    expect((await adapter.usageInfo()).checkin).toBeUndefined()
+  })
+
+  it('claims the reward and invalidates the cached quota', async () => {
+    const invalidateQuota = vi.fn()
+    const claimCheckin = vi.fn(async () => ({ available: true, claimed: true, deviceClaimed: false }))
+    const { adapter } = makeAdapter({ claimCheckin, invalidateQuota }, traeOptions)
+    expect(await adapter.claimCheckin()).toMatchObject({ claimed: true })
+    expect(claimCheckin).toHaveBeenCalledOnce()
+    expect(invalidateQuota).toHaveBeenCalledOnce()
+  })
+
+  it('rejects the action on a provider that has no reward', async () => {
+    const { adapter } = makeAdapter()
+    await expect(adapter.claimCheckin()).rejects.toThrow('没有签到活动')
+  })
+
+  it('serves the action and forwards the region to the browser login', async () => {
+    const startBrowserLogin = vi.fn(async () => ({ running: true, phase: 'waiting' }))
+    const claim = vi.fn(async () => ({ available: true, claimed: true, deviceClaimed: false }))
+    const { adapter } = makeAdapter({ startBrowserLogin, claimCheckin: claim }, traeOptions)
+    const adapters = { loomy: adapter, raccoon: adapter, trae: adapter }
+
+    const login = response()
+    await handleApi(jsonRequest(`${API_PREFIX}/account`, {
+      brand: 'trae', action: 'browser', region: 'global',
+    }), login.res, adapters)
+    expect(login.captured.status).toBe(200)
+    expect(startBrowserLogin).toHaveBeenCalledWith('global')
+
+    const claimRes = response()
+    await handleApi(jsonRequest(`${API_PREFIX}/account`, { brand: 'trae', action: 'checkin' }), claimRes.res, adapters)
+    expect(claimRes.captured.status).toBe(200)
+    expect(claimRes.captured.body).toMatchObject({ brand: 'trae', checkin: { claimed: true } })
+  })
+
+  it('reports a refused claim as a 400', async () => {
+    const { adapter } = makeAdapter({
+      claimCheckin: async () => { throw new Error('签到失败（code 9004）') },
+    }, traeOptions)
+    const { res, captured } = response()
+    await handleApi(jsonRequest(`${API_PREFIX}/account`, { brand: 'trae', action: 'checkin' }), res, {
+      loomy: adapter, raccoon: adapter, trae: adapter,
+    })
+    expect(captured.status).toBe(400)
+    expect(String(captured.body.error)).toContain('9004')
+  })
+})

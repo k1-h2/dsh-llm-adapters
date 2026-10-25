@@ -47,22 +47,23 @@ function fakeContext() {
 }
 
 describe('plugin host wiring', () => {
-  it('registers both provider routes, the directory and the settings API', () => {
+  it('registers every provider route, the directory and the settings API', () => {
     const fake = fakeContext()
     apply(fake.ctx as never, {})
-    expect(fake.routes).toEqual(['loomy', 'raccoon'])
+    expect(fake.routes).toEqual(['loomy', 'raccoon', 'trae'])
     expect(fake.directories.at(-1)).toMatchObject([
       { provider: 'loomy', displayName: 'Loomy', settingsNs: 'llm-adapters', settingsPath: [] },
       { provider: 'raccoon', displayName: '商汤小浣熊', settingsNs: 'llm-adapters', settingsPath: [] },
+      { provider: 'trae', displayName: 'Trae', settingsNs: 'llm-adapters', settingsPath: [] },
     ])
     expect(fake.apiPaths).toEqual(['/api/llm-adapters'])
     expect(fake.events.has('loader/volatile-update')).toBe(true)
     expect(fake.disposers.length).toBeGreaterThanOrEqual(2)
   })
 
-  it('registers nothing when both providers are switched off', () => {
+  it('registers nothing when every provider is switched off', () => {
     const fake = fakeContext()
-    apply(fake.ctx as never, { loomyEnabled: false, raccoonEnabled: false })
+    apply(fake.ctx as never, { loomyEnabled: false, raccoonEnabled: false, traeEnabled: false })
     expect(fake.routes).toEqual([])
     expect(fake.directories).toEqual([])
     expect(fake.apiPaths).toEqual(['/api/llm-adapters'])
@@ -70,10 +71,13 @@ describe('plugin host wiring', () => {
 
   it('uses configured display names in the provider directory', () => {
     const fake = fakeContext()
-    apply(fake.ctx as never, { loomyDisplayName: '讯飞 Loomy', raccoonDisplayName: '小浣熊 Pro' })
+    apply(fake.ctx as never, {
+      loomyDisplayName: '讯飞 Loomy', raccoonDisplayName: '小浣熊 Pro', traeDisplayName: 'Trae IDE',
+    })
     expect(fake.directories.at(-1)).toMatchObject([
       { displayName: '讯飞 Loomy' },
       { displayName: '小浣熊 Pro' },
+      { displayName: 'Trae IDE' },
     ])
   })
 })

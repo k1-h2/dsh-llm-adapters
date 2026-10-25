@@ -6,7 +6,7 @@
 
 ```
 src/
-  index.ts           注册 loomy / raccoon 路由、设置接口与配置目录
+  index.ts           注册 loomy / raccoon / trae 路由、设置接口与配置目录
   adapter.ts         把 DSH 请求接到 provider client，模型解析与上下文窗口
   api.ts             /models、/status、/account/browser、/account
   auth.ts            插件凭据状态、JWT 到期判定、退出登录
@@ -15,9 +15,12 @@ src/
   qr.ts              零依赖二维码（byte 模式、纠错 M、版本 1–10）
   loomy-login.ts     Loomy 微信扫码：uuid、长轮询、讯飞账号 HMAC 接口
   raccoon-login.ts   小浣熊扫码：服务端签发二维码、轮询、业务会话确认
+  trae-login.ts      Trae 网页登录：独立浏览器配置、CDP 读 cookie 与设备指纹
+  trae-endpoints.ts  两个区域的站点 / 网关 / 计费基址
   account-profile.ts 小浣熊账号展示字段
   loomy.ts           Loomy 目录 / 积分 / 流式调用
   raccoon.ts         小浣熊目录 / 余额 / 流式调用
+  trae.ts            Trae 目录合并 / SOLO 流式调用 / 额度 / 签到
   catalog.ts         目录解析、模型缓存、能力来源合并
   model-name.ts      公共名称规则：括号标签、倍率、连字符归一化、匹配 key
   openrouter.ts      实时拉取 OpenRouter 模型表，通配匹配档位与模态（不写死）
@@ -83,6 +86,38 @@ test/                vitest，不访问真实上游
 
 不走官方桌面端的 `office-raccoon://auth/callback`，也不改网页里写死的回调地址。
 
+### Trae（`trae-login.ts` + `trae.ts`）
+
+Trae 没有可以自建的二维码链路：设备指纹必须来自一次真实的网页登录。因此这里不用本地登录页，
+而是**自己启动一个浏览器**：
+
+1. 找一个本机 Chromium 系浏览器（`DSH_TRAE_BROWSER` 可指定），用
+   `--remote-debugging-port=0 --user-data-dir=<临时目录>` 启动，打开 `www.trae.cn` 或
+   `www.trae.ai`。临时配置目录与用户自己的浏览器完全隔离。
+2. 读 `DevToolsActivePort` 得到调试端口，`/json/list` 找到页面，用 WebSocket 连 CDP。
+3. 每 2 秒 `Network.getAllCookies` 拼 `Cookie` 头，回放给 `CheckLogin`；登录后
+   `common/GetUserToken` 换 `Cloud-IDE-JWT`，`trae/GetUserInfo` 取账号信息。
+4. 设备指纹取自该会话的 `localStorage.__msuuid__`（没有时 `msid`，再没有就生成一个并留在
+   页面里）；`machineId = sha256("trae-web-machine\0" + deviceId)`。这两项和令牌一起写入
+   账号记录，之后每次请求都原样重放。
+5. 5 分钟超时；成功后关闭窗口、删除临时目录。取消与插件卸载同样走清理路径（Windows 上用
+   `taskkill /T /F` 杀掉进程树）。
+
+两条目录来源合并成一份模型表（`mergeTraeModels`）：远端目录给显示名、上下文窗口、多模态与
+倍率，`get_detail_param` 给真正可调用的 `config_name`、输出上限与折后倍率。只在 wire 里出现、
+显示名又不重复的模型会被保留——目录是账号级的，藏掉反而会少给付费账号模型。思考档位统一
+映射（`light` → `low`、`extra_high` → `xhigh`），默认档仍是倒数第二强。
+
+聊天走 `POST {chatBase}/api/agent/v3/llm_utils_chat`，需要 `x-device-id` / `x-machine-id` /
+`x-uid` 等网页头；消息 content 一律是 block 数组，assistant 的工具调用放在 `function_call`，
+工具的 `parameters` 是 JSON **字符串**。上游错误帧按码映射：`1005` / `4222` → 402，
+`4008` / `4011` → 429，`4001` / `4023` → 400，其余 502。
+
+额度按区域走不同接口：国内版 `web_user_ent_usage`（已用 / 总额 + 资源包，按最早到期排序），
+国际版 `ide_user_pay_status`（套餐 / 试用）。签到只有国内版有：`checkin_credits/status` 读状态，
+`checkin_credits/claim` 领取；`checked_in` 是账号维度，`did_checked_in` 是设备维度，两者分开
+显示；缺 `x-device-id` 返回 `9004`，重复领取返回 `9095`。
+
 ### 公共的名称与能力规则
 
 这些规则在 `src/model-name.ts` 与 `src/openrouter.ts`，Loomy、Raccoon 以及以后新增的供应商
@@ -136,6 +171,8 @@ Raccoon 的思考控制有两条通道，都要发：`extra_body.thinking.type =
 - Loomy：登录时声明 14 天有效期并把到期时间存进记录；过期后状态变为未登录，提示重新扫码。
 - 小浣熊：扫码得到的 access token 若是 JWT，按 `exp` 判断；没有 JWT 声明的不透明令牌按
   已登录处理，等网关 401 再提示重新扫码。两者都没有刷新流程。
+- Trae：一个区域一条记录（`trae.cn` / `trae.global`），带令牌、设备指纹与登录时间；JWT 的
+  `exp` 只用于提前提示过期。退出登录只清当前区域。
 
 `RaccoonAuth.accessToken(true)` 只用于网关明确拒绝令牌的路径，它会直接报“登录已失效”，
 不再尝试刷新或回读任何文件。
@@ -146,11 +183,15 @@ Raccoon 的思考控制有两条通道，都要发：`extra_body.thinking.type =
 | --- | --- |
 | `GET /api/llm-adapters/models?brand=` | 实时目录 + 开关 / 窗口，`fresh=1` 清缓存 |
 | `GET /api/llm-adapters/status?brand=` | 登录状态、到期时间、额度 |
-| `GET /api/llm-adapters/account/browser?brand=` | 扫码登录进度（含本地登录页 URL） |
-| `POST /api/llm-adapters/account` | `browser` / `browser-cancel` / `logout` |
+| `GET /api/llm-adapters/account/browser?brand=` | 登录进度（本地登录页 URL 或 Trae 的浏览器状态） |
+| `POST /api/llm-adapters/account` | `browser` / `browser-cancel` / `checkin` / `logout` |
 
-写操作在 body 里带 `brand`，URL 不承载写目标。配置写入仍走宿主 `configForms` 的修订栅栏，
-不经过插件自己的写接口。设置页轮询进度时不会把令牌带给浏览器。
+写操作在 body 里带 `brand`，URL 不承载写目标。`browser` 还可以带 `region`（`cn` / `global`），
+只有 Trae 使用它。配置写入仍走宿主 `configForms` 的修订栅栏，不经过插件自己的写接口。设置页
+轮询进度时不会把令牌带给浏览器；`checkin` 只返回签到状态，不返回令牌。
+
+Trae 的区域是配置项 `traeRegion`，不是第二个 brand：设置页切区域时写这个字段，随后按
+`brand:region` 的 key 重读状态与目录快照，两个区域的账号与模型选择互不覆盖。
 
 ## 传输层
 
@@ -171,10 +212,10 @@ npm test
 npm run build
 ```
 
-`vitest` 覆盖目录解析、登录页状态机、Loomy 长轮询与扫码绑定、小浣熊扫码轮询、凭据存储与
-并发、过期判定、SSE 与工具调用、设置 API。登录相关的测试全部注入假 `fetch`，不访问真实
-上游，也不启动浏览器。需要真机验证时，手动点一次「打开扫码登录」，确认二维码、手机确认后的
-接回、模型列表与一次对话。
+`vitest` 覆盖目录解析、登录页状态机、Loomy 长轮询与扫码绑定、小浣熊扫码轮询、Trae 两份目录
+的合并与档位映射、额度 / 套餐 / 签到解析、SSE 与工具调用、凭据存储与并发、过期判定、设置
+API。登录相关的测试全部注入假 `fetch`，不访问真实上游，也不启动浏览器。需要真机验证时，手动
+点一次「打开扫码登录」或「打开浏览器登录」，确认接回、模型列表与一次对话。
 
 ## 易变点
 
@@ -187,3 +228,6 @@ npm run build
   `buildOpenRouterIndex` 的测试。
 - OpenRouter 表本身会变，所以每次「刷新状态与模型」都重拉，不写死任何模型清单；匹配不到时
   回退上游，再没有就全部开放，任何新供应商都自动适用这套规则。
+- Trae 依赖 `DevToolsActivePort` 与 CDP 的 `Network.getAllCookies`、以及页面里的
+  `localStorage.__msuuid__`；浏览器或站点改版后先看 `trae-login.ts` 的 `DEVICE_EXPRESSION`
+  与 `authPost` 路径。两个区域的基址集中在 `trae-endpoints.ts`，站点换域名只需改那一处。

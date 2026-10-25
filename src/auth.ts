@@ -1,15 +1,16 @@
 /**
- * Credential state for both providers.
+ * Credential state for every provider.
  *
- * The settings page's QR flow is the only sign-in path, so credentials exist
- * in exactly one place: the plugin's own account store. No desktop client file
- * is discovered, read, or written, and no token leaves this module in errors or
+ * Sign-in happens in the provider's own web page, so credentials exist in
+ * exactly one place: the plugin's own account store. No desktop client file is
+ * discovered, read, or written, and no token leaves this module in errors or
  * display fields.
  *
  * @module dsh-llm-adapters/auth
  */
 
-import type { AccountStore, LoomyAccountRecord, RaccoonAccountRecord } from './account-store.ts'
+import type { AccountStore, LoomyAccountRecord, RaccoonAccountRecord, TraeAccountRecord } from './account-store.ts'
+import type { TraeRegion } from './brand.ts'
 
 export interface LocalAccount {
   name?: string
@@ -31,6 +32,19 @@ export interface AuthStatus {
 
 /** Expiry margin for Raccoon's JWT, so a call does not start on a dead token. */
 const RACCOON_EXPIRY_MARGIN_MS = 30_000
+/** Same margin for Trae's web token. */
+const TRAE_EXPIRY_MARGIN_MS = 30_000
+
+function traeLabel(region: TraeRegion): string {
+  return region === 'cn' ? 'Trae 国内版' : 'Trae 国际版'
+}
+
+function traeAccount(record: TraeAccountRecord): LocalAccount {
+  const account: LocalAccount = {}
+  if (record.name !== undefined) account.name = record.name
+  if (record.userId !== undefined) account.userId = record.userId
+  return account
+}
 
 function loomyAccount(record: LoomyAccountRecord): LocalAccount {
   const account: LocalAccount = {}
@@ -179,3 +193,74 @@ export class RaccoonAuth {
     await this.store.clear('raccoon')
   }
 }
+
+/**
+ * Trae's web login, one per region.
+ *
+ * The token is the same `Cloud-IDE-JWT` the website uses. There is no refresh
+ * flow this plugin can rely on, so an expired token is a user-visible sign-in
+ * action — the same contract the other two providers have.
+ */
+export class TraeAuth {
+  constructor(
+    private readonly store: AccountStore,
+    private readonly currentRegion: () => TraeRegion,
+  ) {}
+
+  region(): TraeRegion {
+    return this.currentRegion()
+  }
+
+  async status(): Promise<AuthStatus> {
+    const region = this.region()
+    const stored = await this.store.trae(region)
+    if (stored === undefined) {
+      return { signedIn: false, error: `${traeLabel(region)}尚未登录。请在设置页点「打开浏览器登录」。` }
+    }
+    const account = traeAccount(stored)
+    const expired = stored.expiresAt !== undefined && stored.expiresAt <= Date.now() + TRAE_EXPIRY_MARGIN_MS
+    return {
+      signedIn: !expired,
+      loginAt: stored.loginAt,
+      ...stored.expiresAt === undefined ? {} : { expiresAt: stored.expiresAt },
+      ...expired ? { possiblyExpired: true } : {},
+      ...Object.keys(account).length === 0 ? {} : { account },
+      ...expired ? { error: `${traeLabel(region)}登录已过期，请在设置页重新登录。` } : {},
+    }
+  }
+
+  /** The bearer token, or an actionable error when there is none. */
+  async accessToken(force = false): Promise<string> {
+    const region = this.region()
+    const stored = await this.store.trae(region)
+    if (stored === undefined) {
+      throw new Error(`${traeLabel(region)}尚未登录。请在设置页点「打开浏览器登录」。`)
+    }
+    if (force) {
+      throw new Error(`${traeLabel(region)}登录已失效，请在设置页重新登录。`)
+    }
+    if (stored.expiresAt !== undefined && stored.expiresAt <= Date.now() + TRAE_EXPIRY_MARGIN_MS) {
+      throw new Error(`${traeLabel(region)}登录已过期，请在设置页重新登录。`)
+    }
+    return stored.accessToken
+  }
+
+  /** The fingerprints captured from the web session, replayed on every call. */
+  async identity(): Promise<{ deviceId: string, machineId: string, userId?: string }> {
+    const region = this.region()
+    const stored = await this.store.trae(region)
+    if (stored === undefined) {
+      throw new Error(`${traeLabel(region)}尚未登录。请在设置页点「打开浏览器登录」。`)
+    }
+    return {
+      deviceId: stored.deviceId,
+      machineId: stored.machineId,
+      ...stored.userId === undefined ? {} : { userId: stored.userId },
+    }
+  }
+
+  async logout(): Promise<void> {
+    await this.store.clear('trae', this.region())
+  }
+}
+

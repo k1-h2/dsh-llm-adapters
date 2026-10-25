@@ -81,3 +81,42 @@ describe('AccountStore', () => {
     expect(store.path()).toBe(path.join(root, 'accounts.json'))
   })
 })
+
+describe('AccountStore Trae regions', () => {
+  const trae = {
+    accessToken: 'trae-token',
+    region: 'cn' as const,
+    deviceId: 'device-cn',
+    machineId: 'machine-cn',
+    loginAt: 1,
+    userId: 'u-1',
+  }
+
+  it('stores the two regions independently', async () => {
+    const { store } = makeStore()
+    await store.saveTrae(trae)
+    await store.saveTrae({ ...trae, region: 'global', accessToken: 'trae-global', deviceId: 'device-global' })
+    expect(await store.trae('cn')).toMatchObject({ accessToken: 'trae-token', deviceId: 'device-cn' })
+    expect(await store.trae('global')).toMatchObject({ accessToken: 'trae-global', deviceId: 'device-global' })
+    expect((await store.read()).trae).toMatchObject({ cn: { accessToken: 'trae-token' } })
+  })
+
+  it('clears one region and drops the map only when the last one goes', async () => {
+    const { store } = makeStore()
+    await store.saveTrae(trae)
+    await store.saveTrae({ ...trae, region: 'global', accessToken: 'trae-global' })
+    await store.clear('trae', 'cn')
+    expect(await store.trae('cn')).toBeUndefined()
+    expect(await store.trae('global')).toBeDefined()
+    await store.clear('trae', 'global')
+    expect((await store.read()).trae).toBeUndefined()
+  })
+
+  it('ignores a malformed stored region instead of throwing', async () => {
+    const { store, root } = makeStore()
+    await fs.writeFile(store.path(), JSON.stringify({ trae: { cn: { accessToken: 42 }, global: 'nope' } }))
+    expect(await store.trae('cn')).toBeUndefined()
+    expect(await store.trae('global')).toBeUndefined()
+    expect(await fs.readdir(root)).toEqual(['accounts.json'])
+  })
+})

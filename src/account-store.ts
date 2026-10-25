@@ -1,10 +1,13 @@
 /**
  * Plugin-owned credentials for account login.
  *
- * Sign-in happens in the provider's own web page through the plugin's QR flow.
- * The resulting session or token is stored here — the only credential source.
- * The file is written atomically and restricted to the current user; tokens are
- * never logged or returned to the browser.
+ * Sign-in happens in the provider's own web page. The resulting session or
+ * token is stored here — the only credential source. The file is written
+ * atomically and restricted to the current user; tokens are never logged or
+ * returned to the browser.
+ *
+ * Trae keeps one account per region: switching regions must restore that
+ * region's own login instead of overwriting the other one.
  *
  * @module dsh-llm-adapters/account-store
  */
@@ -13,6 +16,8 @@ import { promises as fs } from 'node:fs'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import path from 'node:path'
+import type { BrandId, TraeRegion } from './brand.ts'
+import { normalizeTraeRegion } from './brand.ts'
 
 export interface LoomyAccountRecord {
   session: string
@@ -33,9 +38,30 @@ export interface RaccoonAccountRecord {
   loginAt: number
 }
 
+/**
+ * One Trae web login.
+ *
+ * `accessToken` is the `Cloud-IDE-JWT` the website itself uses. `deviceId` and
+ * `machineId` are the fingerprints captured from that web session — this
+ * plugin never reads a desktop install — and are replayed on chat, quota and
+ * check-in requests.
+ */
+export interface TraeAccountRecord {
+  accessToken: string
+  region: TraeRegion
+  deviceId: string
+  machineId: string
+  userId?: string
+  name?: string
+  loginAt: number
+  /** Absent when the login response carried no expiry; treat as signed in. */
+  expiresAt?: number
+}
+
 export interface StoredAccounts {
   loomy?: LoomyAccountRecord
   raccoon?: RaccoonAccountRecord
+  trae?: Partial<Record<TraeRegion, TraeAccountRecord>>
 }
 
 const FILE_NAME = 'accounts.json'
@@ -60,6 +86,23 @@ function text(value: unknown): string | undefined {
 
 function number(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined
+}
+
+function traeRecord(value: unknown, region: TraeRegion): TraeAccountRecord | undefined {
+  const raw = record(value)
+  const accessToken = text(raw?.accessToken)
+  if (raw === undefined || accessToken === undefined) return undefined
+  const deviceId = text(raw.deviceId)
+  return {
+    accessToken,
+    region,
+    deviceId: deviceId ?? `web-${randomBytes(8).toString('hex')}`,
+    machineId: text(raw.machineId) ?? `web-${randomBytes(16).toString('hex')}`,
+    loginAt: number(raw.loginAt) ?? Date.now(),
+    ...text(raw.userId) === undefined ? {} : { userId: text(raw.userId)! },
+    ...text(raw.name) === undefined ? {} : { name: text(raw.name)! },
+    ...number(raw.expiresAt) === undefined ? {} : { expiresAt: number(raw.expiresAt)! },
+  }
 }
 
 export class AccountStore {
@@ -105,6 +148,17 @@ export class AccountStore {
         ...text(raccoon?.ownerType) === undefined ? {} : { ownerType: text(raccoon?.ownerType)! },
       }
     }
+    const trae = record(raw.trae)
+    if (trae !== undefined) {
+      const cn = traeRecord(trae.cn, 'cn')
+      const global = traeRecord(trae.global, 'global')
+      if (cn !== undefined || global !== undefined) {
+        out.trae = {
+          ...cn === undefined ? {} : { cn },
+          ...global === undefined ? {} : { global },
+        }
+      }
+    }
     return out
   }
 
@@ -116,6 +170,10 @@ export class AccountStore {
     return (await this.read()).raccoon
   }
 
+  async trae(region: TraeRegion): Promise<TraeAccountRecord | undefined> {
+    return (await this.read()).trae?.[normalizeTraeRegion(region)]
+  }
+
   async saveLoomy(record: LoomyAccountRecord): Promise<void> {
     await this.update(current => ({ ...current, loomy: record }))
   }
@@ -124,10 +182,30 @@ export class AccountStore {
     await this.update(current => ({ ...current, raccoon: record }))
   }
 
-  async clear(brand: 'loomy' | 'raccoon'): Promise<void> {
+  async saveTrae(record: TraeAccountRecord): Promise<void> {
+    const region = normalizeTraeRegion(record.region)
+    await this.update(current => ({
+      ...current,
+      trae: { ...(current.trae ?? {}), [region]: { ...record, region } },
+    }))
+  }
+
+  async clear(brand: BrandId, region?: TraeRegion): Promise<void> {
     await this.update(current => {
       const next: StoredAccounts = { ...current }
-      delete next[brand]
+      if (brand === 'trae') {
+        if (region === undefined) {
+          delete next.trae
+          return next
+        }
+        const accounts = { ...(next.trae ?? {}) }
+        delete accounts[normalizeTraeRegion(region)]
+        if (Object.keys(accounts).length === 0) delete next.trae
+        else next.trae = accounts
+        return next
+      }
+      if (brand === 'loomy') delete next.loomy
+      else delete next.raccoon
       return next
     })
   }

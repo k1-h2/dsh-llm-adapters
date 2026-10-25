@@ -10,7 +10,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { LocalAdapter } from './adapter.ts'
-import type { BrandId } from './brand.ts'
+import type { BrandId, TraeRegion } from './brand.ts'
 import { isBrandId } from './brand.ts'
 
 export const API_PREFIX = '/api/llm-adapters'
@@ -97,6 +97,12 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
 interface AccountRequest {
   brand?: unknown
   action?: unknown
+  /** Trae only: which region the browser should sign in to. */
+  region?: unknown
+}
+
+function regionFrom(value: unknown): TraeRegion | undefined {
+  return value === 'cn' || value === 'global' ? value : undefined
 }
 
 async function sendStatus(res: ServerResponse, adapter: LocalAdapter, fresh: boolean): Promise<void> {
@@ -114,7 +120,7 @@ async function handleAccount(req: IncomingMessage, res: ServerResponse, adapters
   }
   const brand = brandFrom(body.brand)
   if (brand === undefined) {
-    send(res, 400, { error: 'brand 只接受 loomy 或 raccoon' })
+    send(res, 400, { error: 'brand 只接受 loomy、raccoon 或 trae' })
     return
   }
   const adapter = adapters[brand]
@@ -128,7 +134,7 @@ async function handleAccount(req: IncomingMessage, res: ServerResponse, adapters
 
   if (action === 'browser') {
     try {
-      send(res, 200, { brand, ...(await adapter.startBrowserLogin()) })
+      send(res, 200, { brand, ...(await adapter.startBrowserLogin(regionFrom(body.region))) })
     } catch (error) {
       send(res, 400, { error: error instanceof Error ? error.message : String(error) })
     }
@@ -141,7 +147,18 @@ async function handleAccount(req: IncomingMessage, res: ServerResponse, adapters
     return
   }
 
-  send(res, 400, { error: 'action 只接受 browser、browser-cancel 或 logout' })
+  // Only Trae has a daily reward; the other adapters reject the action, so the
+  // page can keep one button that simply reports the refusal.
+  if (action === 'checkin') {
+    try {
+      send(res, 200, { brand, checkin: await adapter.claimCheckin() })
+    } catch (error) {
+      send(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return
+  }
+
+  send(res, 400, { error: 'action 只接受 browser、browser-cancel、checkin 或 logout' })
 }
 
 export async function handleApi(
@@ -163,7 +180,7 @@ export async function handleApi(
 
     const brand = brandFrom(url.searchParams.get('brand'))
     if (brand === undefined) {
-      send(res, 400, { error: 'brand 只接受 loomy 或 raccoon' })
+      send(res, 400, { error: 'brand 只接受 loomy、raccoon 或 trae' })
       return
     }
     const adapter = adapters[brand]

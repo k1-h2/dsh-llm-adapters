@@ -36,6 +36,8 @@ export interface LoginStatus {
   signedIn?: boolean
   startedAt?: number
   finishedAt?: number
+  /** Human-readable progress; browser-driven flows use it instead of a QR. */
+  message?: string
 }
 
 /** One poll result from a provider flow. */
