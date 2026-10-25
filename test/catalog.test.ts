@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
-  ALL_REASONING_EFFORTS, ModelCatalog, parseLoomyCatalog, parseRaccoonCatalog, priceFactorOf,
+  ALL_REASONING_EFFORTS, ModelCatalog, defaultEffortOf, effortLabel,
+  parseLoomyCatalog, parseRaccoonCatalog, priceFactorOf,
 } from '../src/catalog.ts'
 import { buildOpenRouterIndex } from '../src/openrouter.ts'
 import { modelKey, parseModelName } from '../src/model-name.ts'
@@ -50,6 +51,23 @@ describe('priceFactorOf', () => {
   })
 })
 
+describe('effort helpers', () => {
+  it('capitalizes every label except xhigh', () => {
+    expect(ALL_REASONING_EFFORTS.map(effortLabel)).toEqual([
+      'None', 'Minimal', 'Low', 'Medium', 'High', 'xhigh', 'Max',
+    ])
+  })
+
+  it('defaults to the second strongest supported level', () => {
+    expect(defaultEffortOf(['none', 'low', 'medium', 'high', 'xhigh'])).toBe('high')
+    expect(defaultEffortOf(['max', 'high', 'low', 'none'])).toBe('high')
+    expect(defaultEffortOf(['max', 'high', 'low'])).toBe('high')
+    expect(defaultEffortOf(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])).toBe('xhigh')
+    expect(defaultEffortOf(['none'])).toBe('none')
+    expect(defaultEffortOf([])).toBeUndefined()
+  })
+})
+
 describe('parseLoomyCatalog', () => {
   const payload = {
     data: [
@@ -83,7 +101,7 @@ describe('parseLoomyCatalog', () => {
       maxTokens: 32_000,
       vision: false,
       reasoning: true,
-      defaultReasoningEffort: 'low',
+      defaultReasoningEffort: 'high',
     })
     expect(models[1]).toMatchObject({
       name: 'DeepSeek V4.1 Flash',
@@ -110,7 +128,7 @@ describe('parseLoomyCatalog', () => {
     expect(models[1]).toMatchObject({
       vision: true,
       reasoning: true,
-      defaultReasoningEffort: 'none',
+      defaultReasoningEffort: 'high',
     })
     expect(models[1]!.reasoningEfforts).toEqual(['max', 'high', 'low', 'none'])
   })
@@ -138,7 +156,7 @@ describe('parseLoomyCatalog', () => {
       vision: true,
       reasoning: true,
       reasoningEfforts: ALL_REASONING_EFFORTS,
-      defaultReasoningEffort: 'none',
+      defaultReasoningEffort: 'xhigh',
     })
   })
 })
@@ -205,7 +223,7 @@ describe('parseRaccoonCatalog', () => {
       priceFactor: 0,
       badge: '限免一个月',
       reasoning: true,
-      defaultReasoningEffort: 'none',
+      defaultReasoningEffort: 'xhigh',
     })
     expect(models[1]!.name).toBe('GLM 5.3')
     expect(models[2]!.name).toBe('GLM 5.3 Flash')
@@ -281,8 +299,8 @@ describe('parseRaccoonCatalog', () => {
     expect(byId['sn-deepseek-v4-1-flash-1017']!.reasoningEfforts).toEqual(['max', 'high', 'low', 'none'])
     expect(byId['sn-glm-5-3']!.reasoningEfforts).toEqual(['max', 'high', 'low'])
     expect(byId['sn-kimi-k3']!.reasoningEfforts).toEqual(['max', 'high', 'low', 'none'])
-    expect(byId['sn-deepseek-v4-1-flash-1017']!.defaultReasoningEffort).toBe('none')
-    expect(byId['sn-glm-5-3']!.defaultReasoningEffort).toBe('low')
+    expect(byId['sn-deepseek-v4-1-flash-1017']!.defaultReasoningEffort).toBe('high')
+    expect(byId['sn-glm-5-3']!.defaultReasoningEffort).toBe('high')
   })
 
   it('lets explicit overrides win over OpenRouter modalities', () => {

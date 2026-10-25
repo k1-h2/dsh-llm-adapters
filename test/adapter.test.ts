@@ -83,7 +83,7 @@ describe('LocalAdapter', () => {
     })
   })
 
-  it('publishes raw effort ids without translating them', async () => {
+  it('publishes capitalized effort labels with the raw ids', async () => {
     const { adapter } = makeAdapter({
       models: async () => [{
         id: 'sn-kimi-k3',
@@ -92,19 +92,19 @@ describe('LocalAdapter', () => {
         maxTokens: 100_000,
         vision: true,
         reasoning: true,
-        reasoningEfforts: ['max', 'high', 'low', 'none'],
-        defaultReasoningEffort: 'none',
+        reasoningEfforts: ['max', 'high', 'xhigh', 'none'],
+        defaultReasoningEffort: 'high',
       }],
     }, { brand: 'raccoon', provider: 'raccoon' })
     const info = await adapter.resolveModel('raccoon', 'sn-kimi-k3')
     expect(info.reasoning).toEqual({
       efforts: [
-        { id: 'max', name: 'max' },
-        { id: 'high', name: 'high' },
-        { id: 'low', name: 'low' },
-        { id: 'none', name: 'none' },
+        { id: 'max', name: 'Max' },
+        { id: 'high', name: 'High' },
+        { id: 'xhigh', name: 'xhigh' },
+        { id: 'none', name: 'None' },
       ],
-      defaultEffort: 'none',
+      defaultEffort: 'high',
     })
   })
 

@@ -16,6 +16,7 @@ import type {
 import type { BrandId } from './brand.ts'
 import type { LoginStatus } from './login-page.ts'
 import type { ProviderModel } from './catalog.ts'
+import { effortLabel } from './catalog.ts'
 import { LoomyProvider } from './loomy.ts'
 import { RaccoonProvider } from './raccoon.ts'
 import type { ProviderStatus } from './types.ts'
@@ -147,9 +148,9 @@ export abstract class LocalAdapter extends LlmAdapter {
             reasoning: {
               efforts: live.reasoningEfforts.map(effort => ({
                 id: effort as never,
-                // Effort ids are the provider's own vocabulary (`low`, `high`,
-                // `max`, …); they are intentionally not translated.
-                name: effort,
+                // The id stays raw (`low`, `high`, `max`); only the label is
+                // capitalized, and `xhigh` keeps its vendor spelling.
+                name: effortLabel(effort),
               })),
               ...live.defaultReasoningEffort === undefined
                 ? {}
