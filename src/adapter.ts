@@ -14,6 +14,7 @@ import type {
   PreparedAdapterCall, StreamChunk,
 } from '@deepseek-ai/dsh-llm'
 import type { BrandId } from './brand.ts'
+import type { BrowserLoginStatus } from './browser-login.ts'
 import type { ProviderModel } from './catalog.ts'
 import { LoomyProvider } from './loomy.ts'
 import { RaccoonProvider } from './raccoon.ts'
@@ -70,27 +71,27 @@ export abstract class LocalAdapter extends LlmAdapter {
   async catalogError(): Promise<string | undefined> {
     if (!(await this.client.signedIn())) {
       const status = await this.client.status()
-      return status.error ?? '尚未登录。请在下方用手机号登录，或先打开对应桌面应用完成登录。'
+      return status.error ?? '尚未登录。请在设置页用浏览器登录，或先打开对应桌面应用完成登录。'
     }
     return this.client.catalogError()
-  }
-
-  /** Account login from the settings page. */
-  async loginWithPassword(phone: string, password: string): Promise<void> {
-    await this.client.loginWithPassword(phone, password)
-  }
-
-  async sendSmsCode(phone: string): Promise<{ msgid: string }> {
-    return this.client.sendSmsCode(phone)
-  }
-
-  async loginWithSms(phone: string, code: string, msgid: string): Promise<void> {
-    await this.client.loginWithSms(phone, code, msgid)
   }
 
   /** Clear the plugin's own credentials; the desktop app is untouched. */
   async logoutAccount(): Promise<void> {
     await this.client.logoutAccount()
+  }
+
+  /** Open a browser window for the user to sign in. */
+  startBrowserLogin(): BrowserLoginStatus {
+    return this.client.startBrowserLogin()
+  }
+
+  browserLoginStatus(): BrowserLoginStatus {
+    return this.client.browserLoginStatus()
+  }
+
+  cancelBrowserLogin(): void {
+    this.client.cancelBrowserLogin()
   }
 
   invalidateCatalog(): void {
@@ -178,7 +179,7 @@ export abstract class LocalAdapter extends LlmAdapter {
   }
 
   close(): void {
-    /* Both clients are stateless HTTP; nothing to release. */
+    this.client.close()
   }
 }
 

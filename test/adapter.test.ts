@@ -4,7 +4,6 @@ import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import { LocalAdapter } from '../src/adapter.ts'
 import type { AdapterOptions } from '../src/adapter.ts'
 import { API_PREFIX, buildRows, handleApi } from '../src/api.ts'
-import { LoginError } from '../src/login.ts'
 import type { ProviderModel } from '../src/catalog.ts'
 import type { QuotaSnapshot } from '../src/types.ts'
 
@@ -31,10 +30,11 @@ function fakeClient(overrides: Record<string, unknown> = {}) {
     stream: async function* (): AsyncGenerator<StreamChunk> {
       yield { type: 'finish', reason: { kind: 'stop' } }
     },
-    loginWithPassword: vi.fn(async () => undefined),
-    sendSmsCode: vi.fn(async () => ({ msgid: 'msg-1' })),
-    loginWithSms: vi.fn(async () => undefined),
     logoutAccount: vi.fn(async () => undefined),
+    startBrowserLogin: vi.fn(() => ({ running: true, phase: 'waiting', url: 'https://example.test/login' })),
+    browserLoginStatus: vi.fn(() => ({ running: false, phase: 'idle' })),
+    cancelBrowserLogin: vi.fn(),
+    close: vi.fn(),
     ...overrides,
   }
 }
@@ -220,90 +220,64 @@ describe('settings API', () => {
 })
 
 describe('account API', () => {
-  it('signs in with a phone number and password and returns the account status', async () => {
-    const login = vi.fn(async () => undefined)
-    const { adapter } = makeAdapter({ loginWithPassword: login })
+  it('starts a browser login and reports its status', async () => {
+    const startBrowserLogin = vi.fn(() => ({ running: true, phase: 'waiting', url: 'https://example.test/login' }))
+    const { adapter } = makeAdapter({ startBrowserLogin })
     const { res, captured } = response()
     await handleApi(jsonRequest(`${API_PREFIX}/account`, {
       brand: 'loomy',
-      action: 'password',
-      phone: '13800000000',
-      password: 'Abcdef123456!',
+      action: 'browser',
     }), res, { loomy: adapter, raccoon: adapter })
     expect(captured.status).toBe(200)
-    expect(login).toHaveBeenCalledWith('13800000000', 'Abcdef123456!')
-    expect(captured.body).toMatchObject({ brand: 'loomy', signedIn: true })
-    expect(JSON.stringify(captured.body)).not.toContain('Abcdef123456!')
-  })
-
-  it('validates the phone number before calling the provider', async () => {
-    const login = vi.fn(async () => undefined)
-    const { adapter } = makeAdapter({ loginWithPassword: login })
-    const { res, captured } = response()
-    await handleApi(jsonRequest(`${API_PREFIX}/account`, {
+    expect(startBrowserLogin).toHaveBeenCalledOnce()
+    expect(captured.body).toMatchObject({
       brand: 'loomy',
-      action: 'password',
-      phone: '123',
-      password: 'x',
-    }), res, { loomy: adapter, raccoon: adapter })
-    expect(captured.status).toBe(400)
-    expect(login).not.toHaveBeenCalled()
-  })
-
-  it('maps bad credentials to 401 without echoing the password', async () => {
-    const login = vi.fn(async () => {
-      throw new LoginError('手机号或密码错误。', 'BAD_CREDENTIALS')
+      running: true,
+      phase: 'waiting',
+      url: 'https://example.test/login',
     })
-    const { adapter } = makeAdapter({ loginWithPassword: login })
-    const { res, captured } = response()
-    await handleApi(jsonRequest(`${API_PREFIX}/account`, {
-      brand: 'loomy',
-      action: 'password',
-      phone: '13800000001',
-      password: 'Secret123!',
-    }), res, { loomy: adapter, raccoon: adapter })
-    expect(captured.status).toBe(401)
-    expect(captured.body.error).toBe('手机号或密码错误。')
-    expect(JSON.stringify(captured.body)).not.toContain('Secret123!')
   })
 
-  it('sends and exchanges an SMS code', async () => {
-    const sendSmsCode = vi.fn(async () => ({ msgid: 'msg-9' }))
-    const loginWithSms = vi.fn(async () => undefined)
-    const { adapter } = makeAdapter({ sendSmsCode, loginWithSms })
-    const send = response()
-    await handleApi(jsonRequest(`${API_PREFIX}/account`, {
-      brand: 'loomy',
-      action: 'sms-send',
-      phone: '13800000002',
-    }), send.res, { loomy: adapter, raccoon: adapter })
-    expect(send.captured.status).toBe(200)
-    expect(send.captured.body.msgid).toBe('msg-9')
-
-    const verify = response()
-    await handleApi(jsonRequest(`${API_PREFIX}/account`, {
-      brand: 'loomy',
-      action: 'sms-login',
-      phone: '13800000002',
-      code: '123456',
-      msgid: 'msg-9',
-    }), verify.res, { loomy: adapter, raccoon: adapter })
-    expect(verify.captured.status).toBe(200)
-    expect(loginWithSms).toHaveBeenCalledWith('13800000002', '123456', 'msg-9')
-  })
-
-  it('reports Raccoon SMS as unsupported instead of pretending to send', async () => {
+  it('surfaces a missing-browser error instead of pretending to run', async () => {
     const { adapter } = makeAdapter({
-      sendSmsCode: async () => { throw new Error('小浣熊的短信登录需要网页滑块验证，插件内不支持；请使用手机号 + 密码登录。') },
+      startBrowserLogin: () => { throw new Error('未找到可用的 Chromium 浏览器（Edge / Chrome）。') },
     })
     const { res, captured } = response()
-    await handleApi(jsonRequest(`${API_PREFIX}/account`, {
-      brand: 'raccoon',
-      action: 'sms-send',
-      phone: '13800000003',
-    }), res, { loomy: adapter, raccoon: adapter })
+    await handleApi(jsonRequest(`${API_PREFIX}/account`, { brand: 'loomy', action: 'browser' }), res, {
+      loomy: adapter,
+      raccoon: adapter,
+    })
     expect(captured.status).toBe(400)
-    expect(String(captured.body.error)).toContain('滑块')
+    expect(String(captured.body.error)).toContain('Chromium')
+  })
+
+  it('serves the browser login status for polling', async () => {
+    const { adapter } = makeAdapter({
+      browserLoginStatus: () => ({ running: true, phase: 'waiting', url: 'https://example.test/login' }),
+    })
+    const { res, captured } = response()
+    await handleApi(request(`${API_PREFIX}/account/browser?brand=loomy`), res, {
+      loomy: adapter,
+      raccoon: adapter,
+    })
+    expect(captured.status).toBe(200)
+    expect(captured.body).toMatchObject({ brand: 'loomy', running: true, phase: 'waiting' })
+  })
+
+  it('cancels an in-flight browser login', async () => {
+    const cancelBrowserLogin = vi.fn()
+    const { adapter } = makeAdapter({
+      cancelBrowserLogin,
+      browserLoginStatus: () => ({ running: false, phase: 'cancelled', error: '已取消登录。' }),
+    })
+    const { res, captured } = response()
+    await handleApi(jsonRequest(`${API_PREFIX}/account`, { brand: 'loomy', action: 'browser-cancel' }), res, {
+      loomy: adapter,
+      raccoon: adapter,
+    })
+    expect(captured.status).toBe(200)
+    expect(cancelBrowserLogin).toHaveBeenCalledOnce()
+    expect(captured.body).toMatchObject({ phase: 'cancelled' })
   })
 
   it('signs out and clears the account state', async () => {
@@ -327,7 +301,7 @@ describe('account API', () => {
     const { adapter } = makeAdapter()
     const unknownAction = response()
     await handleApi(jsonRequest(`${API_PREFIX}/account`, {
-      brand: 'loomy', action: 'face', phone: '13800000004',
+      brand: 'loomy', action: 'password',
     }), unknownAction.res, { loomy: adapter, raccoon: adapter })
     expect(unknownAction.captured.status).toBe(400)
 

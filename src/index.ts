@@ -46,17 +46,21 @@ export type { AuthStatus, LocalAccount } from './auth.ts'
 export { AccountStore } from './account-store.ts'
 export type { AccountSource, LoomyAccountRecord, RaccoonAccountRecord, StoredAccounts } from './account-store.ts'
 export {
-  LoginError, LOOMY_ACCOUNT_BASE, RACCOON_WEB_BASE, loomyEncryptPassword, loomyStringToSign,
-  loomySignature, loomyLoginWithPassword, loomySendSmsCode, loomyLoginWithSms,
-  raccoonEncrypt, raccoonLoginWithPassword,
-} from './login.ts'
-export type { LoomyLoginResult, RaccoonLoginResult } from './login.ts'
+  BrowserLoginError, BrowserLoginFlow, browserCandidates, findBrowser, tokensFromAuthResponses,
+  LOOMY_LOGIN_PROBE, RACCOON_LOGIN_PROBE,
+} from './browser-login.ts'
+export type {
+  BrowserAccount, BrowserDriver, BrowserLauncher, BrowserLoginPhase, BrowserLoginSpec,
+  BrowserLoginStatus, BrowserProfile, BrowserProbeValue,
+} from './browser-login.ts'
 export { BRANDS, LOOMY_BRAND, RACCOON_BRAND, LOOMY_PROVIDER, RACCOON_PROVIDER, isBrandId } from './brand.ts'
 export type { BrandId, BrandProfile } from './brand.ts'
 export { ModelCatalog, parseLoomyCatalog, parseRaccoonCatalog, priceFactorOf, RACCOON_MEASURED_VISION } from './catalog.ts'
 export type { ProviderModel } from './catalog.ts'
-export { LoomyProvider, LOOMY_BASE, LOOMY_VERSION } from './loomy.ts'
-export { RaccoonProvider, RACCOON_BASE, RACCOON_CLIENT_VERSION } from './raccoon.ts'
+export { LoomyProvider, LOOMY_BASE, LOOMY_VERSION, loomyGatewaySessionValid } from './loomy.ts'
+export {
+  RaccoonProvider, RACCOON_BASE, RACCOON_CLIENT_VERSION, raccoonAccessTokenValid, raccoonRefreshCandidate,
+} from './raccoon.ts'
 export { ProviderHttpError, buildMessages, buildTools, openAiStream, sseEvents } from './wire.ts'
 export type { WireMessage } from './wire.ts'
 export { API_PREFIX, buildRows } from './api.ts'

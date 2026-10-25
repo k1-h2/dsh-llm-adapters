@@ -241,4 +241,15 @@ describe('account-store credentials', () => {
     expect((await auth.status()).sourceKind).toBe('file')
     expect(await fs.readFile(desktopFile, 'utf8')).toContain('access_token')
   })
+
+  it('treats an opaque browser-login token as signed in until the gateway rejects it', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'raccoon-opaque-'))
+    const store = new AccountStore(() => root)
+    await store.saveRaccoon({ accessToken: 'opaque-browser-token-1234567890', loginAt: Date.now() })
+    const auth = new RaccoonAuth(() => path.join(root, 'missing.json'), store)
+    const status = await auth.status()
+    expect(status).toMatchObject({ signedIn: true, sourceKind: 'account' })
+    expect(status.possiblyExpired).toBeUndefined()
+    expect(await auth.accessToken()).toBe('opaque-browser-token-1234567890')
+  })
 })

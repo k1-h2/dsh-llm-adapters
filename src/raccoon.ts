@@ -11,10 +11,12 @@
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { AccountStore } from './account-store.ts'
 import { RaccoonAuth } from './auth.ts'
+import { BrowserLoginFlow, RACCOON_LOGIN_PROBE } from './browser-login.ts'
+import type { BrowserLoginStatus } from './browser-login.ts'
 import { ModelCatalog, parseRaccoonCatalog } from './catalog.ts'
 import type { ProviderModel } from './catalog.ts'
 import { fetchJson } from './http.ts'
-import { raccoonAccountInfo, raccoonLoginWithPassword } from './login.ts'
+import { raccoonAccountInfo } from './account-profile.ts'
 import type { QuotaSnapshot } from './types.ts'
 import { ProviderHttpError, buildBody, buildMessages, buildTools, openAiStream } from './wire.ts'
 import type { ReadImage } from './wire.ts'
@@ -44,10 +46,75 @@ function messageOf(payload: unknown): string | undefined {
   return typeof record.message === 'string' && record.message.length > 0 ? record.message : undefined
 }
 
+function raccoonHeaders(token: string): Record<string, string> {
+  return {
+    authorization: `Bearer ${token}`,
+    'x-org-code': '',
+    'x-raccoon-language': 'zh-CN',
+    'x-client-platform': 'desktop',
+    'x-client-version': RACCOON_CLIENT_VERSION,
+  }
+}
+
+/** Whether the gateway accepts a token harvested from the browser. */
+export async function raccoonAccessTokenValid(
+  token: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<boolean> {
+  try {
+    const response = await fetchImpl(`${RACCOON_BASE}/llm/v2/model_catalog`, {
+      headers: { ...raccoonHeaders(token), accept: 'application/json' },
+      signal: AbortSignal.timeout(15_000),
+    })
+    if (!response.ok) return false
+    const payload: unknown = JSON.parse(await response.text())
+    if (payload === null || typeof payload !== 'object') return false
+    const record = payload as Record<string, unknown>
+    if (typeof record.code === 'number' && record.code !== 0) return false
+    const data = record.data !== null && typeof record.data === 'object'
+      ? record.data as Record<string, unknown>
+      : undefined
+    return Array.isArray(data?.categories)
+  } catch {
+    return false
+  }
+}
+
+function jwtExpiry(token: string): number | undefined {
+  const parts = token.split('.')
+  if (parts.length < 2) return undefined
+  try {
+    const base64 = parts[1]!.replace(/-/g, '+').replace(/_/g, '/')
+    const padded = base64 + '='.repeat((4 - base64.length % 4) % 4)
+    const payload: unknown = JSON.parse(Buffer.from(padded, 'base64').toString('utf8'))
+    if (payload === null || typeof payload !== 'object') return undefined
+    const exp = (payload as Record<string, unknown>).exp
+    return typeof exp === 'number' && Number.isFinite(exp) ? exp : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Among the tokens a browser login leaves behind, the refresh token is the
+ * other JWT with the furthest expiry; the access token itself is excluded.
+ */
+export function raccoonRefreshCandidate(tokens: readonly string[], accessToken: string): string | undefined {
+  let best: { token: string, expiry: number } | undefined
+  for (const token of tokens) {
+    if (token === accessToken) continue
+    const expiry = jwtExpiry(token)
+    if (expiry === undefined) continue
+    if (best === undefined || expiry > best.expiry) best = { token, expiry }
+  }
+  return best?.token
+}
+
 export class RaccoonProvider {
   readonly catalog: ModelCatalog
   private quotaCache: { at: number, value: QuotaSnapshot } | undefined
   private quotaInflight: Promise<QuotaSnapshot> | undefined
+  private browserFlow: BrowserLoginFlow | undefined
 
   constructor(private readonly options: RaccoonProviderOptions) {
     this.catalog = new ModelCatalog(
@@ -65,41 +132,61 @@ export class RaccoonProvider {
   }
 
   /**
-   * Sign in through the web account service and keep the token pair in the
-   * plugin store. The password is encrypted for transit and never persisted.
+   * Open a browser window for the user to sign in, then adopt the token pair
+   * it leaves behind. The pair is only stored after the gateway accepts it.
    */
-  async loginWithPassword(phone: string, password: string): Promise<void> {
-    const result = await raccoonLoginWithPassword({
-      phone,
-      password,
-      fetchImpl: this.options.fetchImpl,
-    })
-    const info = await raccoonAccountInfo({
-      accessToken: result.accessToken,
-      fetchImpl: this.options.fetchImpl,
-    })
-    await this.options.store.saveRaccoon({
-      accessToken: result.accessToken,
-      loginAt: Date.now(),
-      ...result.refreshToken === undefined ? {} : { refreshToken: result.refreshToken },
-      ...info.phone === undefined ? { phone } : { phone: info.phone },
-      ...info.name === undefined ? {} : { name: info.name },
-      ...info.ownerType === undefined ? {} : { ownerType: info.ownerType },
-    })
-    this.invalidateModels()
-    this.invalidateQuota()
+  startBrowserLogin(): BrowserLoginStatus {
+    return this.browser().start()
   }
 
-  /**
-   * The web SMS endpoint is gated by an Aliyun slider captcha, which this
-   * plugin cannot solve without a browser automation dependency.
-   */
-  async sendSmsCode(_phone: string): Promise<{ msgid: string }> {
-    throw new Error('小浣熊的短信登录需要网页滑块验证，插件内不支持；请使用手机号 + 密码登录。')
+  browserLoginStatus(): BrowserLoginStatus {
+    return this.browserFlow?.status() ?? { running: false, phase: 'idle' }
   }
 
-  async loginWithSms(_phone: string, _code: string, _msgid: string): Promise<void> {
-    throw new Error('小浣熊的短信登录需要网页滑块验证，插件内不支持；请使用手机号 + 密码登录。')
+  cancelBrowserLogin(): void {
+    this.browserFlow?.cancel()
+  }
+
+  /** Close a login window that outlived the plugin. */
+  close(): void {
+    this.browserFlow?.cancel()
+  }
+
+  private browser(): BrowserLoginFlow {
+    if (this.browserFlow !== undefined) return this.browserFlow
+    const fetchImpl = this.options.fetchImpl ?? fetch
+    this.browserFlow = new BrowserLoginFlow({
+      hosts: ['xiaohuanxiong.com'],
+      cookieDomains: ['xiaohuanxiong.com'],
+      loginUrl: 'https://www.xiaohuanxiong.com/work?lang=zh',
+      probe: RACCOON_LOGIN_PROBE,
+      resolve: async ({ tokens }) => {
+        for (const token of tokens) {
+          if (!(await raccoonAccessTokenValid(token, fetchImpl))) continue
+          const refreshToken = raccoonRefreshCandidate(tokens, token)
+          const info = await raccoonAccountInfo({ accessToken: token, fetchImpl })
+          return {
+            token,
+            ...(refreshToken === undefined ? {} : { refreshToken }),
+            ...info,
+          }
+        }
+        return undefined
+      },
+      save: async account => {
+        await this.options.store.saveRaccoon({
+          accessToken: account.token,
+          loginAt: Date.now(),
+          ...(account.refreshToken === undefined ? {} : { refreshToken: account.refreshToken }),
+          ...(account.phone === undefined ? {} : { phone: account.phone }),
+          ...(account.name === undefined ? {} : { name: account.name }),
+          ...(account.ownerType === undefined ? {} : { ownerType: account.ownerType }),
+        })
+        this.invalidateModels()
+        this.invalidateQuota()
+      },
+    })
+    return this.browserFlow
   }
 
   async logoutAccount(): Promise<void> {
@@ -109,13 +196,7 @@ export class RaccoonProvider {
   }
 
   private headers(token: string): Record<string, string> {
-    return {
-      authorization: `Bearer ${token}`,
-      'x-org-code': '',
-      'x-raccoon-language': 'zh-CN',
-      'x-client-platform': 'desktop',
-      'x-client-version': RACCOON_CLIENT_VERSION,
-    }
+    return raccoonHeaders(token)
   }
 
   /** Run one JSON call, refreshing once when the gateway rejects the token. */
@@ -142,7 +223,7 @@ export class RaccoonProvider {
         if (retryError instanceof ProviderHttpError && retryError.status === 401) {
           this.invalidateModels()
           this.invalidateQuota()
-          throw new Error('小浣熊登录态被上游拒绝。请打开小浣熊桌面端重新登录。')
+          throw new Error('小浣熊登录态被上游拒绝。请在设置页重新登录，或打开小浣熊桌面端重新登录。')
         }
         throw retryError
       }
@@ -247,7 +328,7 @@ export class RaccoonProvider {
           continue
         }
         if (error instanceof ProviderHttpError && (error.status === 401 || error.status === 403)) {
-          throw new Error('小浣熊登录态被上游拒绝。请打开小浣熊桌面端重新登录，然后在设置页点“重新读取登录态”。')
+          throw new Error('小浣熊登录态被上游拒绝。请在设置页重新登录，或打开小浣熊桌面端重新登录后再点“重新读取登录态”。')
         }
         throw error
       }
