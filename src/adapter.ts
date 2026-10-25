@@ -14,7 +14,7 @@ import type {
   PreparedAdapterCall, StreamChunk,
 } from '@deepseek-ai/dsh-llm'
 import type { BrandId } from './brand.ts'
-import type { BrowserLoginStatus } from './browser-login.ts'
+import type { LoginStatus } from './login-page.ts'
 import type { ProviderModel } from './catalog.ts'
 import { LoomyProvider } from './loomy.ts'
 import { RaccoonProvider } from './raccoon.ts'
@@ -71,7 +71,7 @@ export abstract class LocalAdapter extends LlmAdapter {
   async catalogError(): Promise<string | undefined> {
     if (!(await this.client.signedIn())) {
       const status = await this.client.status()
-      return status.error ?? '尚未登录。请在设置页用浏览器登录，或先打开对应桌面应用完成登录。'
+      return status.error ?? '尚未登录。请在设置页用浏览器扫码登录，或先打开对应桌面应用完成登录。'
     }
     return this.client.catalogError()
   }
@@ -81,17 +81,17 @@ export abstract class LocalAdapter extends LlmAdapter {
     await this.client.logoutAccount()
   }
 
-  /** Open a browser window for the user to sign in. */
-  startBrowserLogin(): BrowserLoginStatus {
+  /** Start the local QR page and return the URL the settings page opens. */
+  startBrowserLogin(): Promise<LoginStatus> {
     return this.client.startBrowserLogin()
   }
 
-  browserLoginStatus(): BrowserLoginStatus {
+  browserLoginStatus(): LoginStatus {
     return this.client.browserLoginStatus()
   }
 
-  cancelBrowserLogin(): void {
-    this.client.cancelBrowserLogin()
+  cancelBrowserLogin(): Promise<void> {
+    return this.client.cancelBrowserLogin()
   }
 
   invalidateCatalog(): void {
@@ -161,7 +161,7 @@ export abstract class LocalAdapter extends LlmAdapter {
   async *stream(options: GenerateOptions): AsyncGenerator<StreamChunk> {
     if (!(await this.client.signedIn())) {
       const status = await this.client.status()
-      throw new Error(status.error ?? '尚未登录。请在设置页用浏览器登录，或先打开对应桌面应用完成登录。')
+      throw new Error(status.error ?? '尚未登录。请在设置页用浏览器扫码登录，或先打开对应桌面应用完成登录。')
     }
     const model = resolveModelId(options.model, this.options.modelAliases())
     const live = (await this.client.models()).find(entry => entry.id === model)

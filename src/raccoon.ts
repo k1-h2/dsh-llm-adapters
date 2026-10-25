@@ -11,12 +11,11 @@
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { AccountStore } from './account-store.ts'
 import { RaccoonAuth } from './auth.ts'
-import { BrowserLoginFlow, RACCOON_LOGIN_PROBE } from './browser-login.ts'
-import type { BrowserLoginStatus } from './browser-login.ts'
+import { RaccoonQrLogin } from './raccoon-login.ts'
+import type { LoginStatus } from './login-page.ts'
 import { ModelCatalog, parseRaccoonCatalog } from './catalog.ts'
 import type { ProviderModel } from './catalog.ts'
 import { fetchJson } from './http.ts'
-import { raccoonAccountInfo } from './account-profile.ts'
 import type { QuotaSnapshot } from './types.ts'
 import { ProviderHttpError, buildBody, buildMessages, buildTools, openAiStream } from './wire.ts'
 import type { ReadImage } from './wire.ts'
@@ -114,7 +113,7 @@ export class RaccoonProvider {
   readonly catalog: ModelCatalog
   private quotaCache: { at: number, value: QuotaSnapshot } | undefined
   private quotaInflight: Promise<QuotaSnapshot> | undefined
-  private browserFlow: BrowserLoginFlow | undefined
+  private loginFlow: RaccoonQrLogin | undefined
 
   constructor(private readonly options: RaccoonProviderOptions) {
     this.catalog = new ModelCatalog(
@@ -131,48 +130,28 @@ export class RaccoonProvider {
     return (await this.options.auth.status()).signedIn
   }
 
-  /**
-   * Open a browser window for the user to sign in, then adopt the token pair
-   * it leaves behind. The pair is only stored after the gateway accepts it.
-   */
-  startBrowserLogin(): BrowserLoginStatus {
-    return this.browser().start()
+  /** Start the local WeChat QR page; the settings page opens the returned URL. */
+  async startBrowserLogin(): Promise<LoginStatus> {
+    return this.login().start()
   }
 
-  browserLoginStatus(): BrowserLoginStatus {
-    return this.browserFlow?.status() ?? { running: false, phase: 'idle' }
+  browserLoginStatus(): LoginStatus {
+    return this.loginFlow?.status() ?? { running: false, phase: 'idle' }
   }
 
-  cancelBrowserLogin(): void {
-    this.browserFlow?.cancel()
+  async cancelBrowserLogin(): Promise<void> {
+    await this.loginFlow?.cancel()
   }
 
-  /** Close a login window that outlived the plugin. */
+  /** Stop a login page that outlived the plugin. */
   close(): void {
-    this.browserFlow?.cancel()
+    void this.loginFlow?.cancel()
   }
 
-  private browser(): BrowserLoginFlow {
-    if (this.browserFlow !== undefined) return this.browserFlow
-    const fetchImpl = this.options.fetchImpl ?? fetch
-    this.browserFlow = new BrowserLoginFlow({
-      hosts: ['xiaohuanxiong.com'],
-      cookieDomains: ['xiaohuanxiong.com'],
-      loginUrl: 'https://www.xiaohuanxiong.com/work?lang=zh',
-      probe: RACCOON_LOGIN_PROBE,
-      resolve: async ({ tokens }) => {
-        for (const token of tokens) {
-          if (!(await raccoonAccessTokenValid(token, fetchImpl))) continue
-          const refreshToken = raccoonRefreshCandidate(tokens, token)
-          const info = await raccoonAccountInfo({ accessToken: token, fetchImpl })
-          return {
-            token,
-            ...(refreshToken === undefined ? {} : { refreshToken }),
-            ...info,
-          }
-        }
-        return undefined
-      },
+  private login(): RaccoonQrLogin {
+    if (this.loginFlow !== undefined) return this.loginFlow
+    this.loginFlow = new RaccoonQrLogin({
+      fetchImpl: this.options.fetchImpl ?? fetch,
       save: async account => {
         await this.options.store.saveRaccoon({
           accessToken: account.token,
@@ -186,7 +165,7 @@ export class RaccoonProvider {
         this.invalidateQuota()
       },
     })
-    return this.browserFlow
+    return this.loginFlow
   }
 
   async logoutAccount(): Promise<void> {

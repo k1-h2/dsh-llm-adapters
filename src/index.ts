@@ -45,14 +45,19 @@ export { LoomyAuth, RaccoonAuth, decodeJwtFacts } from './auth.ts'
 export type { AuthStatus, LocalAccount } from './auth.ts'
 export { AccountStore } from './account-store.ts'
 export type { AccountSource, LoomyAccountRecord, RaccoonAccountRecord, StoredAccounts } from './account-store.ts'
-export {
-  BrowserLoginError, BrowserLoginFlow, browserCandidates, findBrowser, tokensFromAuthResponses,
-  LOOMY_LOGIN_PROBE, RACCOON_LOGIN_PROBE,
-} from './browser-login.ts'
+export { startLoginPage } from './login-page.ts'
 export type {
-  BrowserAccount, BrowserDriver, BrowserLauncher, BrowserLoginPhase, BrowserLoginSpec,
-  BrowserLoginStatus, BrowserProfile, BrowserProbeValue,
-} from './browser-login.ts'
+  LoginBindingSpec, LoginPageHandle, LoginPageSpec, LoginPhase, LoginPoll, LoginStatus,
+} from './login-page.ts'
+export {
+  LoomyQrLogin, LOOMY_ACCOUNT_BASE, LOOMY_WECHAT_APP_ID, LOOMY_WECHAT_REDIRECT_URI,
+  buildLoomyWechatAuthUrl, extractWechatUuid, fetchLoomyWechatUuid,
+} from './loomy-login.ts'
+export type { LoomyLoginAccount, LoomyLoginOptions } from './loomy-login.ts'
+export { RaccoonQrLogin, RACCOON_QR_ORIGIN, pollRaccoonQr, raccoonQrCode, raccoonQrContent } from './raccoon-login.ts'
+export type { RaccoonLoginAccount, RaccoonLoginOptions } from './raccoon-login.ts'
+export { buildQrMatrix, renderQrSvg } from './qr.ts'
+export type { QrMatrix } from './qr.ts'
 export { BRANDS, LOOMY_BRAND, RACCOON_BRAND, LOOMY_PROVIDER, RACCOON_PROVIDER, isBrandId } from './brand.ts'
 export type { BrandId, BrandProfile } from './brand.ts'
 export { ModelCatalog, parseLoomyCatalog, parseRaccoonCatalog, priceFactorOf, RACCOON_MEASURED_VISION } from './catalog.ts'

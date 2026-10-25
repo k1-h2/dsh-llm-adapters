@@ -14,8 +14,8 @@ import { attributionHeaders } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { AccountStore } from './account-store.ts'
 import { LoomyAuth } from './auth.ts'
-import { BrowserLoginFlow, LOOMY_LOGIN_PROBE } from './browser-login.ts'
-import type { BrowserLoginStatus } from './browser-login.ts'
+import { LoomyQrLogin } from './loomy-login.ts'
+import type { LoginStatus } from './login-page.ts'
 import { parseLoomyCatalog, ModelCatalog } from './catalog.ts'
 import type { ProviderModel } from './catalog.ts'
 import { fetchJson } from './http.ts'
@@ -122,7 +122,7 @@ export class LoomyProvider {
   readonly catalog: ModelCatalog
   private quotaCache: { at: number, value: QuotaSnapshot } | undefined
   private quotaInflight: Promise<QuotaSnapshot> | undefined
-  private browserFlow: BrowserLoginFlow | undefined
+  private loginFlow: LoomyQrLogin | undefined
 
   constructor(private readonly options: LoomyProviderOptions) {
     this.catalog = new ModelCatalog(
@@ -139,47 +139,28 @@ export class LoomyProvider {
     return (await this.options.auth.status()).signedIn
   }
 
-  /**
-   * Open a browser window for the user to sign in, then adopt the session it
-   * leaves behind. Nothing is stored until the gateway accepts that session.
-   */
-  startBrowserLogin(): BrowserLoginStatus {
-    return this.browser().start()
+  /** Start the local WeChat QR page; the settings page opens the returned URL. */
+  async startBrowserLogin(): Promise<LoginStatus> {
+    return this.login().start()
   }
 
-  browserLoginStatus(): BrowserLoginStatus {
-    return this.browserFlow?.status() ?? { running: false, phase: 'idle' }
+  browserLoginStatus(): LoginStatus {
+    return this.loginFlow?.status() ?? { running: false, phase: 'idle' }
   }
 
-  cancelBrowserLogin(): void {
-    this.browserFlow?.cancel()
+  async cancelBrowserLogin(): Promise<void> {
+    await this.loginFlow?.cancel()
   }
 
-  /** Close a login window that outlived the plugin. */
+  /** Stop a login page that outlived the plugin. */
   close(): void {
-    this.browserFlow?.cancel()
+    void this.loginFlow?.cancel()
   }
 
-  private browser(): BrowserLoginFlow {
-    if (this.browserFlow !== undefined) return this.browserFlow
-    const fetchImpl = this.options.fetchImpl ?? fetch
-    this.browserFlow = new BrowserLoginFlow({
-      hosts: ['xunfei.cn', 'xfinfr.com'],
-      cookieDomains: ['xunfei.cn'],
-      loginUrl: 'https://loomy.xunfei.cn/login?returnTo=%2Fchat',
-      probe: LOOMY_LOGIN_PROBE,
-      resolve: async ({ tokens, profile }) => {
-        for (const token of tokens) {
-          if (!(await loomyGatewaySessionValid(token, fetchImpl))) continue
-          return {
-            token,
-            ...(profile?.name === undefined ? {} : { name: profile.name }),
-            ...(profile?.phone === undefined ? {} : { phone: profile.phone }),
-            ...(profile?.userId === undefined ? {} : { userId: profile.userId }),
-          }
-        }
-        return undefined
-      },
+  private login(): LoomyQrLogin {
+    if (this.loginFlow !== undefined) return this.loginFlow
+    this.loginFlow = new LoomyQrLogin({
+      fetchImpl: this.options.fetchImpl ?? fetch,
       save: async account => {
         const deviceId = await this.options.store.loomyDeviceId()
         const now = Date.now()
@@ -196,7 +177,7 @@ export class LoomyProvider {
         this.invalidateQuota()
       },
     })
-    return this.browserFlow
+    return this.loginFlow
   }
 
   async logoutAccount(): Promise<void> {
@@ -209,7 +190,7 @@ export class LoomyProvider {
     const session = await this.options.auth.session()
     if (session !== undefined) return session
     const status = await this.options.auth.status()
-    throw new Error(status.error ?? 'Loomy 尚未登录。请在设置页用浏览器登录，或启动 Loomy 客户端完成登录。')
+    throw new Error(status.error ?? 'Loomy 尚未登录。请在设置页用浏览器扫码登录，或启动 Loomy 客户端完成登录。')
   }
 
   private async fetchModels(): Promise<ProviderModel[]> {

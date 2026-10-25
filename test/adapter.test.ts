@@ -220,8 +220,8 @@ describe('settings API', () => {
 })
 
 describe('account API', () => {
-  it('starts a browser login and reports its status', async () => {
-    const startBrowserLogin = vi.fn(() => ({ running: true, phase: 'waiting', url: 'https://example.test/login' }))
+  it('starts a QR login and reports its status', async () => {
+    const startBrowserLogin = vi.fn(async () => ({ running: true, phase: 'waiting', url: 'https://example.test/login' }))
     const { adapter } = makeAdapter({ startBrowserLogin })
     const { res, captured } = response()
     await handleApi(jsonRequest(`${API_PREFIX}/account`, {
@@ -238,9 +238,9 @@ describe('account API', () => {
     })
   })
 
-  it('surfaces a missing-browser error instead of pretending to run', async () => {
+  it('surfaces a local-page error instead of pretending to run', async () => {
     const { adapter } = makeAdapter({
-      startBrowserLogin: () => { throw new Error('未找到可用的 Chromium 浏览器（Edge / Chrome）。') },
+      startBrowserLogin: async () => { throw new Error('本地登录页启动失败。') },
     })
     const { res, captured } = response()
     await handleApi(jsonRequest(`${API_PREFIX}/account`, { brand: 'loomy', action: 'browser' }), res, {
@@ -248,10 +248,10 @@ describe('account API', () => {
       raccoon: adapter,
     })
     expect(captured.status).toBe(400)
-    expect(String(captured.body.error)).toContain('Chromium')
+    expect(String(captured.body.error)).toContain('本地登录页')
   })
 
-  it('serves the browser login status for polling', async () => {
+  it('serves the QR login status for polling', async () => {
     const { adapter } = makeAdapter({
       browserLoginStatus: () => ({ running: true, phase: 'waiting', url: 'https://example.test/login' }),
     })
@@ -264,8 +264,8 @@ describe('account API', () => {
     expect(captured.body).toMatchObject({ brand: 'loomy', running: true, phase: 'waiting' })
   })
 
-  it('cancels an in-flight browser login', async () => {
-    const cancelBrowserLogin = vi.fn()
+  it('cancels an in-flight QR login', async () => {
+    const cancelBrowserLogin = vi.fn(async () => undefined)
     const { adapter } = makeAdapter({
       cancelBrowserLogin,
       browserLoginStatus: () => ({ running: false, phase: 'cancelled', error: '已取消登录。' }),
