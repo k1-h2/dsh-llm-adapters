@@ -12,7 +12,6 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { LocalAdapter } from './adapter.ts'
 import type { BrandId } from './brand.ts'
 import { isBrandId } from './brand.ts'
-import { LoginError } from './login.ts'
 
 export const API_PREFIX = '/api/llm-adapters'
 
@@ -93,41 +92,16 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
   return JSON.parse(text)
 }
 
-/** Brute-force guard: failed attempts per provider in a rolling window. */
-const MAX_LOGIN_FAILURES = 8
-const FAILURE_WINDOW_MS = 5 * 60 * 1_000
-const SMS_COOLDOWN_MS = 60_000
-const loginFailures = new Map<BrandId, { at: number, count: number }>()
-const smsSentAt = new Map<BrandId, number>()
-
 interface AccountRequest {
   brand?: unknown
   action?: unknown
-  phone?: unknown
-  password?: unknown
-  code?: unknown
-  msgid?: unknown
 }
 
-function phoneFrom(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined
-  const trimmed = value.replace(/\s+/g, '')
-  return /^1[3-9]\d{9}$/.test(trimmed) ? trimmed : undefined
-}
-
-function failureCode(code: string | undefined): number {
-  if (code === 'BAD_CREDENTIALS') return 401
-  if (code === 'RATE_LIMIT') return 429
-  if (code === 'NETWORK' || code === 'HTTP_502' || code === 'HTTP_504') return 502
-  return 400
-}
-
-async function sendStatus(res: ServerResponse, brand: BrandId, adapter: LocalAdapter, fresh: boolean): Promise<void> {
-  void brand
+async function sendStatus(res: ServerResponse, adapter: LocalAdapter, fresh: boolean): Promise<void> {
   send(res, 200, await adapter.usageInfo(fresh))
 }
 
-/** Account login, SMS sending, and sign-out; credentials travel in the body. */
+/** Browser sign-in control and sign-out; the page never sends credentials. */
 async function handleAccount(req: IncomingMessage, res: ServerResponse, adapters: AdapterMap): Promise<void> {
   let body: AccountRequest
   try {
@@ -146,76 +120,26 @@ async function handleAccount(req: IncomingMessage, res: ServerResponse, adapters
 
   if (action === 'logout') {
     await adapter.logoutAccount()
-    await sendStatus(res, brand, adapter, false)
+    await sendStatus(res, adapter, false)
     return
   }
 
-  const phone = phoneFrom(body.phone)
-  if (phone === undefined) {
-    send(res, 400, { error: '请输入 11 位手机号。' })
-    return
-  }
-
-  if (action === 'sms-send') {
-    const last = smsSentAt.get(brand)
-    if (last !== undefined && Date.now() - last < SMS_COOLDOWN_MS) {
-      send(res, 429, { error: `请等待 ${Math.ceil((SMS_COOLDOWN_MS - (Date.now() - last)) / 1000)} 秒后再获取验证码。` })
-      return
-    }
+  if (action === 'browser') {
     try {
-      const ticket = await adapter.sendSmsCode(phone)
-      smsSentAt.set(brand, Date.now())
-      send(res, 200, { brand, msgid: ticket.msgid, cooldownSeconds: Math.floor(SMS_COOLDOWN_MS / 1000) })
+      send(res, 200, { brand, ...adapter.startBrowserLogin() })
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      send(res, 400, { error: message })
+      send(res, 400, { error: error instanceof Error ? error.message : String(error) })
     }
     return
   }
 
-  if (action !== 'password' && action !== 'sms-login') {
-    send(res, 400, { error: 'action 只接受 password、sms-send、sms-login 或 logout' })
+  if (action === 'browser-cancel') {
+    adapter.cancelBrowserLogin()
+    send(res, 200, { brand, ...adapter.browserLoginStatus() })
     return
   }
 
-  const failure = loginFailures.get(brand)
-  if (failure !== undefined && failure.count >= MAX_LOGIN_FAILURES && Date.now() - failure.at < FAILURE_WINDOW_MS) {
-    send(res, 429, { error: '登录失败次数过多，请 5 分钟后再试。' })
-    return
-  }
-
-  try {
-    if (action === 'password') {
-      if (typeof body.password !== 'string' || body.password.length === 0 || body.password.length > 128) {
-        send(res, 400, { error: '请输入密码（最多 128 个字符）。' })
-        return
-      }
-      await adapter.loginWithPassword(phone, body.password)
-    } else {
-      if (typeof body.code !== 'string' || !/^\d{4,8}$/.test(body.code.trim())) {
-        send(res, 400, { error: '请输入短信验证码。' })
-        return
-      }
-      if (typeof body.msgid !== 'string' || body.msgid.length === 0) {
-        send(res, 400, { error: '请先获取短信验证码。' })
-        return
-      }
-      await adapter.loginWithSms(phone, body.code.trim(), body.msgid)
-    }
-    loginFailures.delete(brand)
-    smsSentAt.delete(brand)
-    await sendStatus(res, brand, adapter, true)
-  } catch (error) {
-    const code = error instanceof LoginError ? error.code : undefined
-    const previous = loginFailures.get(brand)
-    const next = previous !== undefined && Date.now() - previous.at < FAILURE_WINDOW_MS
-      ? { at: previous.at, count: previous.count + 1 }
-      : { at: Date.now(), count: 1 }
-    loginFailures.set(brand, next)
-    send(res, failureCode(code), {
-      error: error instanceof Error ? error.message : String(error),
-    })
-  }
+  send(res, 400, { error: 'action 只接受 browser、browser-cancel 或 logout' })
 }
 
 export async function handleApi(
@@ -242,6 +166,11 @@ export async function handleApi(
     }
     const adapter = adapters[brand]
     const fresh = url.searchParams.get('fresh') === '1'
+
+    if (path === '/account/browser' && method === 'GET') {
+      send(res, 200, { brand, ...adapter.browserLoginStatus() })
+      return
+    }
 
     if (path === '/models' && method === 'GET') {
       if (fresh) adapter.invalidateCatalog()

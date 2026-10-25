@@ -10,21 +10,23 @@
  */
 
 import { randomBytes, randomUUID } from 'node:crypto'
+import { attributionHeaders } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { AccountStore } from './account-store.ts'
 import { LoomyAuth } from './auth.ts'
+import { BrowserLoginFlow, LOOMY_LOGIN_PROBE } from './browser-login.ts'
+import type { BrowserLoginStatus } from './browser-login.ts'
 import { parseLoomyCatalog, ModelCatalog } from './catalog.ts'
 import type { ProviderModel } from './catalog.ts'
 import { fetchJson } from './http.ts'
-import {
-  LOOMY_SESSION_TTL_MS, loomyAccountName, loomyLoginWithPassword, loomyLoginWithSms, loomySendSmsCode,
-} from './login.ts'
 import type { QuotaSnapshot } from './types.ts'
 import { ProviderHttpError, buildBody, buildMessages, buildTools, openAiStream } from './wire.ts'
 import type { ReadImage } from './wire.ts'
 
 export const LOOMY_BASE = 'https://loomyad.xunfei.cn/api/v1'
 export const LOOMY_VERSION = '0.9.38'
+/** Session lifetime the Loomy client itself requests (14 days). */
+export const LOOMY_SESSION_TTL_MS = 14 * 24 * 60 * 60 * 1_000
 
 export interface LoomyProviderOptions {
   auth: LoomyAuth
@@ -58,6 +60,44 @@ function tracingHeaders(session: string, options: GenerateOptions, origin: 'user
   }
 }
 
+/**
+ * Whether the model gateway accepts a browser-obtained session.
+ *
+ * A web login can yield a session cookie that the web app itself uses; this
+ * probe is what decides whether that same value also works as a gateway
+ * credential. The gateway answers 200 with a JSON error code for a bad token,
+ * so HTTP status alone is not enough.
+ */
+export async function loomyGatewaySessionValid(
+  session: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<boolean> {
+  try {
+    const response = await fetchImpl(`${LOOMY_BASE}/models`, {
+      headers: {
+        ...attributionHeaders(),
+        accept: 'application/json',
+        ...tracingHeaders(session, { model: '', provider: '', messages: [] }, 'system'),
+      },
+      signal: AbortSignal.timeout(15_000),
+    })
+    if (!response.ok) return false
+    const payload: unknown = JSON.parse(await response.text())
+    const root = payload !== null && typeof payload === 'object' && !Array.isArray(payload)
+      ? payload as Record<string, unknown>
+      : undefined
+    const data = root?.data !== null && typeof root?.data === 'object'
+      ? root.data as Record<string, unknown>
+      : undefined
+    if (Array.isArray(payload)) return true
+    if (Array.isArray(root?.data)) return true
+    if (Array.isArray(root?.models)) return true
+    return Array.isArray(data?.models)
+  } catch {
+    return false
+  }
+}
+
 function numeric(value: unknown): number | undefined {
   if (typeof value === 'number' && Number.isFinite(value)) return value
   if (typeof value === 'string' && /^-?\d+(?:\.\d+)?$/.test(value.trim())) return Number(value)
@@ -82,6 +122,7 @@ export class LoomyProvider {
   readonly catalog: ModelCatalog
   private quotaCache: { at: number, value: QuotaSnapshot } | undefined
   private quotaInflight: Promise<QuotaSnapshot> | undefined
+  private browserFlow: BrowserLoginFlow | undefined
 
   constructor(private readonly options: LoomyProviderOptions) {
     this.catalog = new ModelCatalog(
@@ -99,61 +140,63 @@ export class LoomyProvider {
   }
 
   /**
-   * Sign in through the account service and keep the session in the plugin
-   * store. The password is encrypted for transit and never persisted.
+   * Open a browser window for the user to sign in, then adopt the session it
+   * leaves behind. Nothing is stored until the gateway accepts that session.
    */
-  async loginWithPassword(phone: string, password: string): Promise<void> {
-    const deviceId = await this.options.store.loomyDeviceId()
-    const result = await loomyLoginWithPassword({
-      phone,
-      password,
-      deviceId,
-      fetchImpl: this.options.fetchImpl,
-    })
-    const name = await loomyAccountName({
-      session: result.session,
-      deviceId,
-      fetchImpl: this.options.fetchImpl,
-    })
-    const now = Date.now()
-    await this.options.store.saveLoomy({
-      session: result.session,
-      deviceId,
-      loginAt: now,
-      expiresAt: now + LOOMY_SESSION_TTL_MS,
-      ...result.userId === undefined ? {} : { userId: result.userId },
-      ...result.phone === undefined ? { phone } : { phone: result.phone },
-      ...name === undefined ? {} : { name },
-    })
-    this.invalidateModels()
-    this.invalidateQuota()
+  startBrowserLogin(): BrowserLoginStatus {
+    return this.browser().start()
   }
 
-  async sendSmsCode(phone: string): Promise<{ msgid: string }> {
-    const deviceId = await this.options.store.loomyDeviceId()
-    return loomySendSmsCode({ phone, deviceId, fetchImpl: this.options.fetchImpl })
+  browserLoginStatus(): BrowserLoginStatus {
+    return this.browserFlow?.status() ?? { running: false, phase: 'idle' }
   }
 
-  async loginWithSms(phone: string, code: string, msgid: string): Promise<void> {
-    const deviceId = await this.options.store.loomyDeviceId()
-    const result = await loomyLoginWithSms({ phone, code, msgid, deviceId, fetchImpl: this.options.fetchImpl })
-    const name = await loomyAccountName({
-      session: result.session,
-      deviceId,
-      fetchImpl: this.options.fetchImpl,
+  cancelBrowserLogin(): void {
+    this.browserFlow?.cancel()
+  }
+
+  /** Close a login window that outlived the plugin. */
+  close(): void {
+    this.browserFlow?.cancel()
+  }
+
+  private browser(): BrowserLoginFlow {
+    if (this.browserFlow !== undefined) return this.browserFlow
+    const fetchImpl = this.options.fetchImpl ?? fetch
+    this.browserFlow = new BrowserLoginFlow({
+      hosts: ['xunfei.cn', 'xfinfr.com'],
+      cookieDomains: ['xunfei.cn'],
+      loginUrl: 'https://loomy.xunfei.cn/login?returnTo=%2Fchat',
+      probe: LOOMY_LOGIN_PROBE,
+      resolve: async ({ tokens, profile }) => {
+        for (const token of tokens) {
+          if (!(await loomyGatewaySessionValid(token, fetchImpl))) continue
+          return {
+            token,
+            ...(profile?.name === undefined ? {} : { name: profile.name }),
+            ...(profile?.phone === undefined ? {} : { phone: profile.phone }),
+            ...(profile?.userId === undefined ? {} : { userId: profile.userId }),
+          }
+        }
+        return undefined
+      },
+      save: async account => {
+        const deviceId = await this.options.store.loomyDeviceId()
+        const now = Date.now()
+        await this.options.store.saveLoomy({
+          session: account.token,
+          deviceId,
+          loginAt: now,
+          expiresAt: now + LOOMY_SESSION_TTL_MS,
+          ...(account.userId === undefined ? {} : { userId: account.userId }),
+          ...(account.phone === undefined ? {} : { phone: account.phone }),
+          ...(account.name === undefined ? {} : { name: account.name }),
+        })
+        this.invalidateModels()
+        this.invalidateQuota()
+      },
     })
-    const now = Date.now()
-    await this.options.store.saveLoomy({
-      session: result.session,
-      deviceId,
-      loginAt: now,
-      expiresAt: now + LOOMY_SESSION_TTL_MS,
-      ...result.userId === undefined ? {} : { userId: result.userId },
-      ...result.phone === undefined ? { phone } : { phone: result.phone },
-      ...name === undefined ? {} : { name },
-    })
-    this.invalidateModels()
-    this.invalidateQuota()
+    return this.browserFlow
   }
 
   async logoutAccount(): Promise<void> {
@@ -166,7 +209,7 @@ export class LoomyProvider {
     const session = await this.options.auth.session()
     if (session !== undefined) return session
     const status = await this.options.auth.status()
-    throw new Error(status.error ?? 'Loomy 尚未登录。请先启动 Loomy 客户端并完成登录。')
+    throw new Error(status.error ?? 'Loomy 尚未登录。请在设置页用浏览器登录，或启动 Loomy 客户端完成登录。')
   }
 
   private async fetchModels(): Promise<ProviderModel[]> {
@@ -267,7 +310,7 @@ export class LoomyProvider {
       })
     } catch (error) {
       if (error instanceof ProviderHttpError && (error.status === 401 || error.status === 403)) {
-        throw new Error('Loomy 登录态已失效。请打开 Loomy 客户端重新登录，然后在设置页点“重新读取登录态”。')
+        throw new Error('Loomy 登录态已失效。请在设置页重新登录浏览器账号，或打开 Loomy 客户端重新登录后再点“重新读取登录态”。')
       }
       throw error
     }

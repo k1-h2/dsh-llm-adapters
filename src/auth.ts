@@ -340,7 +340,7 @@ export class RaccoonAuth {
     }
     const file = this.path()
     if (!(await exists(file))) {
-      return { path: file, kind: 'file', error: '未登录小浣熊。请在下方用手机号与密码登录，或启动小浣熊桌面端完成登录。' }
+      return { path: file, kind: 'file', error: '未登录小浣熊。请用浏览器登录，或启动小浣熊桌面端完成登录。' }
     }
     const raw = await readJson(file)
     if (raw === undefined) return { path: file, kind: 'file', error: `无法读取小浣熊登录态文件：${file}` }
@@ -378,13 +378,19 @@ export class RaccoonAuth {
     const now = Date.now()
     const accessValid = accessFacts.expiresAt !== undefined && accessFacts.expiresAt > now + 30_000
     const refreshValid = refreshFacts.expiresAt !== undefined && refreshFacts.expiresAt > now + 30_000
-    const signedIn = accessValid || refreshValid
+    // A browser-login token is opaque to us (no JWT claims) but the gateway
+    // already accepted it when the flow stored it, so it counts as signed in.
+    const opaqueAccess = token.access !== undefined && accessFacts.expiresAt === undefined
+    const signedIn = opaqueAccess && loaded.kind === 'account'
+      ? true
+      : accessValid || refreshValid
     const account: LocalAccount = {}
     if (accessFacts.name !== undefined) account.name = accessFacts.name
     if (accessFacts.phone !== undefined) account.phone = accessFacts.phone
     if (accessFacts.ownerType !== undefined) account.ownerType = accessFacts.ownerType
     if (accessFacts.sessionId !== undefined) account.sessionId = accessFacts.sessionId
-    const needsRefresh = signedIn && (!accessValid || (accessFacts.expiresAt ?? 0) <= now + RACCOON_REFRESH_MARGIN_MS)
+    const needsRefresh = signedIn && !opaqueAccess
+      && (!accessValid || (accessFacts.expiresAt ?? 0) <= now + RACCOON_REFRESH_MARGIN_MS)
     const sourceKind = loaded.kind ?? 'file'
     return {
       signedIn,
@@ -395,13 +401,13 @@ export class RaccoonAuth {
       ...accessFacts.expiresAt === undefined ? {} : { expiresAt: accessFacts.expiresAt },
       ...refreshFacts.expiresAt === undefined ? {} : { refreshExpiresAt: refreshFacts.expiresAt },
       ...signedIn ? { needsRefresh } : {},
-      ...!accessValid && !refreshValid ? { possiblyExpired: true } : {},
+      ...!signedIn ? { possiblyExpired: true } : {},
       ...Object.keys(account).length === 0 ? {} : { account },
       ...signedIn
         ? {}
         : {
             error: sourceKind === 'account'
-              ? '小浣熊登录已过期，请在下方重新登录。'
+              ? '小浣熊登录已过期，请重新用浏览器登录。'
               : '小浣熊登录态已过期。请打开小浣熊桌面端重新登录。',
           },
     }
@@ -419,9 +425,12 @@ export class RaccoonAuth {
     if (loaded.raw === undefined) throw new Error(loaded.error ?? '小浣熊尚未登录。')
     const token = this.tokens(loaded.raw)
     const facts = token.access === undefined ? {} : decodeJwtFacts(token.access)
-    const healthy = token.access !== undefined
-      && facts.expiresAt !== undefined
-      && facts.expiresAt > Date.now() + RACCOON_REFRESH_MARGIN_MS
+    const opaque = token.access !== undefined && facts.expiresAt === undefined
+    const healthy = token.access !== undefined && (
+      opaque && loaded.kind === 'account'
+        ? true
+        : facts.expiresAt !== undefined && facts.expiresAt > Date.now() + RACCOON_REFRESH_MARGIN_MS
+    )
     if (healthy && !force) return token.access!
 
     if (this.refreshing !== undefined) return this.refreshing
