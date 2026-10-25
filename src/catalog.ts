@@ -17,10 +17,26 @@ export interface ProviderModel {
   vision: boolean
   reasoning: boolean
   reasoningEfforts?: readonly string[]
+  reasoningEffortNames?: Readonly<Record<string, string>>
+  defaultReasoningEffort?: string
   priceFactor?: number
   badge?: string
   tags?: readonly string[]
 }
+
+/**
+ * Raccoon exposes a single provider-level switch, not intensity levels:
+ * `extra_body.thinking.type` is the only field that changes its behaviour.
+ */
+export const RACCOON_EFFORT_ON = 'on'
+export const RACCOON_EFFORT_OFF = 'off'
+export const RACCOON_REASONING_EFFORTS: readonly string[] = [RACCOON_EFFORT_ON, RACCOON_EFFORT_OFF]
+export const RACCOON_EFFORT_NAMES: Readonly<Record<string, string>> = {
+  [RACCOON_EFFORT_ON]: '开启思考',
+  [RACCOON_EFFORT_OFF]: '关闭思考',
+}
+/** Off by default so a chat reply is not held back by a reasoning pass. */
+export const RACCOON_DEFAULT_EFFORT = RACCOON_EFFORT_OFF
 
 export const DEFAULT_CONTEXT_WINDOW = 200_000
 
@@ -206,13 +222,16 @@ export function parseRaccoonCatalog(
     if (record.visible === false) continue
     const params = recordOf(record.params)
     const tags = stringArray(record.tags)
-    const display = stringField(record, ['display_description', 'displayDescription', 'display_name', 'name']) ?? id
-    const description = stringField(record, ['description'])
+    // `description` is the product name ("Kimi-K3"); `display_description` is a
+    // sentence about the workload. Selectors must show the former.
+    const name = stringField(record, ['description', 'display_name', 'model_name']) ?? id
+    const display = stringField(record, ['display_description', 'displayDescription'])
+    const description = display === undefined || display === name ? undefined : display
     const measured = RACCOON_MEASURED_VISION[id]
     const base = billingMultiplier(record)
     out.push({
       id,
-      name: display,
+      name,
       ...description === undefined ? {} : { description },
       contextWindow: numberField(params, ['context_window', 'contextWindow']) ?? DEFAULT_CONTEXT_WINDOW,
       ...numberField(params, ['max_tokens', 'maxTokens']) === undefined
@@ -227,7 +246,10 @@ export function parseRaccoonCatalog(
         fallback: false,
         id,
       }),
-      reasoning: false,
+      reasoning: true,
+      reasoningEfforts: RACCOON_REASONING_EFFORTS,
+      reasoningEffortNames: RACCOON_EFFORT_NAMES,
+      defaultReasoningEffort: RACCOON_DEFAULT_EFFORT,
       ...base === undefined ? {} : { priceFactor: base },
       ...raccoonBadge(record) === undefined ? {} : { badge: raccoonBadge(record)! },
       ...tags.length === 0 ? {} : { tags },

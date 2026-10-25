@@ -83,6 +83,30 @@ describe('LocalAdapter', () => {
     })
   })
 
+  it('publishes the thinking switch and its default for Raccoon models', async () => {
+    const { adapter } = makeAdapter({
+      models: async () => [{
+        id: 'sn-kimi-k3',
+        name: 'Kimi-K3',
+        contextWindow: 1_000_000,
+        maxTokens: 100_000,
+        vision: true,
+        reasoning: true,
+        reasoningEfforts: ['on', 'off'],
+        reasoningEffortNames: { on: '开启思考', off: '关闭思考' },
+        defaultReasoningEffort: 'off',
+      }],
+    }, { brand: 'raccoon', provider: 'raccoon' })
+    const info = await adapter.resolveModel('raccoon', 'sn-kimi-k3')
+    expect(info.reasoning).toEqual({
+      efforts: [
+        { id: 'on', name: '开启思考' },
+        { id: 'off', name: '关闭思考' },
+      ],
+      defaultEffort: 'off',
+    })
+  })
+
   it('passes the alias and effective max tokens to the provider stream', async () => {
     const received: { model?: string, max?: number } = {}
     const { adapter } = makeAdapter({

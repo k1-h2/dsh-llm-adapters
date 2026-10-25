@@ -146,7 +146,13 @@ export abstract class LocalAdapter extends LlmAdapter {
         ? {}
         : {
             reasoning: {
-              efforts: live.reasoningEfforts.map(effort => ({ id: effort as never, name: effort })),
+              efforts: live.reasoningEfforts.map(effort => ({
+                id: effort as never,
+                name: live.reasoningEffortNames?.[effort] ?? effort,
+              })),
+              ...live.defaultReasoningEffort === undefined
+                ? {}
+                : { defaultEffort: live.defaultReasoningEffort as never },
             },
           },
     }
