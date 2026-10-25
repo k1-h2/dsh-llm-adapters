@@ -23,7 +23,7 @@ src/
   trae.ts            Trae 目录合并 / SOLO 流式调用 / 额度 / 签到
   catalog.ts         目录解析、模型缓存、能力来源合并
   model-name.ts      公共名称规则：括号标签、倍率、连字符归一化、匹配 key
-  openrouter.ts      实时拉取 OpenRouter 模型表，通配匹配档位与模态（不写死）
+  openrouter.ts      OpenRouter 模型表：原子同步、磁盘缓存、通配匹配档位与模态
   wire.ts            OpenAI 兼容 SSE、工具调用、usage
   config.ts          volatile 配置与 live 读取
 client.js            设置页（ModuleLoader bundle，无构建步骤）
@@ -109,8 +109,9 @@ wire config 才保留**——`Qwen3.8-Flash` / `Kimi-K2.8-Preview` 只出现在�
 `get_detail_param` 通道都没有它们，选中只会回 `4001`，所以直接不列出。只在 wire 里出现、且
 通过 `isPromotableTraeWireModel` 的模型才会被提升：`usage` 必须是 `chat_completion`、
 `config_source` 为 1，显示名不能等于 config 名，且不能是 `custom_model_*` / 下划线内部名。
-能力来源与另外两个供应商一致：OpenRouter 优先，其次 Trae 目录；思考档位统一映射
-（`light` → `low`、`extra_high` → `xhigh`），默认档仍是倒数第二强。
+Trae 与另外两个供应商共用 `resolveCapabilities`：OpenRouter 的实时表优先（`match` 用同一套
+名称归一化），匹配不到回退目录，两边都没有就开放全部档位与模态。因此 OpenRouter 命中时
+DeepSeek V4.1 Flash 是 None/Low/High/Max，未命中时才是目录的 light/high/extra_high。
 
 聊天走 `POST {chatBase}/api/agent/v3/llm_utils_chat`，需要 `x-device-id` / `x-machine-id` /
 `x-uid` 与 **`x-app-version-code` / `x-ide-version-code`** 等网页头。后两个是数字，缺失时上游
@@ -126,10 +127,11 @@ assistant 的工具调用放在 `function_call`，工具的 `parameters` 是 JSO
 远端分组可能把模型标到一个实际会回 `4001` 的函数上（实测 `solo_agent_remote` 拒绝
 `deepseek-v4.1-flash`，`solo_work_remote` 正常）。
 
-思考档位不再人为补 `max`：先查 OpenRouter 的 `supported_efforts`，匹配不到才用 Trae 目录
-发布的 `light/high/extra_high`。实测网关也接受 `none` / `minimal` / `low` / `max`，所以
-OpenRouter 给出的档位可以直接映射到 wire；没有 OpenRouter 信息时，目录给几档就显示几档，
-默认仍是公共规则的倒数第二强。
+思考档位走公共规则，不按 Trae 单独裁剪。实测（同一提示、每档 3 次）`reasoning_tokens` 在
+`none/low/high/xhigh/extra_high/max` 之间随机波动（38–109），非法值 `banana` / `999` / `MAX`
+同样返回 200，说明 SOLO 通道**不校验** `reasoning_effort`——也正因如此，发 OpenRouter 的档位
+不会触发上游错误。宿主按 `resolveModel().reasoning.efforts` 做请求前校验；只有当 OpenRouter
+快照为空、列表回退到目录三档时，旧会话里的 `max` 才需要重选。
 
 上下文窗口同时保留上游的 dev 与 Max 两档：模型行默认用 dev，下拉里额外提供它声明的
 `maxContextWindow`（例如 1M），不再只显示 200K。
@@ -191,12 +193,24 @@ metadata”）。远端目录在多个分组里用不同大小写/显示名重�
    也不沿用上游常见默认值 `low` 或 `none`（切模型时看起来像没思考）。只有一个档位时就取它。
 5. **档位名只做大写化**：`none` → `None`、`low` → `Low`、`max` → `Max`，`xhigh` 保持原样；
    不做中文翻译。
-6. **刷新即更新**：设置页的「刷新状态与模型」调用 `models(true)`，先 `invalidate()` 再重拉
-   OpenRouter；OpenRouter 表或上游目录变化会在下一次刷新中体现。
+6. **同步即更新**：OpenRouter 表由插件页的「OpenRouter 模型同步」按配置的间隔自动同步，也可
+   手动触发；刷新模型列表**不会**清空它。同步成功后内存快照与磁盘文件一起原子替换，失败则两者
+   都保留上一次成功的数据。
 
 Loomy 的 `GET /models` 自带 `reasoning_efforts` 与 `default_reasoning_effort`，但为了统一
 规则，它也会先查 OpenRouter（命中时以实时表为准），匹配不上才用上游的档位列表；无论档位来自
 哪一边，默认档都按倒数第二强计算。它的请求体直接透传 `reasoning_effort`。
+
+### OpenRouter 快照（`openrouter.ts`）
+
+一份快照由三个供应商共享，由 `index.ts` 创建并注入。`models()` 只读内存（缓存为空时才触发
+一次同步），刷新供应商目录不会清空它；`sync()` 是唯一会发网络请求的入口，由 30 秒 tick 按
+`openRouterSyncMinutes` 判断是否到期，设置页的「立即同步」也调用它。
+
+原子性分两层：内存中只有完整解析并建好索引后才替换 `snapshot`；磁盘先写同目录临时文件，
+再 `rename` 覆盖 `$DSH_HOME/llm-adapters/openrouter-models.json`。任一步失败都不覆盖旧数据，
+并把原因放进 `status().error`。并发调用共享同一个 in-flight Promise，所以定时同步、手动同步
+和模型读取不会打出多个请求。
 
 Raccoon 的思考控制有两条通道，都要发：`extra_body.thinking.type = enabled | disabled`
 （真正的开关，`disabled` 实测能把 `reasoning_tokens` 压到 0）与 `reasoning_effort`

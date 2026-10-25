@@ -150,6 +150,21 @@ window.__ModuleLoader__.load({
       browserWaitingTrae: '等待登录…',
       loginGuideTrae: '点“打开浏览器登录”，在弹出的窗口里登录 Trae 即可；登录成功后会自动接回。',
       modelsEmptyTrae: '账号没有返回任何 Trae 模型。请确认账号已登录，然后点“重新读取登录态”。',
+      openRouterTitle: 'OpenRouter 模型同步',
+      openRouterHint: 'OpenRouter 的实时模型表用来补充思考档位与读图能力，三个供应商共用一份。缓存保存在本机，连不上时会继续使用上次成功同步的数据；刷新模型不会清空缓存。',
+      openRouterInterval: '自动同步',
+      openRouterOff: '关闭自动同步',
+      openRouterEvery15: '每 15 分钟',
+      openRouterEvery60: '每小时',
+      openRouterEvery360: '每 6 小时',
+      openRouterEvery1440: '每 24 小时',
+      openRouterSyncNow: '立即同步',
+      openRouterSyncing: '同步中…',
+      openRouterNever: '尚未同步',
+      openRouterModels: '个模型',
+      openRouterLastSync: '上次同步',
+      openRouterSyncFailed: '同步失败',
+      openRouterSyncDone: '已同步',
     }
     const en = {
       pluginOptionsTitle: 'Enabled providers',
@@ -273,6 +288,21 @@ window.__ModuleLoader__.load({
       browserWaitingTrae: 'Waiting for sign-in…',
       loginGuideTrae: 'Use “Open browser sign-in” and sign in to Trae in the window that opens; the login is adopted automatically.',
       modelsEmptyTrae: 'Trae returned no models. Confirm the account is signed in, then re-read the login state.',
+      openRouterTitle: 'OpenRouter model sync',
+      openRouterHint: 'OpenRouter’s live catalog supplies thinking levels and image support for all three providers. The snapshot is cached on this machine, so a failed sync keeps the last successful data; refreshing a model list never clears it.',
+      openRouterInterval: 'Auto sync',
+      openRouterOff: 'Off',
+      openRouterEvery15: 'Every 15 minutes',
+      openRouterEvery60: 'Hourly',
+      openRouterEvery360: 'Every 6 hours',
+      openRouterEvery1440: 'Every 24 hours',
+      openRouterSyncNow: 'Sync now',
+      openRouterSyncing: 'Syncing…',
+      openRouterNever: 'Not synced yet',
+      openRouterModels: 'models',
+      openRouterLastSync: 'Last sync',
+      openRouterSyncFailed: 'Sync failed',
+      openRouterSyncDone: 'Synced',
     }
 
     const BRANDS = [
@@ -315,6 +345,14 @@ window.__ModuleLoader__.load({
     const REGIONS = [
       { id: 'cn', labelKey: 'regionCn' },
       { id: 'global', labelKey: 'regionGlobal' },
+    ]
+
+    const OPENROUTER_INTERVALS = [
+      { value: 0, labelKey: 'openRouterOff' },
+      { value: 15, labelKey: 'openRouterEvery15' },
+      { value: 60, labelKey: 'openRouterEvery60' },
+      { value: 360, labelKey: 'openRouterEvery360' },
+      { value: 1440, labelKey: 'openRouterEvery1440' },
     ]
 
     function regionOf(value) {
@@ -370,6 +408,7 @@ window.__ModuleLoader__.load({
       seg: { display: 'flex', gap: '6px', flexWrap: 'wrap' },
       segBtn: { padding: '4px 10px', borderRadius: '7px', border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.35))', background: 'transparent', color: 'inherit', cursor: 'pointer', font: 'inherit', fontSize: '0.84em' },
       segOn: { border: '1px solid var(--dsw-alias-brand-primary, #4c6ef5)', fontWeight: 600 },
+      section: { display: 'flex', flexDirection: 'column', gap: '10px', paddingTop: '14px', borderTop: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.15))' },
       packBlock: { display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '2px' },
       packHead: { display: 'flex', alignItems: 'baseline', gap: '8px' },
       packToggle: { marginLeft: 'auto', background: 'none', border: 'none', padding: 0, font: 'inherit', fontSize: '0.8em', color: 'var(--dsw-alias-brand-primary, #4c6ef5)', cursor: 'pointer' },
@@ -1288,7 +1327,54 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = useState(false)
       const [error, setError] = useState(undefined)
       const [status, setStatus] = useState(undefined)
+      const [openRouter, setOpenRouter] = useState(undefined)
+      const [syncing, setSyncing] = useState(false)
+      const [routerError, setRouterError] = useState(undefined)
+      const [routerNotice, setRouterNotice] = useState(undefined)
       const ticket = useRef(0)
+      const syncInterval = typeof value.openRouterSyncMinutes === 'number' ? value.openRouterSyncMinutes : 60
+
+      const loadOpenRouter = useCallback(async () => {
+        try {
+          setOpenRouter(await api('/openrouter', { timeout: 10_000 }))
+        } catch (err) {
+          setRouterError(String(err?.message ?? err))
+        }
+      }, [])
+
+      useEffect(() => { void loadOpenRouter() }, [loadOpenRouter])
+
+      const syncOpenRouter = useCallback(async () => {
+        setSyncing(true)
+        setRouterError(undefined)
+        setRouterNotice(undefined)
+        try {
+          const payload = await api('/openrouter/sync', { method: 'POST', timeout: 45_000 })
+          setOpenRouter(payload)
+          if (payload?.ok === true) {
+            setRouterNotice(`${t('openRouterSyncDone')} · ${payload.models} ${t('openRouterModels')}`)
+          } else {
+            setRouterError(`${t('openRouterSyncFailed')}：${payload?.error ?? '—'}`)
+          }
+        } catch (err) {
+          setRouterError(`${t('openRouterSyncFailed')}：${String(err?.message ?? err)}`)
+        } finally {
+          setSyncing(false)
+        }
+      }, [t])
+
+      const setSyncInterval = useCallback(async next => {
+        setStatus(t('saving'))
+        setError(undefined)
+        try {
+          const accepted = await withDeadline(form.set('openRouterSyncMinutes', next), WRITE_TIMEOUT_MS, t('timeout'))
+          if (accepted === false) throw new Error(t('pluginOptionsRejected'))
+          setStatus(t('saved'))
+        } catch (err) {
+          setError(`${t('saveFailed')}：${String(err?.message ?? err)}`)
+          setStatus(undefined)
+        }
+      }, [form, t])
 
       const toggle = useCallback(async (key, next) => {
         const mine = ++ticket.current
@@ -1341,6 +1427,39 @@ window.__ModuleLoader__.load({
           )
         }),
         !writable ? h('div', { style: css.note }, t('pluginOptionsReadOnly')) : null,
+        h('div', { style: css.section },
+          h('h3', { style: css.h3 }, t('openRouterTitle')),
+          h('div', { style: css.note }, t('openRouterHint')),
+          h('div', { style: css.bar },
+            h('span', { style: css.label }, t('openRouterInterval')),
+            h('select', {
+              style: css.select,
+              value: String(syncInterval),
+              disabled: busy || !writable,
+              onChange: event => { void setSyncInterval(Number(event.target.value)) },
+            },
+              OPENROUTER_INTERVALS.map(option => h('option', {
+                key: String(option.value),
+                value: String(option.value),
+              }, t(option.labelKey))),
+            ),
+            h('button', {
+              style: { ...css.btn, ...css.btnPrimary },
+              disabled: syncing || !writable,
+              onClick: () => { void syncOpenRouter() },
+            }, syncing ? t('openRouterSyncing') : t('openRouterSyncNow')),
+          ),
+          h('div', { style: css.bar },
+            h('span', { style: css.note }, openRouter === undefined
+              ? t('openRouterNever')
+              : `${openRouter.models ?? 0} ${t('openRouterModels')}${typeof openRouter.at === 'number' ? ` · ${t('openRouterLastSync')} ${dateLabel(openRouter.at)}` : ''}`),
+            typeof openRouter?.error === 'string'
+              ? h('span', { style: css.err }, `${t('openRouterSyncFailed')}：${openRouter.error}`)
+              : null,
+          ),
+          routerNotice !== undefined ? h('div', { style: css.note }, routerNotice) : null,
+          routerError !== undefined ? h('div', { style: css.err }, routerError) : null,
+        ),
         error !== undefined ? h('div', { style: css.err }, error) : null,
         status !== undefined && error === undefined ? h('div', { style: css.note }, status) : null,
       )
@@ -1396,8 +1515,8 @@ window.__ModuleLoader__.load({
     exports.inject = inject
     exports.name = 'dsh-llm-adapters'
     exports.__test = {
-      BRANDS, FIELDS, REGIONS, regionOf, zh, en, css, windowLabel, creditsOf, ownerLabel, priceText, dateLabel,
-      readCache, writeCache, AccountCard, SettingsPage, BundleSettings,
+      BRANDS, FIELDS, REGIONS, OPENROUTER_INTERVALS, regionOf, zh, en, css, windowLabel, creditsOf,
+      ownerLabel, priceText, dateLabel, readCache, writeCache, AccountCard, SettingsPage, BundleSettings,
     }
     return module.exports
   },

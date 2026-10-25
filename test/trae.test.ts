@@ -6,6 +6,7 @@ import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { AccountStore } from '../src/account-store.ts'
 import { TraeAuth } from '../src/auth.ts'
 import { normalizeTraeRegion } from '../src/brand.ts'
+import { ALL_REASONING_EFFORTS } from '../src/catalog.ts'
 import { EMPTY_OPENROUTER_INDEX, buildOpenRouterIndex } from '../src/openrouter.ts'
 import {
   TraeProvider, mergeTraeModels, normalizeEffort, openTraeStream, parseTraeCheckin, parseTraePlan,
@@ -361,7 +362,10 @@ describe('Trae catalog', () => {
     expect(models.map(model => model.id)).toEqual(['glm-5.3'])
   })
 
-  it('takes efforts and modalities from OpenRouter when it knows the model', () => {
+  it('keeps exactly the levels Trae publishes', () => {
+    // Live directory for DeepSeek-V4.1-Flash: light/high/extra_high. The SOLO
+    // endpoint answers 200 for `banana` too, so no level outside this list can
+    // be claimed — there is no inferred `none` and no inferred `max`.
     const remote = [{
       id: 'deepseek-v4.1-flash', name: 'DeepSeek-V4.1-Flash', contextWindow: 200_000,
       multimodal: true, efforts: ['low', 'high', 'xhigh'],
@@ -370,18 +374,17 @@ describe('Trae catalog', () => {
       configName: 'deepseek-v4.1-flash', name: 'DeepSeek-V4.1-Flash', contextWindow: 200_000,
       usage: 'chat_completion', configSource: 1, function: 'solo_work_remote', efforts: [],
     }]
-    const index = buildOpenRouterIndex([{
-      id: 'deepseek/deepseek-v4.1-flash',
-      name: 'DeepSeek: DeepSeek V4.1 Flash',
-      inputModalities: ['text'],
-      efforts: ['max', 'high', 'low', 'none'],
-    }])
-    const { models } = mergeTraeModels(remote, wire, index)
+    const { models, meta } = mergeTraeModels(remote, wire)
     expect(models[0]).toMatchObject({
-      // OpenRouter says text only, so the directory's multimodal flag loses.
-      vision: false,
-      reasoningEfforts: ['none', 'low', 'high', 'max'],
+      vision: true,
+      reasoningEfforts: ['low', 'high', 'xhigh'],
       defaultReasoningEffort: 'high',
+    })
+    // Only advertised levels get a wire spelling.
+    expect(meta.get('deepseek-v4.1-flash')?.wireEfforts).toEqual({
+      low: 'light',
+      high: 'high',
+      xhigh: 'extra_high',
     })
   })
 })
@@ -599,7 +602,14 @@ describe('TraeAuth', () => {
 })
 
 describe('TraeProvider', () => {
-  function make(region: 'cn' | 'global', fetchImpl: typeof fetch) {
+  function make(
+    region: 'cn' | 'global',
+    fetchImpl: typeof fetch,
+    router: { models(): Promise<typeof EMPTY_OPENROUTER_INDEX>, invalidate(): void } = {
+      models: async () => EMPTY_OPENROUTER_INDEX,
+      invalidate: () => undefined,
+    },
+  ) {
     const auth = {
       status: async () => ({ signedIn: true }),
       accessToken: async () => 'tok',
@@ -607,10 +617,6 @@ describe('TraeProvider', () => {
       logout: async () => undefined,
     }
     const store = { saveTrae: vi.fn(async () => undefined) }
-    const openRouter = {
-      models: vi.fn(async () => EMPTY_OPENROUTER_INDEX),
-      invalidate: vi.fn(),
-    }
     const provider = new TraeProvider({
       auth: auth as never,
       store: store as never,
@@ -619,10 +625,10 @@ describe('TraeProvider', () => {
       timeoutMs: () => 1000,
       textOnly: () => new Set(),
       forceVision: () => new Set(),
-      openRouter,
+      openRouter: router,
       fetchImpl,
     })
-    return { provider, auth, store, openRouter }
+    return { provider, auth, store }
   }
 
   function catalogFetch(): typeof fetch {
@@ -643,6 +649,50 @@ describe('TraeProvider', () => {
       content: [{ type: 'text', text: 'hi' }],
     }],
   }
+
+  it('takes levels and modalities from the shared OpenRouter matcher', async () => {
+    const index = buildOpenRouterIndex([{
+      id: 'openai/gpt-5',
+      name: 'OpenAI: GPT-5',
+      inputModalities: ['text'],
+      efforts: ['max', 'high', 'low'],
+      mandatory: false,
+    }])
+    const { provider } = make('cn', catalogFetch(), {
+      models: async () => index,
+      invalidate: () => undefined,
+    })
+    const models = await provider.models()
+    // `gpt-5` in the fixture declares no multimodal flag; OpenRouter says text
+    // only, so the live modality list wins. The directory's `low/high/xhigh`
+    // is replaced by OpenRouter's three levels.
+    expect(models.find(model => model.id === 'gpt-5')).toMatchObject({
+      vision: false,
+      reasoningEfforts: ['max', 'high', 'low'],
+      defaultReasoningEffort: 'high',
+    })
+  })
+
+  it('exposes every level when neither source names one', () => {
+    // The shared rule: no OpenRouter match and an empty directory declaration
+    // falls back to all levels, with the second-strongest as the default.
+    const { models } = mergeTraeModels(
+      [{ id: 'x-model', name: 'X Model', multimodal: false, efforts: [] }],
+      [{
+        configName: 'x-model',
+        name: 'X Model',
+        usage: 'chat_completion',
+        configSource: 1,
+        function: 'solo_work_remote',
+        efforts: [],
+      }],
+    )
+    expect(models[0]).toMatchObject({
+      vision: false,
+      reasoningEfforts: ALL_REASONING_EFFORTS,
+      defaultReasoningEffort: 'xhigh',
+    })
+  })
 
   it('merges the directory and the wire roster behind one catalog', async () => {
     const { provider } = make('cn', catalogFetch())
@@ -707,7 +757,6 @@ describe('TraeProvider', () => {
       timeoutMs: () => 1000,
       textOnly: () => new Set(['claude-4.5-sonnet']),
       forceVision: () => new Set(['gemini-3-pro']),
-      openRouter: { models: async () => EMPTY_OPENROUTER_INDEX, invalidate: () => {} },
       fetchImpl: catalogFetch(),
     })
     const models = await provider.models()
@@ -803,7 +852,6 @@ describe('TraeProvider', () => {
       timeoutMs: () => 1000,
       textOnly: () => new Set(),
       forceVision: () => new Set(),
-      openRouter: { models: async () => EMPTY_OPENROUTER_INDEX, invalidate: () => {} },
       fetchImpl: fetchMock as unknown as typeof fetch,
     })
 
@@ -816,13 +864,6 @@ describe('TraeProvider', () => {
     expect((await provider.models()).map(model => model.id)).toEqual(['global-model'])
     expect(await provider.quota()).toMatchObject({ plan: 'Pro' })
     expect(await provider.checkinStatus()).toMatchObject({ available: false })
-  })
-
-  it('refreshes OpenRouter metadata when models are invalidated', async () => {
-    const { provider, openRouter } = make('cn', catalogFetch())
-    await provider.models()
-    provider.invalidateModels()
-    expect(openRouter.invalidate).toHaveBeenCalledOnce()
   })
 
   it('reports a clear error for a model outside the catalog', async () => {
@@ -856,7 +897,6 @@ describe('TraeProvider', () => {
       timeoutMs: () => 1000,
       textOnly: () => new Set(),
       forceVision: () => new Set(),
-      openRouter: { models: async () => EMPTY_OPENROUTER_INDEX, invalidate: () => {} },
       fetchImpl: fetchMock as unknown as typeof fetch,
     })
     await expect(collect(provider.stream(options, 'gpt-5', undefined, () => undefined)))

@@ -40,6 +40,8 @@ export interface Config {
   defaultMaxTokens?: number
   modelCacheTtlSeconds?: number
   catalogFetchTimeoutSeconds?: number
+  /** Minutes between automatic OpenRouter syncs; 0 disables the schedule. */
+  openRouterSyncMinutes?: number
 }
 
 export const Config = z.object({
@@ -72,6 +74,7 @@ export const Config = z.object({
   defaultMaxTokens: z.number().step(1).min(1).default(32_000).description('模型目录未声明输出上限时使用的输出上限。').volatile(),
   modelCacheTtlSeconds: z.number().step(1).min(10).max(86_400).default(120).description('模型列表缓存时长（秒）。调小可更快看到账号侧变化。').volatile(),
   catalogFetchTimeoutSeconds: z.number().step(1).min(1).max(300).default(20).description('读取模型目录、额度等请求的时限（秒）。').volatile(),
+  openRouterSyncMinutes: z.number().step(1).min(0).max(43_200).default(60).description('OpenRouter 模型元数据的自动同步间隔（分钟）。0 表示关闭自动同步；缓存保存在本机，连不上时继续使用上次成功同步的数据。').volatile(),
 })
 
 export interface ResolvedConfig {
@@ -100,6 +103,7 @@ export interface ResolvedConfig {
   defaultMaxTokens: number
   modelCacheTtlMs: number
   catalogFetchTimeoutMs: number
+  openRouterSyncMinutes: number
 }
 
 export type ParsedConfig = { readonly [K in keyof Config]?: unknown }
@@ -138,6 +142,7 @@ export function liveConfig(config: ParsedConfig | undefined): LiveConfig {
     defaultMaxTokens: () => positive(field('defaultMaxTokens'), 32_000),
     modelCacheTtlMs: () => positive(field('modelCacheTtlSeconds'), 120) * 1_000,
     catalogFetchTimeoutMs: () => positive(field('catalogFetchTimeoutSeconds'), 20) * 1_000,
+    openRouterSyncMinutes: () => nonNegative(field('openRouterSyncMinutes'), 60),
   }
 }
 
@@ -169,6 +174,7 @@ export function resolveConfig(config: ParsedConfig | undefined): ResolvedConfig 
     defaultMaxTokens: live.defaultMaxTokens(),
     modelCacheTtlMs: live.modelCacheTtlMs(),
     catalogFetchTimeoutMs: live.catalogFetchTimeoutMs(),
+    openRouterSyncMinutes: live.openRouterSyncMinutes(),
   }
 }
 
@@ -183,6 +189,10 @@ function nonEmpty(value: unknown, fallback: string): string {
 
 function positive(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+function nonNegative(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback
 }
 
 function bool(value: unknown, fallback: boolean): boolean {

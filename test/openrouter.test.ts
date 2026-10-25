@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import {
   OpenRouterCatalog, buildOpenRouterIndex, parseOpenRouterModels, EMPTY_OPENROUTER_INDEX,
 } from '../src/openrouter.ts'
@@ -137,7 +140,7 @@ describe('OpenRouterCatalog', () => {
 
   it('caches the fetched index and bypasses it on fresh', async () => {
     const fetchImpl = vi.fn(async () => json({ data: [{ id: 'z-ai/glm-5.3', name: 'Z.ai: GLM 5.3', architecture: { input_modalities: ['text'] } }] }))
-    const catalog = new OpenRouterCatalog(fetchImpl as unknown as typeof fetch, 60_000)
+    const catalog = new OpenRouterCatalog(fetchImpl as unknown as typeof fetch)
     await catalog.models()
     await catalog.models()
     expect(fetchImpl).toHaveBeenCalledTimes(1)
@@ -152,7 +155,7 @@ describe('OpenRouterCatalog', () => {
     ]
     let index = 0
     const fetchImpl = vi.fn(async () => responses[index++]!)
-    const catalog = new OpenRouterCatalog(fetchImpl as unknown as typeof fetch, () => 0)
+    const catalog = new OpenRouterCatalog(fetchImpl as unknown as typeof fetch)
     const first = await catalog.models()
     const second = await catalog.models(true)
     expect(second).toBe(first)
@@ -160,14 +163,77 @@ describe('OpenRouterCatalog', () => {
 
   it('starts empty when the first fetch fails', async () => {
     const fetchImpl = vi.fn(async () => new Response('bad', { status: 500 }))
-    const catalog = new OpenRouterCatalog(fetchImpl as unknown as typeof fetch, () => 0)
+    const catalog = new OpenRouterCatalog(fetchImpl as unknown as typeof fetch)
     expect(await catalog.models()).toBe(EMPTY_OPENROUTER_INDEX)
     expect(await catalog.models(true)).toBe(EMPTY_OPENROUTER_INDEX)
   })
 
+  it('persists a successful snapshot and reloads it without the network', async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'llm-adapters-router-'))
+    const cacheFile = path.join(directory, 'openrouter-models.json')
+    const fetchImpl = vi.fn(async () => json({
+      data: [
+        {
+          id: 'deepseek/deepseek-v4.1-flash',
+          name: 'DeepSeek: DeepSeek V4.1 Flash',
+          architecture: { input_modalities: ['text', 'image'] },
+          reasoning: { supported_efforts: ['max', 'high', 'low', 'none'], default_effort: 'high' },
+        },
+      ],
+    }))
+    const first = new OpenRouterCatalog(fetchImpl as unknown as typeof fetch, { cacheFile })
+    expect(await first.models()).not.toBe(EMPTY_OPENROUTER_INDEX)
+    expect(JSON.parse(readFileSync(cacheFile, 'utf8')).models).toHaveLength(1)
+
+    // A new process (or an offline start) reads the file and never fetches.
+    const offline = vi.fn(async () => new Response('down', { status: 503 }))
+    const second = new OpenRouterCatalog(offline as unknown as typeof fetch, { cacheFile })
+    const index = await second.models()
+    expect(offline).not.toHaveBeenCalled()
+    expect(index.match('DeepSeek V4.1 Flash')?.id).toBe('deepseek/deepseek-v4.1-flash')
+    expect(second.status()).toMatchObject({ models: 1 })
+  })
+
+  it('keeps memory and disk untouched when a sync fails', async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'llm-adapters-router-'))
+    const cacheFile = path.join(directory, 'openrouter-models.json')
+    let call = 0
+    const fetchImpl = vi.fn(async () => {
+      call += 1
+      if (call === 1) {
+        return json({ data: [{ id: 'z-ai/glm-5.3', name: 'Z.ai: GLM 5.3', architecture: { input_modalities: ['text'] } }] })
+      }
+      return new Response('down', { status: 500 })
+    })
+    const catalog = new OpenRouterCatalog(fetchImpl as unknown as typeof fetch, { cacheFile })
+    await catalog.sync()
+    const before = readFileSync(cacheFile, 'utf8')
+
+    const result = await catalog.sync()
+    expect(result.ok).toBe(false)
+    expect(result.models).toBe(1)
+    expect(result.error).toContain('HTTP 500')
+    expect(catalog.status()).toMatchObject({ models: 1 })
+    expect(catalog.status().error).toContain('HTTP 500')
+    expect(readFileSync(cacheFile, 'utf8')).toBe(before)
+  })
+
+  it('shares one request between concurrent syncs', async () => {
+    let release
+    const fetchImpl = vi.fn(() => new Promise(resolve => {
+      release = () => resolve(json({ data: [{ id: 'z-ai/glm-5.3', name: 'Z.ai: GLM 5.3' }] }))
+    }))
+    const catalog = new OpenRouterCatalog(fetchImpl as unknown as typeof fetch)
+    const [left, right] = [catalog.sync(), catalog.sync()]
+    expect(fetchImpl).toHaveBeenCalledOnce()
+    release()
+    expect(await left).toMatchObject({ ok: true, models: 1 })
+    expect(await right).toMatchObject({ ok: true, models: 1 })
+  })
+
   it('invalidate forces the next read to refetch', async () => {
     const fetchImpl = vi.fn(async () => json({ data: [] }))
-    const catalog = new OpenRouterCatalog(fetchImpl as unknown as typeof fetch, () => 60_000)
+    const catalog = new OpenRouterCatalog(fetchImpl as unknown as typeof fetch)
     await catalog.models()
     catalog.invalidate()
     await catalog.models()

@@ -12,6 +12,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { LocalAdapter } from './adapter.ts'
 import type { BrandId, TraeRegion } from './brand.ts'
 import { isBrandId } from './brand.ts'
+import type { OpenRouterStatus, OpenRouterSyncResult } from './openrouter.ts'
 
 export const API_PREFIX = '/api/llm-adapters'
 
@@ -34,6 +35,12 @@ export interface ModelRow {
 }
 
 export type AdapterMap = Readonly<Record<BrandId, LocalAdapter>>
+
+/** The shared router snapshot behind the settings card's sync controls. */
+export interface OpenRouterAdmin {
+  status(): OpenRouterStatus
+  sync(): Promise<OpenRouterSyncResult>
+}
 
 function send(res: ServerResponse, status: number, payload: unknown): void {
   const body = JSON.stringify(payload)
@@ -176,11 +183,31 @@ export async function handleApi(
   req: IncomingMessage,
   res: ServerResponse,
   adapters: AdapterMap,
+  openRouter?: OpenRouterAdmin,
 ): Promise<void> {
   try {
     const url = new URL(req.url ?? '/', 'http://localhost')
     const path = url.pathname.slice(API_PREFIX.length) || '/'
     const method = req.method ?? 'GET'
+
+    // Router synchronisation is provider-independent, so it is answered before
+    // the brand check.
+    if (path === '/openrouter' && method === 'GET') {
+      if (openRouter === undefined) {
+        send(res, 503, { error: 'OpenRouter 同步未启用' })
+        return
+      }
+      send(res, 200, openRouter.status())
+      return
+    }
+    if (path === '/openrouter/sync' && method === 'POST') {
+      if (openRouter === undefined) {
+        send(res, 503, { error: 'OpenRouter 同步未启用' })
+        return
+      }
+      send(res, 200, await openRouter.sync())
+      return
+    }
 
     // Writes select their provider in the body, like the auth routes of the
     // sibling plugin: the page never puts a brand in the URL for writes.

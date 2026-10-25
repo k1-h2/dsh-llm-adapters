@@ -222,7 +222,8 @@ export class LoomyProvider {
   }
 
   async models(fresh = false): Promise<readonly ProviderModel[]> {
-    if (fresh) this.openRouter.invalidate()
+    // The OpenRouter snapshot has its own scheduler and on-disk copy; a model
+    // refresh here must not throw it away (that would empty the menu offline).
     return this.catalog.models(fresh)
   }
 
@@ -231,7 +232,6 @@ export class LoomyProvider {
   }
 
   invalidateModels(): void {
-    this.openRouter.invalidate()
     this.catalog.invalidate()
   }
 

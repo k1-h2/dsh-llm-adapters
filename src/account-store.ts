@@ -114,6 +114,11 @@ export class AccountStore {
     return path.join(this.root(), FILE_NAME)
   }
 
+  /** The plugin's own data directory (also holds the OpenRouter snapshot). */
+  directory(): string {
+    return this.root()
+  }
+
   async read(): Promise<StoredAccounts> {
     let parsed: unknown
     try {

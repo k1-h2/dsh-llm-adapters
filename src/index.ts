@@ -10,6 +10,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { LoomyAdapter, RaccoonAdapter, TraeAdapter, resolveModelId } from './adapter.ts'
@@ -22,6 +23,7 @@ import type { BrandId } from './brand.ts'
 import { Config as ConfigSchema, liveConfig } from './config.ts'
 import type { ParsedConfig } from './config.ts'
 import { LoomyProvider } from './loomy.ts'
+import { OpenRouterCatalog } from './openrouter.ts'
 import { RaccoonProvider } from './raccoon.ts'
 import { TraeProvider } from './trae.ts'
 
@@ -68,16 +70,17 @@ export type { QrMatrix } from './qr.ts'
 export { BRANDS, LOOMY_BRAND, RACCOON_BRAND, TRAE_BRAND, LOOMY_PROVIDER, RACCOON_PROVIDER, TRAE_PROVIDER, isBrandId, normalizeTraeRegion } from './brand.ts'
 export type { BrandId, BrandProfile, TraeRegion } from './brand.ts'
 export {
-  ModelCatalog, defaultEffortOf, effortLabel, parseLoomyCatalog, parseRaccoonCatalog, priceFactorOf,
+  ModelCatalog, defaultEffortOf, effortLabel, parseLoomyCatalog, parseRaccoonCatalog,
+  priceFactorOf, resolveCapabilities,
 } from './catalog.ts'
-export type { ProviderModel } from './catalog.ts'
+export type { ProviderModel, ResolvedCapabilities } from './catalog.ts'
 export { parseModelName, modelKey } from './model-name.ts'
 export type { ParsedModelName } from './model-name.ts'
 export {
   OpenRouterCatalog, buildOpenRouterIndex, parseOpenRouterModels, EMPTY_OPENROUTER_INDEX,
 } from './openrouter.ts'
 export type {
-  OpenRouterIndex, OpenRouterLookup, OpenRouterModel,
+  OpenRouterIndex, OpenRouterLookup, OpenRouterModel, OpenRouterStatus, OpenRouterSyncResult,
 } from './openrouter.ts'
 export { LoomyProvider, LOOMY_BASE, LOOMY_VERSION, loomyGatewaySessionValid } from './loomy.ts'
 export {
@@ -127,6 +130,12 @@ export function apply(ctx: Context, config: ParsedConfig): void {
   }
 
   const accounts = new AccountStore()
+  // One snapshot serves every provider: the level/modality menu must agree
+  // across Loomy, Raccoon and Trae, and a single schedule keeps it fresh.
+  // The file lives beside accounts.json so an offline start still has it.
+  const openRouter = new OpenRouterCatalog(fetch, {
+    cacheFile: join(accounts.directory(), 'openrouter-models.json'),
+  })
   const loomyAuth = new LoomyAuth(accounts)
   const raccoonAuth = new RaccoonAuth(accounts)
   const traeAuth = new TraeAuth(accounts, () => live.traeRegion())
@@ -138,6 +147,7 @@ export function apply(ctx: Context, config: ParsedConfig): void {
     timeoutMs: live.catalogFetchTimeoutMs,
     textOnly: () => new Set(live.loomyTextOnlyModelIds()),
     forceVision: () => new Set(live.loomyVisionModelIds()),
+    openRouter,
   })
   const raccoonProvider = new RaccoonProvider({
     auth: raccoonAuth,
@@ -146,6 +156,7 @@ export function apply(ctx: Context, config: ParsedConfig): void {
     timeoutMs: live.catalogFetchTimeoutMs,
     textOnly: () => new Set(live.raccoonTextOnlyModelIds()),
     forceVision: () => new Set(live.raccoonVisionModelIds()),
+    openRouter,
   })
   const traeProvider = new TraeProvider({
     auth: traeAuth,
@@ -155,6 +166,7 @@ export function apply(ctx: Context, config: ParsedConfig): void {
     timeoutMs: live.catalogFetchTimeoutMs,
     textOnly: () => new Set(live.traeTextOnlyModelIds()),
     forceVision: () => new Set(live.traeVisionModelIds()),
+    openRouter,
     logger: message => ctx.logger?.warn(message),
   })
 
@@ -197,6 +209,23 @@ export function apply(ctx: Context, config: ParsedConfig): void {
     raccoon: new RaccoonAdapter(makeOptions('raccoon', RACCOON_PROVIDER), raccoonProvider),
     trae: new TraeAdapter(makeOptions('trae', TRAE_PROVIDER), traeProvider),
   }
+
+  // Sync ticks cheaply: the configured interval is read live, so changing it in
+  // the settings page takes effect without a restart. A sync in flight is
+  // shared, and a failed one leaves the persisted snapshot untouched.
+  const syncOpenRouter = (): void => {
+    const minutes = live.openRouterSyncMinutes()
+    if (minutes <= 0) return
+    const status = openRouter.status()
+    if (status.syncing) return
+    if (status.at !== undefined && Date.now() - status.at < minutes * 60_000) return
+    void openRouter.sync().then(result => {
+      if (!result.ok) ctx.logger?.warn(`llm-adapters: OpenRouter 同步失败：${result.error ?? '未知错误'}`)
+    })
+  }
+  const syncTimer = setInterval(syncOpenRouter, 30_000)
+  syncTimer.unref?.()
+  ctx.effect(() => () => clearInterval(syncTimer), 'llm-adapters: openrouter sync')
 
   ctx.inject(['attachments'], (scope) => {
     attachments = scope.attachments
@@ -263,7 +292,7 @@ export function apply(ctx: Context, config: ParsedConfig): void {
       () => server.register({
         kind: 'prefix',
         path: API_PREFIX,
-        handler: (req: IncomingMessage, res: ServerResponse) => { void handleApi(req, res, adapters) },
+        handler: (req: IncomingMessage, res: ServerResponse) => { void handleApi(req, res, adapters, openRouter) },
       }),
       'llm-adapters: settings api',
     )
