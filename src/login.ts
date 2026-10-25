@@ -146,7 +146,7 @@ async function loomyAccountCall(
   const code = typeof result.payload.code === 'string'
     ? result.payload.code
     : typeof result.payload.code === 'number' ? String(result.payload.code) : ''
-  if (code !== '' && code !== '000000') {
+  if (code !== '' && code !== '000000' && code !== '0') {
     const description = typeof result.payload.desc === 'string' && result.payload.desc.length > 0
       ? result.payload.desc
       : typeof result.payload.message === 'string' && result.payload.message.length > 0
@@ -194,8 +194,12 @@ function loomyEnvelope(deviceId: string): Record<string, unknown> {
 export function loomyEncryptPassword(publicKeyBase64: string, password: string): string {
   const lines = publicKeyBase64.match(/.{1,64}/g)?.join('\n') ?? publicKeyBase64
   const pem = `-----BEGIN PUBLIC KEY-----\n${lines}\n-----END PUBLIC KEY-----`
-  return publicEncrypt({ key: pem, padding: constants.RSA_PKCS1_PADDING }, Buffer.from(password, 'utf8'))
-    .toString('base64')
+  try {
+    return publicEncrypt({ key: pem, padding: constants.RSA_PKCS1_PADDING }, Buffer.from(password, 'utf8'))
+      .toString('base64')
+  } catch {
+    throw new LoginError('密码过长或登录服务公钥不可用，无法加密提交。', 'RSA_ENCRYPT_FAILED')
+  }
 }
 
 function textField(value: unknown): string | undefined {
