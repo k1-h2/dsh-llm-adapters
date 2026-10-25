@@ -1,19 +1,20 @@
 /**
  * SenseTime Raccoon (小浣熊) gateway client.
  *
- * The desktop app exposes an OpenAI-compatible endpoint for its own local
- * agent. Authentication is an OAuth access token with a single-use refresh
- * token; a refresh is written back to the app's auth file by {@link RaccoonAuth}
- * before the new token is used.
+ * The gateway is OpenAI-compatible and authenticates with an OAuth access
+ * token. Tokens rotate on refresh; {@link RaccoonAuth} writes the rotated pair
+ * back to whichever store supplied them.
  *
  * @module dsh-llm-adapters/raccoon
  */
 
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { AccountStore } from './account-store.ts'
 import { RaccoonAuth } from './auth.ts'
 import { ModelCatalog, parseRaccoonCatalog } from './catalog.ts'
 import type { ProviderModel } from './catalog.ts'
 import { fetchJson } from './http.ts'
+import { raccoonAccountInfo, raccoonLoginWithPassword } from './login.ts'
 import type { QuotaSnapshot } from './types.ts'
 import { ProviderHttpError, buildBody, buildMessages, buildTools, openAiStream } from './wire.ts'
 import type { ReadImage } from './wire.ts'
@@ -23,6 +24,7 @@ export const RACCOON_CLIENT_VERSION = '1.0.0'
 
 export interface RaccoonProviderOptions {
   auth: RaccoonAuth
+  store: AccountStore
   ttlMs: () => number
   timeoutMs: () => number
   textOnly: () => ReadonlySet<string>
@@ -60,6 +62,50 @@ export class RaccoonProvider {
 
   async signedIn(): Promise<boolean> {
     return (await this.options.auth.status()).signedIn
+  }
+
+  /**
+   * Sign in through the web account service and keep the token pair in the
+   * plugin store. The password is encrypted for transit and never persisted.
+   */
+  async loginWithPassword(phone: string, password: string): Promise<void> {
+    const result = await raccoonLoginWithPassword({
+      phone,
+      password,
+      fetchImpl: this.options.fetchImpl,
+    })
+    const info = await raccoonAccountInfo({
+      accessToken: result.accessToken,
+      fetchImpl: this.options.fetchImpl,
+    })
+    await this.options.store.saveRaccoon({
+      accessToken: result.accessToken,
+      loginAt: Date.now(),
+      ...result.refreshToken === undefined ? {} : { refreshToken: result.refreshToken },
+      ...info.phone === undefined ? { phone } : { phone: info.phone },
+      ...info.name === undefined ? {} : { name: info.name },
+      ...info.ownerType === undefined ? {} : { ownerType: info.ownerType },
+    })
+    this.invalidateModels()
+    this.invalidateQuota()
+  }
+
+  /**
+   * The web SMS endpoint is gated by an Aliyun slider captcha, which this
+   * plugin cannot solve without a browser automation dependency.
+   */
+  async sendSmsCode(_phone: string): Promise<{ msgid: string }> {
+    throw new Error('小浣熊的短信登录需要网页滑块验证，插件内不支持；请使用手机号 + 密码登录。')
+  }
+
+  async loginWithSms(_phone: string, _code: string, _msgid: string): Promise<void> {
+    throw new Error('小浣熊的短信登录需要网页滑块验证，插件内不支持；请使用手机号 + 密码登录。')
+  }
+
+  async logoutAccount(): Promise<void> {
+    await this.options.auth.logout()
+    this.invalidateModels()
+    this.invalidateQuota()
   }
 
   private headers(token: string): Record<string, string> {

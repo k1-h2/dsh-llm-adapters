@@ -42,8 +42,8 @@ export const Config = z.object({
   loomyDisplayName: z.string().default('Loomy').description('模型选择器里 Loomy 分组的名称。').volatile(),
   raccoonDisplayName: z.string().default('商汤小浣熊').description('模型选择器里小浣熊分组的名称。').volatile(),
 
-  loomyAuthFile: z.string().default('').description('Loomy 登录态文件路径。留空则自动查找本机客户端的 userData/auth-session.json；通常无需修改。').volatile(),
-  raccoonAuthFile: z.string().default('').description('小浣熊登录态文件路径。留空则读取 ~/.box-agent/config/auth.json；也可用 BOX_AGENT_CONFIG_DIR / RACCOON_AUTH_FILE 指定。').volatile(),
+  loomyAuthFile: z.string().default('').description('Loomy 客户端登录态文件路径（可选）。留空则自动查找 userData/auth-session.json；使用插件内手机号登录时无需填写。').volatile(),
+  raccoonAuthFile: z.string().default('').description('小浣熊客户端登录态文件路径（可选）。留空则读取 ~/.box-agent/config/auth.json；也可用 BOX_AGENT_CONFIG_DIR / RACCOON_AUTH_FILE 指定。使用插件内登录时无需填写。').volatile(),
 
   loomyDisabledModels: z.array(z.string()).default([]).description('Loomy 已关闭的模型 ID 列表。关闭的模型不会出现在模型选择器里。').volatile(),
   raccoonDisabledModels: z.array(z.string()).default([]).description('小浣熊已关闭的模型 ID 列表。').volatile(),

@@ -4,6 +4,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { LoomyAuth, RaccoonAuth, decodeJwtFacts } from '../src/auth.ts'
+import { AccountStore } from '../src/account-store.ts'
 
 function jwt(expiresAt: number, extras: Record<string, unknown> = {}): string {
   const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url')
@@ -160,5 +161,84 @@ describe('RaccoonAuth', () => {
     vi.stubGlobal('fetch', fetchMock)
     await expect(new RaccoonAuth(() => '').accessToken()).rejects.toThrow('刷新令牌')
     expect(fetchMock).toHaveBeenCalledOnce()
+  })
+})
+
+describe('account-store credentials', () => {
+  it('prefers a plugin Loomy login over the desktop file and can sign out of it', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'loomy-account-'))
+    const file = path.join(root, 'auth-session.json')
+    await writeJson(file, { session: 'file-session', phone: '13900000000' })
+    const store = new AccountStore(() => path.join(root, 'store'))
+    await store.saveLoomy({
+      session: 'account-session',
+      deviceId: 'web-1',
+      loginAt: Date.now(),
+      expiresAt: Date.now() + 3600_000,
+      name: 'Alice',
+      phone: '13800000000',
+    })
+    const auth = new LoomyAuth(() => file, store)
+    const status = await auth.status()
+    expect(status).toMatchObject({
+      signedIn: true,
+      sourceKind: 'account',
+      source: '账号登录',
+      account: { name: 'Alice', phone: '13800000000' },
+    })
+    expect(await auth.session()).toBe('account-session')
+
+    await auth.logout()
+    expect(await auth.session()).toBe('file-session')
+    expect((await auth.status()).sourceKind).toBe('file')
+  })
+
+  it('refreshes Raccoon tokens into the plugin store, not the desktop file', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'raccoon-account-'))
+    const desktopFile = path.join(root, 'auth.json')
+    await writeJson(desktopFile, {
+      access_token: jwt(Date.now() + 3600_000),
+      refresh_token: jwt(Date.now() + 3600_000),
+      office_identity: 'desktop',
+    })
+    const store = new AccountStore(() => path.join(root, 'store'))
+    const oldRefresh = jwt(Date.now() + 3600_000)
+    await store.saveRaccoon({
+      accessToken: jwt(Date.now() - 1000),
+      refreshToken: oldRefresh,
+      loginAt: Date.now(),
+      name: 'Carol',
+    })
+    const nextAccess = jwt(Date.now() + 3 * 3600_000)
+    const nextRefresh = jwt(Date.now() + 30 * 24 * 3600_000)
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      expect(JSON.parse(String(init?.body))).toEqual({ refresh_token: oldRefresh })
+      return new Response(JSON.stringify({
+        code: 0,
+        data: { access_token: nextAccess, refresh_token: nextRefresh },
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const auth = new RaccoonAuth(() => desktopFile, store)
+    expect((await auth.status()).sourceKind).toBe('account')
+    expect(await auth.accessToken()).toBe(nextAccess)
+    expect((await store.raccoon())?.accessToken).toBe(nextAccess)
+    expect((await store.raccoon())?.refreshToken).toBe(nextRefresh)
+    const desktop = JSON.parse(await fs.readFile(desktopFile, 'utf8')) as Record<string, unknown>
+    expect(desktop.office_identity).toBe('desktop')
+    expect(desktop.access_token).not.toBe(nextAccess)
+  })
+
+  it('signs out of the plugin Raccoon account without touching the desktop file', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'raccoon-logout-'))
+    const desktopFile = path.join(root, 'auth.json')
+    await writeJson(desktopFile, { access_token: jwt(Date.now() + 3600_000) })
+    const store = new AccountStore(() => path.join(root, 'store'))
+    await store.saveRaccoon({ accessToken: jwt(Date.now() + 3600_000), loginAt: Date.now() })
+    const auth = new RaccoonAuth(() => desktopFile, store)
+    await auth.logout()
+    expect((await auth.status()).sourceKind).toBe('file')
+    expect(await fs.readFile(desktopFile, 'utf8')).toContain('access_token')
   })
 })

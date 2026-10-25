@@ -2,8 +2,8 @@
  * dsh-llm-adapters host half.
  *
  * Registers two provider routes on `ctx.llm` and mounts the settings API.
- * Every provider reuses a locally signed-in desktop application, so there is
- * no API-key field, no login form, and no credential copied out of the app.
+ * Credentials come from the settings page's account login or, when present,
+ * from a desktop application's own login file.
  *
  * @module dsh-llm-adapters
  */
@@ -13,6 +13,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { LoomyAdapter, RaccoonAdapter, resolveModelId } from './adapter.ts'
 import type { AdapterOptions, LocalAdapter } from './adapter.ts'
+import { AccountStore } from './account-store.ts'
 import { API_PREFIX, handleApi } from './api.ts'
 import { LoomyAuth, RaccoonAuth } from './auth.ts'
 import { BRANDS, LOOMY_PROVIDER, RACCOON_PROVIDER } from './brand.ts'
@@ -42,6 +43,14 @@ declare module '@deepseek-ai/cordis' {
 export { LoomyAdapter, RaccoonAdapter, LocalAdapter, resolveModelId } from './adapter.ts'
 export { LoomyAuth, RaccoonAuth, decodeJwtFacts } from './auth.ts'
 export type { AuthStatus, LocalAccount } from './auth.ts'
+export { AccountStore } from './account-store.ts'
+export type { AccountSource, LoomyAccountRecord, RaccoonAccountRecord, StoredAccounts } from './account-store.ts'
+export {
+  LoginError, LOOMY_ACCOUNT_BASE, RACCOON_WEB_BASE, loomyEncryptPassword, loomyStringToSign,
+  loomySignature, loomyLoginWithPassword, loomySendSmsCode, loomyLoginWithSms,
+  raccoonEncrypt, raccoonLoginWithPassword,
+} from './login.ts'
+export type { LoomyLoginResult, RaccoonLoginResult } from './login.ts'
 export { BRANDS, LOOMY_BRAND, RACCOON_BRAND, LOOMY_PROVIDER, RACCOON_PROVIDER, isBrandId } from './brand.ts'
 export type { BrandId, BrandProfile } from './brand.ts'
 export { ModelCatalog, parseLoomyCatalog, parseRaccoonCatalog, priceFactorOf, RACCOON_MEASURED_VISION } from './catalog.ts'
@@ -78,11 +87,13 @@ export function apply(ctx: Context, config: ParsedConfig): void {
     return { data: image.data, mediaType: image.mediaType }
   }
 
-  const loomyAuth = new LoomyAuth(live.loomyAuthFile)
-  const raccoonAuth = new RaccoonAuth(live.raccoonAuthFile)
+  const accounts = new AccountStore()
+  const loomyAuth = new LoomyAuth(live.loomyAuthFile, accounts)
+  const raccoonAuth = new RaccoonAuth(live.raccoonAuthFile, accounts)
 
   const loomyProvider = new LoomyProvider({
     auth: loomyAuth,
+    store: accounts,
     ttlMs: live.modelCacheTtlMs,
     timeoutMs: live.catalogFetchTimeoutMs,
     textOnly: () => new Set(live.loomyTextOnlyModelIds()),
@@ -90,6 +101,7 @@ export function apply(ctx: Context, config: ParsedConfig): void {
   })
   const raccoonProvider = new RaccoonProvider({
     auth: raccoonAuth,
+    store: accounts,
     ttlMs: live.modelCacheTtlMs,
     timeoutMs: live.catalogFetchTimeoutMs,
     textOnly: () => new Set(live.raccoonTextOnlyModelIds()),

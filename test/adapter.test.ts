@@ -4,6 +4,7 @@ import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import { LocalAdapter } from '../src/adapter.ts'
 import type { AdapterOptions } from '../src/adapter.ts'
 import { API_PREFIX, buildRows, handleApi } from '../src/api.ts'
+import { LoginError } from '../src/login.ts'
 import type { ProviderModel } from '../src/catalog.ts'
 import type { QuotaSnapshot } from '../src/types.ts'
 
@@ -30,6 +31,10 @@ function fakeClient(overrides: Record<string, unknown> = {}) {
     stream: async function* (): AsyncGenerator<StreamChunk> {
       yield { type: 'finish', reason: { kind: 'stop' } }
     },
+    loginWithPassword: vi.fn(async () => undefined),
+    sendSmsCode: vi.fn(async () => ({ msgid: 'msg-1' })),
+    loginWithSms: vi.fn(async () => undefined),
+    logoutAccount: vi.fn(async () => undefined),
     ...overrides,
   }
 }
@@ -162,6 +167,13 @@ function request(url: string, method = 'GET'): Readable & { url: string, method:
   return req
 }
 
+function jsonRequest(url: string, body: unknown, method = 'POST'): Readable & { url: string, method: string } {
+  const req = Readable.from([Buffer.from(JSON.stringify(body), 'utf8')]) as Readable & { url: string, method: string }
+  req.url = url
+  req.method = method
+  return req
+}
+
 function response(): { res: never, captured: Captured } {
   const captured: Captured = { status: 0, body: {} }
   const res = {
@@ -204,5 +216,126 @@ describe('settings API', () => {
     const missing = response()
     await handleApi(request(`${API_PREFIX}/unknown?brand=loomy`), missing.res, { loomy: adapter, raccoon: adapter })
     expect(missing.captured.status).toBe(404)
+  })
+})
+
+describe('account API', () => {
+  it('signs in with a phone number and password and returns the account status', async () => {
+    const login = vi.fn(async () => undefined)
+    const { adapter } = makeAdapter({ loginWithPassword: login })
+    const { res, captured } = response()
+    await handleApi(jsonRequest(`${API_PREFIX}/account`, {
+      brand: 'loomy',
+      action: 'password',
+      phone: '13800000000',
+      password: 'Abcdef123456!',
+    }), res, { loomy: adapter, raccoon: adapter })
+    expect(captured.status).toBe(200)
+    expect(login).toHaveBeenCalledWith('13800000000', 'Abcdef123456!')
+    expect(captured.body).toMatchObject({ brand: 'loomy', signedIn: true })
+    expect(JSON.stringify(captured.body)).not.toContain('Abcdef123456!')
+  })
+
+  it('validates the phone number before calling the provider', async () => {
+    const login = vi.fn(async () => undefined)
+    const { adapter } = makeAdapter({ loginWithPassword: login })
+    const { res, captured } = response()
+    await handleApi(jsonRequest(`${API_PREFIX}/account`, {
+      brand: 'loomy',
+      action: 'password',
+      phone: '123',
+      password: 'x',
+    }), res, { loomy: adapter, raccoon: adapter })
+    expect(captured.status).toBe(400)
+    expect(login).not.toHaveBeenCalled()
+  })
+
+  it('maps bad credentials to 401 without echoing the password', async () => {
+    const login = vi.fn(async () => {
+      throw new LoginError('手机号或密码错误。', 'BAD_CREDENTIALS')
+    })
+    const { adapter } = makeAdapter({ loginWithPassword: login })
+    const { res, captured } = response()
+    await handleApi(jsonRequest(`${API_PREFIX}/account`, {
+      brand: 'loomy',
+      action: 'password',
+      phone: '13800000001',
+      password: 'Secret123!',
+    }), res, { loomy: adapter, raccoon: adapter })
+    expect(captured.status).toBe(401)
+    expect(captured.body.error).toBe('手机号或密码错误。')
+    expect(JSON.stringify(captured.body)).not.toContain('Secret123!')
+  })
+
+  it('sends and exchanges an SMS code', async () => {
+    const sendSmsCode = vi.fn(async () => ({ msgid: 'msg-9' }))
+    const loginWithSms = vi.fn(async () => undefined)
+    const { adapter } = makeAdapter({ sendSmsCode, loginWithSms })
+    const send = response()
+    await handleApi(jsonRequest(`${API_PREFIX}/account`, {
+      brand: 'loomy',
+      action: 'sms-send',
+      phone: '13800000002',
+    }), send.res, { loomy: adapter, raccoon: adapter })
+    expect(send.captured.status).toBe(200)
+    expect(send.captured.body.msgid).toBe('msg-9')
+
+    const verify = response()
+    await handleApi(jsonRequest(`${API_PREFIX}/account`, {
+      brand: 'loomy',
+      action: 'sms-login',
+      phone: '13800000002',
+      code: '123456',
+      msgid: 'msg-9',
+    }), verify.res, { loomy: adapter, raccoon: adapter })
+    expect(verify.captured.status).toBe(200)
+    expect(loginWithSms).toHaveBeenCalledWith('13800000002', '123456', 'msg-9')
+  })
+
+  it('reports Raccoon SMS as unsupported instead of pretending to send', async () => {
+    const { adapter } = makeAdapter({
+      sendSmsCode: async () => { throw new Error('小浣熊的短信登录需要网页滑块验证，插件内不支持；请使用手机号 + 密码登录。') },
+    })
+    const { res, captured } = response()
+    await handleApi(jsonRequest(`${API_PREFIX}/account`, {
+      brand: 'raccoon',
+      action: 'sms-send',
+      phone: '13800000003',
+    }), res, { loomy: adapter, raccoon: adapter })
+    expect(captured.status).toBe(400)
+    expect(String(captured.body.error)).toContain('滑块')
+  })
+
+  it('signs out and clears the account state', async () => {
+    const logoutAccount = vi.fn(async () => undefined)
+    const { adapter: loomyAdapter } = makeAdapter()
+    const { adapter: raccoonAdapter } = makeAdapter({
+      logoutAccount,
+      status: async () => ({ signedIn: false }),
+    }, { brand: 'raccoon' })
+    const { res, captured } = response()
+    await handleApi(jsonRequest(`${API_PREFIX}/account`, { brand: 'raccoon', action: 'logout' }), res, {
+      loomy: loomyAdapter,
+      raccoon: raccoonAdapter,
+    })
+    expect(captured.status).toBe(200)
+    expect(logoutAccount).toHaveBeenCalledOnce()
+    expect(captured.body).toMatchObject({ brand: 'raccoon', signedIn: false })
+  })
+
+  it('rejects an unknown action and an unknown brand', async () => {
+    const { adapter } = makeAdapter()
+    const unknownAction = response()
+    await handleApi(jsonRequest(`${API_PREFIX}/account`, {
+      brand: 'loomy', action: 'face', phone: '13800000004',
+    }), unknownAction.res, { loomy: adapter, raccoon: adapter })
+    expect(unknownAction.captured.status).toBe(400)
+
+    const unknownBrand = response()
+    await handleApi(jsonRequest(`${API_PREFIX}/account`, { brand: 'nope', action: 'logout' }), unknownBrand.res, {
+      loomy: adapter,
+      raccoon: adapter,
+    })
+    expect(unknownBrand.captured.status).toBe(400)
   })
 })

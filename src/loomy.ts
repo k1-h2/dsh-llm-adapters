@@ -11,10 +11,14 @@
 
 import { randomBytes, randomUUID } from 'node:crypto'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { AccountStore } from './account-store.ts'
 import { LoomyAuth } from './auth.ts'
 import { parseLoomyCatalog, ModelCatalog } from './catalog.ts'
 import type { ProviderModel } from './catalog.ts'
 import { fetchJson } from './http.ts'
+import {
+  LOOMY_SESSION_TTL_MS, loomyAccountName, loomyLoginWithPassword, loomyLoginWithSms, loomySendSmsCode,
+} from './login.ts'
 import type { QuotaSnapshot } from './types.ts'
 import { ProviderHttpError, buildBody, buildMessages, buildTools, openAiStream } from './wire.ts'
 import type { ReadImage } from './wire.ts'
@@ -24,6 +28,7 @@ export const LOOMY_VERSION = '0.9.38'
 
 export interface LoomyProviderOptions {
   auth: LoomyAuth
+  store: AccountStore
   ttlMs: () => number
   timeoutMs: () => number
   textOnly: () => ReadonlySet<string>
@@ -91,6 +96,70 @@ export class LoomyProvider {
 
   async signedIn(): Promise<boolean> {
     return (await this.options.auth.status()).signedIn
+  }
+
+  /**
+   * Sign in through the account service and keep the session in the plugin
+   * store. The password is encrypted for transit and never persisted.
+   */
+  async loginWithPassword(phone: string, password: string): Promise<void> {
+    const deviceId = await this.options.store.loomyDeviceId()
+    const result = await loomyLoginWithPassword({
+      phone,
+      password,
+      deviceId,
+      fetchImpl: this.options.fetchImpl,
+    })
+    const name = await loomyAccountName({
+      session: result.session,
+      deviceId,
+      fetchImpl: this.options.fetchImpl,
+    })
+    const now = Date.now()
+    await this.options.store.saveLoomy({
+      session: result.session,
+      deviceId,
+      loginAt: now,
+      expiresAt: now + LOOMY_SESSION_TTL_MS,
+      ...result.userId === undefined ? {} : { userId: result.userId },
+      ...result.phone === undefined ? { phone } : { phone: result.phone },
+      ...name === undefined ? {} : { name },
+    })
+    this.invalidateModels()
+    this.invalidateQuota()
+  }
+
+  async sendSmsCode(phone: string): Promise<{ msgid: string }> {
+    const deviceId = await this.options.store.loomyDeviceId()
+    return loomySendSmsCode({ phone, deviceId, fetchImpl: this.options.fetchImpl })
+  }
+
+  async loginWithSms(phone: string, code: string, msgid: string): Promise<void> {
+    const deviceId = await this.options.store.loomyDeviceId()
+    const result = await loomyLoginWithSms({ phone, code, msgid, deviceId, fetchImpl: this.options.fetchImpl })
+    const name = await loomyAccountName({
+      session: result.session,
+      deviceId,
+      fetchImpl: this.options.fetchImpl,
+    })
+    const now = Date.now()
+    await this.options.store.saveLoomy({
+      session: result.session,
+      deviceId,
+      loginAt: now,
+      expiresAt: now + LOOMY_SESSION_TTL_MS,
+      ...result.userId === undefined ? {} : { userId: result.userId },
+      ...result.phone === undefined ? { phone } : { phone: result.phone },
+      ...name === undefined ? {} : { name },
+    })
+    this.invalidateModels()
+    this.invalidateQuota()
+  }
+
+  async logoutAccount(): Promise<void> {
+    await this.options.auth.logout()
+    this.invalidateModels()
+    this.invalidateQuota()
   }
 
   async session(): Promise<string> {

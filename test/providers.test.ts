@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { generateKeyPairSync } from 'node:crypto'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { LoomyProvider } from '../src/loomy.ts'
 import { RaccoonProvider } from '../src/raccoon.ts'
@@ -42,16 +43,42 @@ describe('LoomyProvider', () => {
       session: async () => 'loomy-session',
       ...authOverrides,
     }
+    const store = {
+      saveLoomy: vi.fn(async () => undefined),
+      saveRaccoon: vi.fn(async () => undefined),
+      loomyDeviceId: vi.fn(async () => 'web-test'),
+    }
     const provider = new LoomyProvider({
       auth: auth as never,
+      store: store as never,
       ttlMs: () => 1000,
       timeoutMs: () => 1000,
       textOnly: () => new Set(),
       forceVision: () => new Set(),
       fetchImpl,
     })
-    return { provider, auth }
+    return { provider, auth, store }
   }
+
+  it('stores a successful web login with the account name', async () => {
+    const { publicKey } = generateKeyPairSync('rsa', { modulusLength: 1024 })
+    const pukey = (publicKey.export({ type: 'spki', format: 'der' }) as Buffer).toString('base64')
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      const path = new URL(String(url)).pathname
+      if (path.endsWith('/getPuKey')) return json({ code: '000000', data: { pukey, rcode: 'r' } })
+      if (path.endsWith('/byPwd')) return json({ code: '000000', data: { session: 'sess-1', userid: 'u1' } })
+      return json({ code: '000000', data: { nickname: 'Alice' } })
+    })
+    const { provider, store } = make(fetchMock as unknown as typeof fetch)
+    await provider.loginWithPassword('13800000000', 'Abcdef123456!')
+    expect(store.saveLoomy).toHaveBeenCalledWith(expect.objectContaining({
+      session: 'sess-1',
+      userId: 'u1',
+      name: 'Alice',
+      phone: '13800000000',
+      deviceId: 'web-test',
+    }))
+  })
 
   it('sends the client tracing headers and bearer session', async () => {
     const seen: { url?: string, headers?: Record<string, string> } = {}
@@ -118,16 +145,47 @@ describe('RaccoonProvider', () => {
       status: async () => ({ signedIn: true }),
       accessToken,
     }
+    const store = {
+      saveRaccoon: vi.fn(async () => undefined),
+      saveLoomy: vi.fn(async () => undefined),
+      loomyDeviceId: vi.fn(async () => 'web-test'),
+    }
     const provider = new RaccoonProvider({
       auth: auth as never,
+      store: store as never,
       ttlMs: () => 1000,
       timeoutMs: () => 1000,
       textOnly: () => new Set(),
       forceVision: () => new Set(),
       fetchImpl,
     })
-    return { provider, accessToken }
+    return { provider, accessToken, store }
   }
+
+  it('stores a successful web login and reads the account name', async () => {
+    const calls: string[] = []
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      const path = new URL(String(url)).pathname
+      calls.push(path)
+      if (path.endsWith('/user_info')) {
+        return json({ code: 0, data: { name: 'Carol', phone: '13900000000', owner_type: 'users' } })
+      }
+      return json({ code: 0, data: { access_token: 'a1', refresh_token: 'r1' } })
+    })
+    const { provider, store } = make(fetchMock as unknown as typeof fetch)
+    await provider.loginWithPassword('13800000000', 'Abcdef123456!')
+    expect(calls).toEqual([
+      '/api/web/auth/v1/login_with_password',
+      '/api/web/auth/v1/user_info',
+    ])
+    expect(store.saveRaccoon).toHaveBeenCalledWith(expect.objectContaining({
+      accessToken: 'a1',
+      refreshToken: 'r1',
+      name: 'Carol',
+      phone: '13900000000',
+      ownerType: 'users',
+    }))
+  })
 
   it('reads the chat category with desktop headers', async () => {
     const seen: { url?: string, headers?: Record<string, string> } = {}

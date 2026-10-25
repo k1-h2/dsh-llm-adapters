@@ -58,6 +58,14 @@ describe('client bundle', () => {
     expect(Object.keys(exports.__test.zh).sort()).toEqual(Object.keys(exports.__test.en).sort())
   })
 
+  it('ships account login copy for both providers', () => {
+    expect(exports.__test.zh.loginSubmit).toBe('登录')
+    expect(exports.__test.zh.sourceAccount).toBe('插件账号登录')
+    expect(exports.__test.zh.loginSmsUnsupported).toContain('滑块')
+    expect(exports.__test.en.loginSubmit).toBe('Sign in')
+    expect(exports.__test.en.sourceAccount).toBe('Plugin account')
+  })
+
   it('formats windows, credits and prices for the cards', () => {
     expect(exports.__test.windowLabel(1_000_000)).toBe('1M')
     expect(exports.__test.windowLabel(256_000)).toBe('256K')
