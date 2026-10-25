@@ -150,8 +150,10 @@ export class RaccoonProvider {
 
   private login(): RaccoonQrLogin {
     if (this.loginFlow !== undefined) return this.loginFlow
+    const fetchImpl = this.options.fetchImpl ?? fetch
     this.loginFlow = new RaccoonQrLogin({
-      fetchImpl: this.options.fetchImpl ?? fetch,
+      fetchImpl,
+      validate: token => raccoonAccessTokenValid(token, fetchImpl),
       save: async account => {
         await this.options.store.saveRaccoon({
           accessToken: account.token,

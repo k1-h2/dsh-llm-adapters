@@ -54,8 +54,13 @@ export {
   buildLoomyWechatAuthUrl, extractWechatUuid, fetchLoomyWechatUuid,
 } from './loomy-login.ts'
 export type { LoomyLoginAccount, LoomyLoginOptions } from './loomy-login.ts'
-export { RaccoonQrLogin, RACCOON_QR_ORIGIN, pollRaccoonQr, raccoonQrCode, raccoonQrContent } from './raccoon-login.ts'
-export type { RaccoonLoginAccount, RaccoonLoginOptions } from './raccoon-login.ts'
+export {
+  RaccoonIamError, RaccoonQrLogin, RACCOON_IAM_BASE, RACCOON_QR_APP_NAME, RACCOON_QR_ORIGIN,
+  createRaccoonQr, pollRaccoonQr, raccoonQrContent,
+} from './raccoon-login.ts'
+export type {
+  RaccoonLoginAccount, RaccoonLoginOptions, RaccoonQrPoll, RaccoonQrSession,
+} from './raccoon-login.ts'
 export { buildQrMatrix, renderQrSvg } from './qr.ts'
 export type { QrMatrix } from './qr.ts'
 export { BRANDS, LOOMY_BRAND, RACCOON_BRAND, LOOMY_PROVIDER, RACCOON_PROVIDER, isBrandId } from './brand.ts'
