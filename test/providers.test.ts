@@ -212,19 +212,18 @@ describe('RaccoonProvider', () => {
     expect(bodies[2]!.extra_body).toEqual({ thinking: { type: 'disabled' } })
   })
 
-  it('retries once with a rotated token when the first attempt is rejected', async () => {
+  it('asks for a new scan when the gateway rejects the stored token', async () => {
     const calls: { token?: string }[] = []
     const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
       const headers = init.headers as Record<string, string>
       calls.push({ token: headers.authorization })
-      if (calls.length === 1) return json({ message: 'token expired' }, 401)
-      return sse()
+      return json({ message: 'token expired' }, 401)
     })
     const { provider, accessToken } = make(fetchMock as unknown as typeof fetch)
-    const chunks = await collect(provider.stream({ ...options, provider: 'raccoon' }, 'sn-glm-5-3-flash', undefined))
-    expect(calls.map(call => call.token)).toEqual(['Bearer token-1', 'Bearer token-2'])
-    expect(accessToken).toHaveBeenCalledWith(true)
-    expect(chunks.at(-1)).toEqual({ type: 'finish', reason: { kind: 'stop' } })
+    await expect(collect(provider.stream({ ...options, provider: 'raccoon' }, 'sn-glm-5-3-flash', undefined)))
+      .rejects.toThrow('登录已失效')
+    expect(calls.map(call => call.token)).toEqual(['Bearer token-1'])
+    expect(accessToken).not.toHaveBeenCalledWith(true)
   })
 
   it('does not retry after output has already reached the caller', async () => {

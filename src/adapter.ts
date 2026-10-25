@@ -71,12 +71,11 @@ export abstract class LocalAdapter extends LlmAdapter {
   async catalogError(): Promise<string | undefined> {
     if (!(await this.client.signedIn())) {
       const status = await this.client.status()
-      return status.error ?? '尚未登录。请在设置页用浏览器扫码登录，或先打开对应桌面应用完成登录。'
+      return status.error ?? '尚未登录。请在设置页点「打开扫码登录」。'
     }
     return this.client.catalogError()
   }
 
-  /** Clear the plugin's own credentials; the desktop app is untouched. */
   async logoutAccount(): Promise<void> {
     await this.client.logoutAccount()
   }
@@ -167,7 +166,7 @@ export abstract class LocalAdapter extends LlmAdapter {
   async *stream(options: GenerateOptions): AsyncGenerator<StreamChunk> {
     if (!(await this.client.signedIn())) {
       const status = await this.client.status()
-      throw new Error(status.error ?? '尚未登录。请在设置页用浏览器扫码登录，或先打开对应桌面应用完成登录。')
+      throw new Error(status.error ?? '尚未登录。请在设置页点「打开扫码登录」。')
     }
     const model = resolveModelId(options.model, this.options.modelAliases())
     const live = (await this.client.models()).find(entry => entry.id === model)

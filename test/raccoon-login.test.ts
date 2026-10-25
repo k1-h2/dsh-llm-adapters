@@ -109,7 +109,6 @@ describe('raccoon QR login', () => {
       ok({
         status: 'success',
         access_token: 'a',
-        refresh_token: 'r',
         token_type: 'Bearer',
         expires_in: 297,
         poll_interval: 2,
@@ -126,7 +125,6 @@ describe('raccoon QR login', () => {
     expect(await pollRaccoonQr('c', fetchImpl)).toEqual({
       status: 'success',
       accessToken: 'a',
-      refreshToken: 'r',
       expiresIn: 297,
       pollInterval: 2,
     })
@@ -171,7 +169,6 @@ describe('raccoon QR login', () => {
           : ok({
               status: 'success',
               access_token: 'access-token',
-              refresh_token: 'refresh-token',
               token_type: 'Bearer',
               expires_in: 298,
               poll_interval: 2,
@@ -210,7 +207,6 @@ describe('raccoon QR login', () => {
     expect(validate).toHaveBeenCalledWith('access-token')
     expect(save).toHaveBeenCalledWith({
       token: 'access-token',
-      refreshToken: 'refresh-token',
       name: 'Tester',
       phone: '13800138000',
       ownerType: 'personal',
@@ -227,7 +223,7 @@ describe('raccoon QR login', () => {
       if (url.endsWith('/api/web/auth/v1/iam/confirm')) {
         return withCookies({ code: 0 }, [
           'xhx_token=business-token; Path=/; HttpOnly',
-          'raccoon_refresh_token=business-refresh; Path=/; HttpOnly',
+          'raccoon_refresh_token=ignored-refresh; Path=/; HttpOnly',
         ])
       }
       if (url.endsWith('/api/web/auth/v1/user_info')) {
@@ -249,7 +245,6 @@ describe('raccoon QR login', () => {
     expect(validate).toHaveBeenCalledWith('business-token')
     expect(save).toHaveBeenCalledWith({
       token: 'business-token',
-      refreshToken: 'business-refresh',
       name: 'Tester',
     })
   })

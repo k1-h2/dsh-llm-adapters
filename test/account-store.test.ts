@@ -20,7 +20,6 @@ const loomy = {
 
 const raccoon = {
   accessToken: 'access-1',
-  refreshToken: 'refresh-1',
   loginAt: 1,
 }
 
@@ -38,7 +37,7 @@ describe('AccountStore', () => {
     expect(files).toEqual(['accounts.json'])
     const parsed = JSON.parse(await fs.readFile(store.path(), 'utf8')) as Record<string, unknown>
     expect(parsed.loomy).toMatchObject({ session: 'loomy-session', phone: '13800000000' })
-    expect(parsed.raccoon).toMatchObject({ accessToken: 'access-1', refreshToken: 'refresh-1' })
+    expect(parsed.raccoon).toMatchObject({ accessToken: 'access-1' })
   })
 
   it('serializes concurrent writes so neither brand is lost', async () => {

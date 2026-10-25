@@ -30,7 +30,6 @@ const IAM_TIMEOUT_MS = 20_000
 
 export interface RaccoonLoginAccount {
   token: string
-  refreshToken?: string
   name?: string
   phone?: string
   ownerType?: string
@@ -55,7 +54,6 @@ export interface RaccoonQrSession {
 export interface RaccoonQrPoll {
   status: 'pending' | 'logging' | 'canceled' | 'success' | 'expired' | 'error'
   accessToken?: string
-  refreshToken?: string
   expiresIn?: number
   pollInterval?: number
   message?: string
@@ -207,11 +205,9 @@ export async function pollRaccoonQr(
     if (tokenType !== undefined && tokenType.toLowerCase() !== 'bearer') {
       throw new RaccoonIamError('INVALID_RESPONSE', '小浣熊登录响应包含不支持的令牌类型。')
     }
-    const refreshToken = stringField(data.refresh_token)
     return {
       status: 'success',
       accessToken,
-      ...refreshToken === undefined ? {} : { refreshToken },
       ...timing,
     }
   } catch (error) {
@@ -257,7 +253,7 @@ function cookieValue(setCookies: readonly string[], matches: (name: string) => b
 async function confirmIamSession(
   token: string,
   fetchImpl: typeof fetch,
-): Promise<{ token?: string, refreshToken?: string }> {
+): Promise<{ token?: string }> {
   try {
     const response = await fetchImpl(`${RACCOON_WEB_API}/auth/v1/iam/confirm`, {
       method: 'POST',
@@ -277,10 +273,8 @@ async function confirmIamSession(
     await response.text()
     if (!response.ok) return {}
     const businessToken = cookieValue(setCookies, name => name === 'xhx_token' || name.endsWith('xhx_token'))
-    const refreshToken = cookieValue(setCookies, name => name.endsWith('raccoon_refresh_token'))
     return {
       ...businessToken === undefined ? {} : { token: businessToken },
-      ...refreshToken === undefined ? {} : { refreshToken },
     }
   } catch {
     /* the gateway probe below decides whether the token is usable */
@@ -316,7 +310,6 @@ export class RaccoonQrLogin {
     let session: RaccoonQrSession | undefined
     let deadline = 0
     let accessToken = ''
-    let refreshToken: string | undefined
 
     try {
       const handle = await startLoginPage({
@@ -341,7 +334,6 @@ export class RaccoonQrLogin {
           }
           if (polled.status === 'success' && polled.accessToken !== undefined) {
             accessToken = polled.accessToken
-            refreshToken = polled.refreshToken
             return { phase: 'done', message: '登录成功，可以关闭此窗口。' }
           }
           if (polled.status === 'logging') {
@@ -363,14 +355,11 @@ export class RaccoonQrLogin {
           const confirmed = await confirmIamSession(accessToken, fetchImpl)
           const token = confirmed.token ?? accessToken
           if (!(await this.options.validate(token))) {
-            throw new Error('小浣熊账号已授权，但模型网关拒绝了这次登录令牌。请重试；若持续出现，请改用桌面客户端登录态。')
+            throw new Error('小浣熊账号已授权，但模型网关拒绝了这次登录令牌。请重新扫码；若持续出现，请稍后再试。')
           }
           const info = await raccoonAccountInfo({ accessToken: token, fetchImpl })
           await this.options.save({
             token,
-            ...confirmed.refreshToken === undefined && refreshToken === undefined
-              ? {}
-              : { refreshToken: confirmed.refreshToken ?? refreshToken },
             ...info,
           })
         },

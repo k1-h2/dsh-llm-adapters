@@ -17,9 +17,6 @@ export interface Config {
   raccoonEnabled?: boolean
   loomyDisplayName?: string
   raccoonDisplayName?: string
-  /** Explicit credential path; empty means auto-discover the app's login. */
-  loomyAuthFile?: string
-  raccoonAuthFile?: string
   loomyDisabledModels?: string[]
   raccoonDisabledModels?: string[]
   loomyModelContextWindows?: Record<string, number>
@@ -41,9 +38,6 @@ export const Config = z.object({
 
   loomyDisplayName: z.string().default('Loomy').description('模型选择器里 Loomy 分组的名称。').volatile(),
   raccoonDisplayName: z.string().default('商汤小浣熊').description('模型选择器里小浣熊分组的名称。').volatile(),
-
-  loomyAuthFile: z.string().default('').description('Loomy 客户端登录态文件路径（可选）。留空则自动查找 userData/auth-session.json；使用浏览器扫码登录时无需填写。').volatile(),
-  raccoonAuthFile: z.string().default('').description('小浣熊客户端登录态文件路径（可选）。留空则读取 ~/.box-agent/config/auth.json；也可用 BOX_AGENT_CONFIG_DIR / RACCOON_AUTH_FILE 指定。使用浏览器扫码登录时无需填写。').volatile(),
 
   loomyDisabledModels: z.array(z.string()).default([]).description('Loomy 已关闭的模型 ID 列表。关闭的模型不会出现在模型选择器里。').volatile(),
   raccoonDisabledModels: z.array(z.string()).default([]).description('小浣熊已关闭的模型 ID 列表。').volatile(),
@@ -67,8 +61,6 @@ export interface ResolvedConfig {
   raccoonEnabled: boolean
   loomyDisplayName: string
   raccoonDisplayName: string
-  loomyAuthFile: string
-  raccoonAuthFile: string
   loomyDisabledModels: readonly string[]
   raccoonDisabledModels: readonly string[]
   loomyModelContextWindows: Readonly<Record<string, number>>
@@ -99,8 +91,6 @@ export function liveConfig(config: ParsedConfig | undefined): LiveConfig {
     raccoonEnabled: () => bool(field('raccoonEnabled'), true),
     loomyDisplayName: () => nonEmpty(field('loomyDisplayName'), 'Loomy'),
     raccoonDisplayName: () => nonEmpty(field('raccoonDisplayName'), '商汤小浣熊'),
-    loomyAuthFile: () => text(field('loomyAuthFile')),
-    raccoonAuthFile: () => text(field('raccoonAuthFile')),
     loomyDisabledModels: () => stringList(field('loomyDisabledModels')),
     raccoonDisabledModels: () => stringList(field('raccoonDisabledModels')),
     loomyModelContextWindows: () => numberMap(field('loomyModelContextWindows')),
@@ -124,8 +114,6 @@ export function resolveConfig(config: ParsedConfig | undefined): ResolvedConfig 
     raccoonEnabled: live.raccoonEnabled(),
     loomyDisplayName: live.loomyDisplayName(),
     raccoonDisplayName: live.raccoonDisplayName(),
-    loomyAuthFile: live.loomyAuthFile(),
-    raccoonAuthFile: live.raccoonAuthFile(),
     loomyDisabledModels: live.loomyDisabledModels(),
     raccoonDisabledModels: live.raccoonDisabledModels(),
     loomyModelContextWindows: live.loomyModelContextWindows(),

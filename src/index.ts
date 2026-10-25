@@ -2,8 +2,8 @@
  * dsh-llm-adapters host half.
  *
  * Registers two provider routes on `ctx.llm` and mounts the settings API.
- * Credentials come from the settings page's account login or, when present,
- * from a desktop application's own login file.
+ * Credentials come only from the settings page's QR login, stored in the
+ * plugin's own account store.
  *
  * @module dsh-llm-adapters
  */
@@ -44,7 +44,7 @@ export { LoomyAdapter, RaccoonAdapter, LocalAdapter, resolveModelId } from './ad
 export { LoomyAuth, RaccoonAuth, decodeJwtFacts } from './auth.ts'
 export type { AuthStatus, LocalAccount } from './auth.ts'
 export { AccountStore } from './account-store.ts'
-export type { AccountSource, LoomyAccountRecord, RaccoonAccountRecord, StoredAccounts } from './account-store.ts'
+export type { LoomyAccountRecord, RaccoonAccountRecord, StoredAccounts } from './account-store.ts'
 export { startLoginPage } from './login-page.ts'
 export type {
   LoginBindingSpec, LoginPageHandle, LoginPageSpec, LoginPhase, LoginPoll, LoginStatus,
@@ -102,8 +102,8 @@ export function apply(ctx: Context, config: ParsedConfig): void {
   }
 
   const accounts = new AccountStore()
-  const loomyAuth = new LoomyAuth(live.loomyAuthFile, accounts)
-  const raccoonAuth = new RaccoonAuth(live.raccoonAuthFile, accounts)
+  const loomyAuth = new LoomyAuth(accounts)
+  const raccoonAuth = new RaccoonAuth(accounts)
 
   const loomyProvider = new LoomyProvider({
     auth: loomyAuth,

@@ -151,6 +151,24 @@ describe('parseRaccoonCatalog', () => {
     expect(byId['sn-glm-5-3-flash']!.vision).toBe(false)
     expect(byId['sn-glm-5-3']!.vision).toBe(true)
   })
+
+  it('marks the 1017 build as vision from measured evidence', () => {
+    const models = parseRaccoonCatalog({
+      data: {
+        categories: [{
+          type: 'chat',
+          models: [{
+            name: 'sn-deepseek-v4-1-flash-1017',
+            description: 'DeepSeek-V4.1-Flash-1017',
+            visible: true,
+            tags: ['general', 'code', 'reasoning'],
+            params: { context_window: 1_000_000, max_tokens: 100_000 },
+          }],
+        }],
+      },
+    })
+    expect(models[0]!.vision).toBe(true)
+  })
 })
 
 describe('ModelCatalog', () => {

@@ -3,7 +3,7 @@
  *
  * The gateway is OpenAI-compatible but requires client tracing headers on every
  * call; without `traceparent` it accepts the connection and then never
- * answers. The session comes from the desktop client's auth file and cannot be
+ * answers. The session comes from the plugin's QR login and cannot be
  * refreshed, so an expired session is a user-visible login action.
  *
  * @module dsh-llm-adapters/loomy
@@ -190,7 +190,7 @@ export class LoomyProvider {
     const session = await this.options.auth.session()
     if (session !== undefined) return session
     const status = await this.options.auth.status()
-    throw new Error(status.error ?? 'Loomy 尚未登录。请在设置页用浏览器扫码登录，或启动 Loomy 客户端完成登录。')
+    throw new Error(status.error ?? 'Loomy 尚未登录。请在设置页点「打开扫码登录」。')
   }
 
   private async fetchModels(): Promise<ProviderModel[]> {
@@ -291,7 +291,7 @@ export class LoomyProvider {
       })
     } catch (error) {
       if (error instanceof ProviderHttpError && (error.status === 401 || error.status === 403)) {
-        throw new Error('Loomy 登录态已失效。请在设置页重新登录浏览器账号，或打开 Loomy 客户端重新登录后再点“重新读取登录态”。')
+        throw new Error('Loomy 登录态已失效。请在设置页点「打开扫码登录」重新扫码。')
       }
       throw error
     }

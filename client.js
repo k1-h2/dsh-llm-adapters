@@ -6,8 +6,8 @@
  * model on/off and context-window controls, then a collapsed advanced area.
  *
  * The account card is read-only by design. It never asks for a password or a
- * token and never logs out the desktop app; it only reports the local login and
- * quota that the app already owns.
+ * token; sign-in happens in the provider's own page through a WeChat QR code,
+ * and the card only reports the resulting account and quota.
  *
  * Hand-written ModuleLoader bundle: no build step, no dependency beyond the
  * `react` the shell provides.
@@ -58,14 +58,9 @@ window.__ModuleLoader__.load({
       reset: '恢复默认',
       windowWarn: '窗口越大，DSH 的自动压缩触发得越晚。若对话经常超限，请选较小的窗口。',
       accountTitle: '登录与账号',
-      source: '登录方式',
-      sourceAuto: '自动查找',
-      sourceAccount: '插件账号登录',
-      sourceFile: '桌面客户端登录态',
       account: '账号',
-      accountUnknown: '账号信息未在本地登录态中提供',
+      accountUnknown: '账号信息未提供',
       expires: '预计到期',
-      refreshExpires: '刷新令牌到期',
       quota: '额度',
       quotaRefreshing: '正在读取额度…',
       quotaUnavailable: '暂时无法读取额度',
@@ -82,7 +77,7 @@ window.__ModuleLoader__.load({
       notLoggedIn: '未登录',
       reread: '重新读取登录态',
       reading: '读取中…',
-      loginGuide: '不需要安装桌面客户端：点“打开扫码登录”，用微信扫码后会自动接回。',
+      loginGuide: '点“打开扫码登录”，用微信扫码后会自动接回。',
       browserTitle: '微信扫码登录',
       browserOpen: '打开扫码登录',
       browserWaiting: '等待扫码…',
@@ -94,21 +89,17 @@ window.__ModuleLoader__.load({
       loomyHint: 'Loomy 会话约 14 天有效，且没有刷新令牌；过期后再点“打开扫码登录”即可。',
       raccoonHint: '小浣熊扫码登录的令牌约 30 天有效，到期后重新扫码即可。思考开关在聊天框的模型菜单里切换（默认关闭，回复更快）。',
       loginLogout: '退出登录',
-      loginConfirmLogout: '确定要退出插件里的账号登录吗？桌面客户端不受影响。',
-      loginFileSourceNote: '当前使用的是桌面客户端的登录态。若要改用插件账号，点上面的“打开扫码登录”即可覆盖。',
+      loginConfirmLogout: '确定要退出当前账号吗？',
       loginFailedPrefix: '登录失败',
-      loomyLoginMissing: 'Loomy 尚未登录。请用浏览器扫码登录，或直接复用 Loomy 客户端的登录态。',
-      raccoonLoginMissing: '小浣熊尚未登录。请用浏览器扫码登录，或直接复用桌面端的登录态。',
-      expiresEstimated: '约',
+      loomyLoginMissing: 'Loomy 尚未登录。请点「打开扫码登录」用微信扫码。',
+      raccoonLoginMissing: '小浣熊尚未登录。请点「打开扫码登录」用微信扫码。',
       possiblyExpired: '登录态可能已过期',
-      needsRefresh: '访问令牌即将过期；下一次请求或额度刷新会自动续期。',
       modelsEmptyLoomy: 'Loomy 没有返回模型。请确认账号已登录，然后点“重新读取登录态”。',
       modelsEmptyRaccoon: '小浣熊没有返回模型。请确认账号已登录，然后点“重新读取登录态”。',
       modelsHint: '登录后才会读取并显示可用模型。',
       catalogNotice: '模型列表提示',
       advancedFields: {
         displayName: '分组名称',
-        authFile: '登录态文件路径（留空自动查找）',
         visionModelIds: '强制启用读图的模型 ID（JSON 数组）',
         textOnlyModelIds: '强制按纯文本处理的模型 ID（JSON 数组）',
         modelAliases: '模型别名（JSON 对象）',
@@ -116,10 +107,10 @@ window.__ModuleLoader__.load({
       },
       loomyNav: 'Loomy',
       loomyTitle: 'Loomy',
-      loomyIntro: '点“打开扫码登录”，用 Loomy 账号完成登录即可使用，无需安装桌面客户端；也可以直接复用客户端的本机登录态。改动即时生效，无需重启。',
+      loomyIntro: '点“打开扫码登录”，用微信扫码登录 Loomy 即可使用，无需安装客户端。改动即时生效，无需重启。',
       raccoonNav: '商汤小浣熊',
       raccoonTitle: '商汤小浣熊',
-      raccoonIntro: '点“打开扫码登录”，用小浣熊账号完成登录即可使用，无需安装桌面客户端；也可以直接复用桌面端的本机登录态。改动即时生效，无需重启。',
+      raccoonIntro: '点“打开扫码登录”，用微信扫码登录小浣熊即可使用，无需安装客户端。改动即时生效，无需重启。',
     }
     const en = {
       pluginOptionsTitle: 'Enabled providers',
@@ -155,14 +146,9 @@ window.__ModuleLoader__.load({
       reset: 'Reset',
       windowWarn: 'A larger window delays automatic compaction. Choose a smaller value if conversations often overflow.',
       accountTitle: 'Sign-in',
-      source: 'Sign-in method',
-      sourceAuto: 'auto-discovered',
-      sourceAccount: 'Plugin account',
-      sourceFile: 'Desktop app login',
       account: 'Account',
-      accountUnknown: 'The login state does not expose account details',
+      accountUnknown: 'Account details are unavailable',
       expires: 'Expires (estimated)',
-      refreshExpires: 'Refresh token expires',
       quota: 'Quota',
       quotaRefreshing: 'Reading quota…',
       quotaUnavailable: 'Quota is temporarily unavailable',
@@ -179,7 +165,7 @@ window.__ModuleLoader__.load({
       notLoggedIn: 'Not signed in',
       reread: 'Re-read login state',
       reading: 'Reading…',
-      loginGuide: 'No desktop app is required: use “Open QR sign-in” and scan the code in WeChat; the login is adopted automatically.',
+      loginGuide: 'Use “Open QR sign-in” and scan the code in WeChat; the login is adopted automatically.',
       browserTitle: 'WeChat QR sign-in',
       browserOpen: 'Open QR sign-in',
       browserWaiting: 'Waiting for scan…',
@@ -191,21 +177,17 @@ window.__ModuleLoader__.load({
       loomyHint: 'A Loomy session lasts about 14 days and has no refresh token; use “Open QR sign-in” again when it expires.',
       raccoonHint: 'A Raccoon QR login lasts about 30 days; scan again when it expires. Switch thinking on or off in the chat model menu (off by default for faster replies).',
       loginLogout: 'Sign out',
-      loginConfirmLogout: 'Sign out of the plugin account? The desktop app is not affected.',
-      loginFileSourceNote: 'This login comes from the desktop app. Use “Open QR sign-in” above to switch to a plugin account.',
+      loginConfirmLogout: 'Sign out of this account?',
       loginFailedPrefix: 'Sign-in failed',
-      loomyLoginMissing: 'Loomy is not signed in. Use QR sign-in, or start the Loomy client and sign in.',
-      raccoonLoginMissing: 'Raccoon is not signed in. Use QR sign-in, or start the Raccoon desktop app and sign in.',
-      expiresEstimated: 'about',
+      loomyLoginMissing: 'Loomy is not signed in. Use “Open QR sign-in” and scan the code in WeChat.',
+      raccoonLoginMissing: 'Raccoon is not signed in. Use “Open QR sign-in” and scan the code in WeChat.',
       possiblyExpired: 'The login may have expired',
-      needsRefresh: 'The access token is about to expire; the next request or quota refresh will renew it.',
       modelsEmptyLoomy: 'Loomy returned no models. Confirm the account is signed in, then re-read the login state.',
       modelsEmptyRaccoon: 'Raccoon returned no models. Confirm the account is signed in, then re-read the login state.',
       modelsHint: 'Models are read only after sign-in.',
       catalogNotice: 'Model list notice',
       advancedFields: {
         displayName: 'Group name',
-        authFile: 'Credential file path (empty = auto)',
         visionModelIds: 'Force vision model IDs (JSON array)',
         textOnlyModelIds: 'Force text-only model IDs (JSON array)',
         modelAliases: 'Model aliases (JSON object)',
@@ -213,10 +195,10 @@ window.__ModuleLoader__.load({
       },
       loomyNav: 'Loomy',
       loomyTitle: 'Loomy',
-      loomyIntro: 'Use “Open QR sign-in” to sign in to your Loomy account with WeChat; no desktop client needed. A client login is reused when present. Changes apply immediately.',
+      loomyIntro: 'Use “Open QR sign-in” and scan the code in WeChat; no client install needed. Changes apply immediately.',
       raccoonNav: 'SenseTime Raccoon',
       raccoonTitle: 'SenseTime Raccoon',
-      raccoonIntro: 'Use “Open QR sign-in” to sign in to your Raccoon account with WeChat; no desktop client needed. A desktop login is reused when present. Changes apply immediately.',
+      raccoonIntro: 'Use “Open QR sign-in” and scan the code in WeChat; no client install needed. Changes apply immediately.',
     }
 
     const BRANDS = [
@@ -228,7 +210,6 @@ window.__ModuleLoader__.load({
       loomy: {
         enabled: 'loomyEnabled',
         displayName: 'loomyDisplayName',
-        authFile: 'loomyAuthFile',
         disabled: 'loomyDisabledModels',
         windows: 'loomyModelContextWindows',
         aliases: 'loomyModelAliases',
@@ -238,7 +219,6 @@ window.__ModuleLoader__.load({
       raccoon: {
         enabled: 'raccoonEnabled',
         displayName: 'raccoonDisplayName',
-        authFile: 'raccoonAuthFile',
         disabled: 'raccoonDisabledModels',
         windows: 'raccoonModelContextWindows',
         aliases: 'raccoonModelAliases',
@@ -454,11 +434,6 @@ window.__ModuleLoader__.load({
         .filter(part => typeof part === 'string' && part.length > 0)
         .join(' · ') || t('accountUnknown')
       const quota = status?.quota
-      const source = typeof status?.source === 'string' ? status.source : undefined
-      const sourceKind = status?.sourceKind
-      const sourceLabel = sourceKind === 'account'
-        ? t('sourceAccount')
-        : sourceKind === 'file' ? t('sourceFile') : undefined
 
       const accountRequest = useCallback(async body => api('/account', {
         method: 'POST',
@@ -577,11 +552,6 @@ window.__ModuleLoader__.load({
           }, busy ? t('reading') : t('reread')),
         ),
         h('div', { style: css.note }, brand.id === 'loomy' ? t('loomyHint') : t('raccoonHint')),
-        h('div', { style: css.line },
-          h('span', { style: css.label }, t('source')),
-          h('span', { style: css.value }, sourceLabel ?? (signedIn ? t('sourceAuto') : t('notLoggedIn'))),
-          source !== undefined && sourceKind === 'file' ? h('span', { style: css.mono }, source) : null,
-        ),
         signedIn
           ? h('div', { style: css.line },
               h('span', { style: css.label }, t('account')),
@@ -591,14 +561,7 @@ window.__ModuleLoader__.load({
         signedIn
           ? h('div', { style: css.line },
               h('span', { style: css.label }, t('expires')),
-              h('span', { style: css.value },
-                `${status?.expiryEstimated === true ? `${t('expiresEstimated')} ` : ''}${dateLabel(status?.expiresAt)}`),
-              brand.id === 'raccoon' && status?.refreshExpiresAt !== undefined
-                ? h('span', { style: css.label }, t('refreshExpires'))
-                : null,
-              brand.id === 'raccoon' && status?.refreshExpiresAt !== undefined
-                ? h('span', { style: css.value }, dateLabel(status.refreshExpiresAt))
-                : null,
+              h('span', { style: css.value }, dateLabel(status?.expiresAt)),
             )
           : null,
         signedIn && brand.id === 'raccoon'
@@ -608,7 +571,6 @@ window.__ModuleLoader__.load({
             )
           : null,
         signedIn ? quotaContent : null,
-        status?.needsRefresh === true ? h('div', { style: css.note }, t('needsRefresh')) : null,
         status?.possiblyExpired === true ? h('div', { style: css.err }, t('possiblyExpired')) : null,
         !signedIn && status !== undefined
           ? h('div', { style: css.guide },
@@ -616,7 +578,7 @@ window.__ModuleLoader__.load({
               h('div', { style: css.note }, t('loginGuide')),
             )
           : null,
-        signedIn && sourceKind === 'account'
+        signedIn
           ? h('div', { style: css.bar },
               h('button', {
                 style: { ...css.btn, ...css.btnAlert },
@@ -625,10 +587,7 @@ window.__ModuleLoader__.load({
               }, t('loginLogout')),
             )
           : null,
-        signedIn && sourceKind === 'file'
-          ? h('div', { style: css.note }, t('loginFileSourceNote'))
-          : null,
-        !signedIn || sourceKind !== 'account' || status?.possiblyExpired === true ? browserPanel : null,
+        !signedIn || status?.possiblyExpired === true ? browserPanel : null,
         error !== undefined ? h('div', { style: css.err }, `${t('loadFailed')}：${error}`) : null,
       )
     }
@@ -710,7 +669,6 @@ window.__ModuleLoader__.load({
       const labels = t('advancedFields')
       const items = [
         [fields.displayName, labels.displayName, 'text', value[fields.displayName]],
-        [fields.authFile, labels.authFile, 'text', value[fields.authFile]],
         [fields.vision, labels.visionModelIds, 'json', value[fields.vision]],
         [fields.textOnly, labels.textOnlyModelIds, 'json', value[fields.textOnly]],
         [fields.aliases, labels.modelAliases, 'json', value[fields.aliases]],
