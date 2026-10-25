@@ -129,6 +129,11 @@ assistant 的工具调用放在 `function_call`，工具的 `parameters` 是 JSO
 上下文窗口同时保留上游的 dev 与 Max 两档：模型行默认用 dev，下拉里额外提供它声明的
 `maxContextWindow`（例如 1M），不再只显示 200K。
 
+模型 id 必须唯一：宿主对重复元数据直接拒绝整条 provider（“invalid or duplicate model
+metadata”）。远端目录在多个分组里用不同大小写/显示名重复列出同一 config，所以
+`parseTraeRemoteModels` 按小写 id 合并，`mergeTraeModels` 再用 `usedIds` 拦住只在 wire 里
+重复出现的 config，`LocalAdapter.listModels` 最后按 id 去重兜底——这一层对所有供应商生效。
+
 额度按区域走不同接口：国内版 `web_user_ent_usage`（已用 / 总额 + 资源包，按最早到期排序），
 国际版 `ide_user_pay_status`（套餐 / 试用）。签到只有国内版有：`checkin_credits/status` 读状态，
 `checkin_credits/claim` 领取；`checked_in` 是账号维度，`did_checked_in` 是设备维度，两者分开

@@ -139,7 +139,8 @@ window.__ModuleLoader__.load({
       packs: '资源包',
       packExpires: '到期',
       packUsage: '已用 / 总额',
-      packExpand: '展开全部',
+      packNearest: '最近到期',
+      packDetail: '详细信息',
       packCollapse: '收起',
       usedOf: '已用',
       browserHintTrae: '点下面的按钮会打开一个独立的浏览器窗口（不会动你自己的浏览器配置）：在其中登录 Trae，登录成功后窗口会自动关闭。',
@@ -261,7 +262,8 @@ window.__ModuleLoader__.load({
       packs: 'Credit packs',
       packExpires: 'expires',
       packUsage: 'used / total',
-      packExpand: 'Show all',
+      packNearest: 'nearest expiry',
+      packDetail: 'Details',
       packCollapse: 'Collapse',
       usedOf: 'used',
       browserHintTrae: 'The button opens a dedicated browser window (your own browser profile is untouched): sign in to Trae there and the window closes itself.',
@@ -668,37 +670,43 @@ window.__ModuleLoader__.load({
               quota.ratio === undefined ? null : h('span', { style: css.label }, `${Math.round(quota.ratio)}%`),
             ),
             packs.length === 0 ? null : (() => {
-              // A CN account can carry a dozen packs; one joined sentence is
-              // unreadable. Collapsed shows the soonest few, expanded shows all
-              // inside a bounded scroll area.
-              const limit = 4
-              const collapsed = !packsExpanded && packs.length > limit
-              const visible = collapsed ? packs.slice(0, limit) : packs
+              // Collapsed (the default) is one summary row: how many packs, the
+              // combined total and the nearest expiry. Expanding lists every
+              // pack, aligned in a bounded scroll area.
+              const total = packs.reduce((sum, pack) => sum + (pack.total ?? pack.used ?? 0), 0)
+              const nearest = packs
+                .map(pack => pack.expiresAt)
+                .filter(value => typeof value === 'number')
+                .sort((a, b) => a - b)[0]
               return h('div', { style: css.packBlock },
                 h('div', { style: css.packHead },
-                  h('span', { style: css.label }, t('packs')),
-                  h('span', { style: css.note }, t('packUsage')),
-                  packs.length > limit
-                    ? h('button', {
-                        style: css.packToggle,
-                        onClick: () => setPacksExpanded(value => !value),
-                      }, packsExpanded ? t('packCollapse') : `${t('packExpand')}（${packs.length}）`)
-                    : null,
+                  h('span', { style: css.label }, `${t('packs')}（${packs.length}）`),
+                  h('span', { style: css.value }, `${creditsOf(total)} ${t('points')}`),
+                  nearest === undefined ? null : h('span', { style: css.packExpiry }, `${t('packNearest')} ${dateLabel(nearest)}`),
+                  h('button', {
+                    style: css.packToggle,
+                    onClick: () => setPacksExpanded(value => !value),
+                  }, packsExpanded ? t('packCollapse') : `（${t('packDetail')}）`),
                 ),
-                h('div', {
-                  style: { ...css.packList, ...(packsExpanded && packs.length > limit ? css.packListScroll : {}) },
-                },
-                  visible.map((pack, index) => h('div', {
-                    key: `${pack.label}-${index}`,
-                    style: { ...css.packRow, ...(index === 0 ? css.packFirst : {}) },
-                  },
-                    h('span', { style: css.packLabel, title: pack.label }, pack.label),
-                    h('span', { style: css.packAmount }, pack.total === undefined
-                      ? (pack.used === undefined ? '—' : creditsOf(pack.used))
-                      : `${creditsOf(pack.used ?? 0)} / ${creditsOf(pack.total)}`),
-                    h('span', { style: css.packExpiry }, pack.expiresAt === undefined ? '' : dateLabel(pack.expiresAt)),
-                  )),
-                ),
+                packsExpanded
+                  ? h('div', { style: css.packBlock },
+                      h('div', { style: css.packHead },
+                        h('span', { style: css.label }, t('packUsage')),
+                      ),
+                      h('div', { style: { ...css.packList, ...css.packListScroll } },
+                        packs.map((pack, index) => h('div', {
+                          key: `${pack.label}-${index}`,
+                          style: { ...css.packRow, ...(index === 0 ? css.packFirst : {}) },
+                        },
+                          h('span', { style: css.packLabel, title: pack.label }, pack.label),
+                          h('span', { style: css.packAmount }, pack.total === undefined
+                            ? (pack.used === undefined ? '—' : creditsOf(pack.used))
+                            : `${creditsOf(pack.used ?? 0)} / ${creditsOf(pack.total)}`),
+                          h('span', { style: css.packExpiry }, pack.expiresAt === undefined ? '' : dateLabel(pack.expiresAt)),
+                        )),
+                      ),
+                    )
+                  : null,
               )
             })(),
           )

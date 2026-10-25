@@ -123,6 +123,11 @@ Trae 的签到是「每账号每天一次」，但它同时按设备记录 `did_
 `reasoning_effort: "max"`，所以只要模型支持思考就会列出来。1M 来自同一模型更宽的分组
 （`context_window_tokens.max`），会作为上下文下拉里的一个选项出现，默认仍是 200K。
 
+**模型选择器报“invalid or duplicate model metadata”？**
+这是模型目录里有重复 id 时宿主给出的拒绝。Trae 的远端目录会把同一个配置以不同大小写或不同显示名
+列在多个分组里（`custom_model_gemini` 就是实测例子），现在按 id 去重后只保留第一行，适配器
+`listModels` 也会再兜一次底，避免一条重复记录把整个 Trae 路由打掉。重启并刷新模型后即可恢复。
+
 **Trae 模型列表为什么比客户端少？**
 插件把两份目录合并：远端目录（`/api/remote/v1/models`）提供显示名、上下文窗口与多模态标签，
 `get_detail_param` 提供真正可调用的 `config_name` 与输出上限。目录是按账号下发的，账号没有的

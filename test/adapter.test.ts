@@ -61,6 +61,19 @@ describe('LocalAdapter', () => {
     expect(adapter.providerInfo('loomy')).toEqual({ id: 'loomy', name: 'Loomy Test' })
   })
 
+  it('collapses duplicate ids instead of making DSH reject the provider', async () => {
+    // DSH reports "duplicate model metadata" and drops the route entirely; the
+    // adapter must never hand it two rows with one id.
+    const duplicated: ProviderModel[] = [
+      { id: 'glm-5.3', name: 'GLM 5.3', contextWindow: 200_000, vision: false, reasoning: true },
+      { id: 'GLM-5.3', name: 'GLM 5.3 (dup)', contextWindow: 200_000, vision: false, reasoning: true },
+    ]
+    const { adapter } = makeAdapter({ models: async () => duplicated })
+    const rows = await adapter.listModels('loomy')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ id: 'glm-5.3', name: 'GLM 5.3' })
+  })
+
   it('lists only enabled models with the adapter catalog metadata', async () => {
     const { adapter } = makeAdapter()
     expect(await adapter.listModels('loomy')).toEqual([{

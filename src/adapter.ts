@@ -176,7 +176,17 @@ export abstract class LocalAdapter extends LlmAdapter {
     if (!(await this.client.signedIn())) return []
     const disabled = new Set(this.options.disabledModels())
     const models = await this.client.models()
-    return models.filter(model => !disabled.has(model.id)).map(model => modelInfo(provider, model))
+    // DSH rejects a provider whose rows repeat an id, so a catalog bug must not
+    // take the whole route down: the first row for an id wins.
+    const seen = new Set<string>()
+    const out: LlmModelInfo[] = []
+    for (const model of models) {
+      const key = model.id.toLowerCase()
+      if (seen.has(key) || disabled.has(model.id)) continue
+      seen.add(key)
+      out.push(modelInfo(provider, model))
+    }
+    return out
   }
 
   override async resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
