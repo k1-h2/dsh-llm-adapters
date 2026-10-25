@@ -56,10 +56,11 @@ Loomy 的模型目录有 120 秒缓存，刚重新扫码换过账号时可点刷
 
 **思考档位怎么显示、默认选哪一档？**
 档位 id 保留上游词汇，显示时首字母大写（`None` / `Low` / `High` / `Max`，`xhigh` 除外），
-不做中文翻译。每次「刷新状态与模型」都会重拉 OpenRouter 的实时模型表，用归一化名称做通配
-匹配，读取该模型支持的 `supported_efforts` 与输入模态；匹配不到就回退上游声明；两边都没有
-信息时开放全部档位（`none`…`max`）和文本 / 图片两种模态。没有任何模型被硬编码，Loomy 和
-小浣熊共用这套规则。默认选**倒数第二强**的一档（强度顺序
+不做中文翻译。OpenRouter 的实时表由插件页的「OpenRouter 模型同步」按设定间隔自动更新，也可
+手动同步；用归一化名称做通配匹配，读取该模型支持的 `supported_efforts` 与输入模态，匹配不到
+就回退上游声明；两边都没有信息时开放全部档位（`none`…`max`）和文本 / 图片两种模态。刷新模型
+列表不会清空这份缓存，断网时继续使用上次成功的数据。没有任何模型被硬编码，Loomy、小浣熊和
+Trae 共用这套规则。默认选**倒数第二强**的一档（强度顺序
 `none < minimal < low < medium < high < xhigh < max`），既不会从 `none` 开始，也不会直接付
 最贵档。
 
@@ -123,13 +124,31 @@ Trae 的工具调用只在首帧给出 `id`，之后的参数分片会带 `id: "
 都有唯一非空 id；工具结果也统一发 block 数组（空数组会被上游判为参数无效）。升级并重启后
 即可正常调用工具。
 
-**Trae 的倍率为什么没了 / 为什么有的模型没有 Max、没有 1M？**
+**Trae 的倍率为什么没了 / 为什么 DeepSeek V4.1 Flash 没有 Max、没有 1M？**
 倍率在目录的 `features` 字段里，而它是 JSON **字符串**（`features.consumption_rate.data.rate`），
-现在会解析后显示成 `x0.06` 这样的倍率。思考档位先查 OpenRouter 的 `supported_efforts`，匹配不到
-才用 Trae 目录自己发布的档位，**不再人为补 `max`**：DeepSeek V4.1 Flash 在 OpenRouter 里支持
-`max/high/low/none`，菜单就是 `None/Low/High/Max`；目录只给 `light/high/extra_high` 的模型则是
-`Low/High/xhigh`。1M 来自同一模型更宽的分组（`context_window_tokens.max`），会作为上下文下拉里
-的一个选项出现，默认仍是 200K。
+现在会解析后显示成 `x0.06` 这样的倍率。1M 来自同一模型更宽的分组
+（`context_window_tokens.max`），会作为上下文下拉里的一个选项出现，默认仍是 200K。
+
+思考档位与另外两个供应商同一套规则：OpenRouter 的 `supported_efforts` 优先，匹配不到回退 Trae
+目录，两边都没有时全部开放。DeepSeek V4.1 Flash 在 OpenRouter 里是
+`None / Low / High / Max`，菜单就是这样，默认 `High`；GLM 5.3 是 `Low / High / Max`。实测
+SOLO 接口并不校验 `reasoning_effort`（`banana` / `999` / `MAX` 都返回 200，reasoning token 也
+没有可辨差异），所以使用 OpenRouter 的档位不会让请求失败。目录只给 `light/high/extra_high`
+的模型，在 OpenRouter 匹配不到时就是 `Low / High / xhigh`；个别模型只给两档（如 Seed 2.1 Pro
+的 `low/high`）。
+
+**当前会话报 `does not support reasoning effort "max"`？**
+这是宿主的请求前校验，不是上游报错。正常情况下列表来自 OpenRouter，DeepSeek 等模型包含
+`Max`；只有 OpenRouter 快照为空（从未同步成功）并回退到 Trae 目录的三档时，旧会话保存的
+`max` 才会不在列表里。到插件页点一次「立即同步」，或重启后等待自动同步，再在聊天框底部点一下
+模型/档位即可。插件无法替旧会话改写这个值，因为校验发生在适配器被调用之前。
+
+**OpenRouter 模型同步是什么？缓存存在哪？**
+三个供应商共用一份 OpenRouter 实时模型表，用来补充思考档位与读图能力。快照保存在
+`$DSH_HOME/llm-adapters/openrouter-models.json`（可用 `DSH_LLM_ADAPTERS_HOME` 覆盖）。每次同步
+先完整下载并解析，成功后用临时文件 `rename` 原子覆盖；失败时内存与磁盘都保留上一次成功的数据，
+所以断网启动仍有正确档位。插件页可设自动同步间隔（关闭 / 15 分钟 / 1 小时 / 6 小时 / 24 小时），
+也可随时「立即同步」。
 
 **模型选择器报“invalid or duplicate model metadata”？**
 这是模型目录里有重复 id 时宿主给出的拒绝。Trae 的远端目录会把同一个配置以不同大小写或不同显示名

@@ -12,6 +12,7 @@ interface ClientExports {
     zh: Record<string, unknown>
     en: Record<string, unknown>
     css: Record<string, Record<string, unknown>>
+    OPENROUTER_INTERVALS: { value: number, labelKey: string }[]
     windowLabel: (value: number) => string
     creditsOf: (value: number) => string
     priceText: (t: (key: string) => string, factor: number) => string
@@ -97,6 +98,16 @@ describe('client bundle', () => {
     expect(exports.__test.zh.authFile).toBeUndefined()
     expect(exports.__test.zh.loginFileSourceNote).toBeUndefined()
     expect(exports.__test.zh.advancedFields.authFile).toBeUndefined()
+  })
+
+  it('exposes the OpenRouter sync choices in both languages', () => {
+    const { zh, en, OPENROUTER_INTERVALS } = exports.__test
+    expect(OPENROUTER_INTERVALS.map(option => option.value)).toEqual([0, 15, 60, 360, 1440])
+    expect(zh.openRouterSyncNow).toBe('立即同步')
+    expect(en.openRouterSyncNow).toBe('Sync now')
+    expect(zh.openRouterOff).toBe('关闭自动同步')
+    expect(zh.openRouterSyncFailed).toBe('同步失败')
+    expect(en.openRouterSyncFailed).toBe('Sync failed')
   })
 
   it('keeps the primary button dark with white text on both themes', () => {

@@ -12,10 +12,12 @@
  *    the SOLO chat endpoint rejects with `4001`, and an entry that can only
  *    fail is worse than an absent one.
  *
- * Capabilities come from OpenRouter first, then from Trae's own directory, the
- * same order the other providers use. Effort names are normalized once
- * (`light` → `low`, `extra_high` → `xhigh`), and the default is the shared
- * second-strongest rule.
+ * Levels and modalities go through the same `resolveCapabilities` rule as
+ * Loomy and Raccoon: OpenRouter's live metadata first, Trae's own declaration
+ * second, every level/modality when neither source says anything. The SOLO
+ * endpoint does not validate `reasoning_effort`, so the router's table cannot
+ * make a call fail; the shared index is cached on disk and refreshed on a
+ * schedule, which keeps the menu stable while offline.
  *
  * @module dsh-llm-adapters/trae
  */
@@ -25,7 +27,9 @@ import type { GenerateOptions, StreamChunk, ToolCallId } from '@deepseek-ai/dsh-
 import type { AccountStore } from './account-store.ts'
 import { TraeAuth } from './auth.ts'
 import type { TraeRegion } from './brand.ts'
-import { ALL_REASONING_EFFORTS, DEFAULT_CONTEXT_WINDOW, ModelCatalog, defaultEffortOf } from './catalog.ts'
+import {
+  ALL_INPUT_MODALITIES, DEFAULT_CONTEXT_WINDOW, ModelCatalog, resolveCapabilities,
+} from './catalog.ts'
 import type { ProviderModel } from './catalog.ts'
 import { responseError } from './http.ts'
 import type { LoginStatus } from './login-page.ts'
@@ -151,7 +155,7 @@ export interface TraeProviderOptions {
   fetchImpl?: typeof fetch
   loginTimeoutMs?: number
   logger?: (message: string) => void
-  /** Injectable OpenRouter lookup for tests; defaults to the live catalog. */
+  /** The shared OpenRouter snapshot; a private one is created when omitted. */
   openRouter?: OpenRouterLookup
 }
 
@@ -217,31 +221,6 @@ function jsonRecord(value: unknown): Record<string, unknown> | undefined {
     }
   }
   return record(value)
-}
-
-function effortRank(effort: string): number {
-  return ALL_REASONING_EFFORTS.indexOf(effort)
-}
-
-/** Keep only levels Trae can spell, de-duplicated and in menu order. */
-function sortEfforts(efforts: readonly string[]): string[] {
-  return [...new Set(efforts)]
-    .filter(effort => WIRE_EFFORTS[effort] !== undefined)
-    .sort((left, right) => effortRank(left) - effortRank(right))
-}
-
-/**
- * Resolve one model's level menu.
- *
- * OpenRouter's live `supported_efforts` wins when it knows the model, exactly
- * as for Loomy and Raccoon; otherwise the levels Trae itself publishes are
- * used. `max` appears only when one of those sources names it, so a model the
- * Trae client exposes as light/high/extra_high is not silently given a fourth
- * level.
- */
-function resolveEfforts(advertised: readonly string[], live: readonly string[] | undefined): string[] {
-  const fromLive = sortEfforts(live ?? [])
-  return fromLive.length > 0 ? fromLive : sortEfforts(advertised)
 }
 
 /**
@@ -442,12 +421,19 @@ export function mergeTraeModels(
     const parsed = parseModelName(input.name)
     const base = parsed.name.length > 0 ? parsed.name : input.id
     const name = input.disambiguate === undefined ? base : `${base} (${input.disambiguate})`
+    // The shared capability rule, exactly as Loomy and Raccoon use it: the
+    // router's live list wins, the directory is the fallback, and when neither
+    // names a level every level is exposed.
     const live = openRouter?.match(base, input.id)
-    const efforts = resolveEfforts([...new Set(input.efforts)], live?.efforts)
-    const defaultEffort = defaultEffortOf(efforts)
+    const resolved = resolveCapabilities({
+      live,
+      upstreamEfforts: input.efforts,
+      upstreamModalities: input.multimodal ? ALL_INPUT_MODALITIES : ['text'],
+    })
+    const efforts = resolved.efforts.filter(effort => WIRE_EFFORTS[effort] !== undefined)
+    const defaultEffort = resolved.defaultEffort
     const price = input.creditMultiplier
     const labels = [...new Set([...(input.labels ?? []), ...parsed.labels])]
-    const modalities = live?.inputModalities ?? []
     models.push({
       id: input.id,
       name,
@@ -457,9 +443,7 @@ export function mergeTraeModels(
         ? {}
         : { maxContextWindow: input.maxContextWindow },
       ...input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens },
-      // OpenRouter's live modality list corrects the directory's advisory
-      // `multimodal` flag, exactly as it does for the other two providers.
-      vision: modalities.length > 0 ? modalities.includes('image') : input.multimodal,
+      vision: resolved.modalities.some(mode => mode.toLowerCase() === 'image'),
       reasoning: efforts.length > 0,
       ...efforts.length === 0 ? {} : { reasoningEfforts: efforts },
       ...defaultEffort === undefined ? {} : { defaultReasoningEffort: defaultEffort },
@@ -960,7 +944,6 @@ export class TraeProvider {
 
   async models(fresh = false): Promise<readonly ProviderModel[]> {
     this.ensureRegion()
-    if (fresh) this.openRouter.invalidate()
     return this.catalogInstance.models(fresh)
   }
 
@@ -969,9 +952,6 @@ export class TraeProvider {
   }
 
   invalidateModels(): void {
-    // A settings refresh must also re-read OpenRouter: the effort/modality menu
-    // is served from it, and its own TTL would otherwise hide upstream changes.
-    this.openRouter.invalidate()
     this.catalogInstance.invalidate()
   }
 
@@ -1079,8 +1059,6 @@ export class TraeProvider {
     const token = await this.options.auth.accessToken()
     const identity = await this.options.auth.identity()
     const profile = this.profile()
-    // OpenRouter is the shared capability source; a failure falls back to the
-    // directory's own declaration rather than failing the refresh.
     const openRouter = this.openRouter.models().catch(() => undefined)
     let remote: TraeRemoteModel[] = []
     let remoteError: unknown

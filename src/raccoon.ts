@@ -235,7 +235,8 @@ export class RaccoonProvider {
   }
 
   async models(fresh = false): Promise<readonly ProviderModel[]> {
-    if (fresh) this.openRouter.invalidate()
+    // The OpenRouter snapshot is shared, persisted and refreshed on a schedule;
+    // a catalog refresh must not discard it while the network is unavailable.
     return this.catalog.models(fresh)
   }
 
@@ -244,7 +245,6 @@ export class RaccoonProvider {
   }
 
   invalidateModels(): void {
-    this.openRouter.invalidate()
     this.catalog.invalidate()
   }
 

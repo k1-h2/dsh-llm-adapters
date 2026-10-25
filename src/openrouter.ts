@@ -7,17 +7,20 @@
  * `architecture.input_modalities`, so this module fetches that catalog on
  * demand and matches entries by normalized name.
  *
- * The data is fetched at runtime and refreshed whenever the settings page asks
- * for fresh models; nothing about a particular model version is baked in.
+ * The data is fetched at runtime, refreshed by the plugin's scheduler, and kept
+ * on disk, so a temporary outage keeps the last successful snapshot instead of
+ * silently dropping every capability control.
  *
  * @module dsh-llm-adapters/openrouter
  */
 
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { modelKey } from './model-name.ts'
 
 const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models'
-const REQUEST_TIMEOUT_MS = 8_000
-const CACHE_TTL_MS = 5 * 60 * 1_000
+const REQUEST_TIMEOUT_MS = 20_000
+const CACHE_VERSION = 1
 
 export interface OpenRouterModel {
   id: string
@@ -44,9 +47,28 @@ export interface OpenRouterLookup {
   invalidate(): void
 }
 
+/** What the settings page may read without triggering a network request. */
+export interface OpenRouterStatus {
+  models: number
+  at?: number
+  error?: string
+  syncing: boolean
+}
+
+/** One explicit sync attempt; `ok` is false only when new data was not stored. */
+export interface OpenRouterSyncResult extends OpenRouterStatus {
+  ok: boolean
+}
+
 export const EMPTY_OPENROUTER_INDEX: OpenRouterIndex = {
   models: [],
   match: () => undefined,
+}
+
+interface CacheDocument {
+  version: 1
+  at: number
+  models: readonly OpenRouterModel[]
 }
 
 function recordOf(value: unknown): Record<string, unknown> {
@@ -190,46 +212,135 @@ export function parseOpenRouterModels(payload: unknown): OpenRouterModel[] {
   return out
 }
 
+/** Validate one model read back from the on-disk cache. */
+function storedModel(value: unknown): OpenRouterModel | undefined {
+  const record = recordOf(value)
+  const id = textOf(record.id)
+  const name = textOf(record.name)
+  if (id === undefined || name === undefined) return undefined
+  return {
+    id,
+    name,
+    inputModalities: stringsOf(record.inputModalities),
+    ...Array.isArray(record.efforts) ? { efforts: stringsOf(record.efforts) } : {},
+    ...textOf(record.defaultEffort) === undefined ? {} : { defaultEffort: textOf(record.defaultEffort)! },
+    mandatory: record.mandatory === true,
+  }
+}
+
 /**
- * A stale-while-error cache over OpenRouter. A failed refresh keeps the last
- * successful snapshot so a transient outage does not remove every control;
- * `fresh` bypasses the TTL, and `invalidate()` forces the next read to refetch.
+ * A persistent, atomically-replaced OpenRouter snapshot.
+ *
+ * `models()` never triggers a network request once a snapshot exists: refreshes
+ * are driven by {@link sync}, which the plugin calls on a schedule and the
+ * settings page can trigger. A failed sync leaves both the in-memory and the
+ * on-disk copy untouched, so an offline start still has the last known levels
+ * and modalities.
  */
 export class OpenRouterCatalog implements OpenRouterLookup {
   private snapshot: { index: OpenRouterIndex, at: number } | undefined
-  private inflight: Promise<OpenRouterIndex> | undefined
+  private inflight: Promise<OpenRouterSyncResult> | undefined
+  private lastError: string | undefined
 
   constructor(
     private readonly fetchImpl: typeof fetch = fetch,
-    private readonly ttlMs: number | (() => number) = CACHE_TTL_MS,
-  ) {}
+    private readonly options: { cacheFile?: string } = {},
+  ) {
+    this.loadFromDisk()
+  }
 
-  async models(fresh = false): Promise<OpenRouterIndex> {
-    const ttl = typeof this.ttlMs === 'function' ? this.ttlMs() : this.ttlMs
-    if (!fresh && this.snapshot !== undefined && Date.now() - this.snapshot.at < ttl) {
-      return this.snapshot.index
+  private loadFromDisk(): void {
+    const file = this.options.cacheFile
+    if (file === undefined) return
+    try {
+      const document = recordOf(JSON.parse(readFileSync(file, 'utf8')) as unknown)
+      if (document.version !== CACHE_VERSION || !Array.isArray(document.models) || typeof document.at !== 'number') return
+      const models = document.models
+        .map(storedModel)
+        .filter((model): model is OpenRouterModel => model !== undefined)
+      if (models.length === 0) return
+      this.snapshot = { index: buildOpenRouterIndex(models), at: document.at }
+    } catch {
+      // A missing or unreadable cache is the normal first-run state.
     }
-    if (this.inflight !== undefined) return this.inflight
-    this.inflight = (async () => {
-      try {
-        const response = await this.fetchImpl(OPENROUTER_MODELS_URL, {
-          headers: { accept: 'application/json' },
-          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-        })
-        if (!response.ok) throw new Error(`OpenRouter HTTP ${response.status}`)
-        const index = buildOpenRouterIndex(parseOpenRouterModels(await response.json()))
-        this.snapshot = { index, at: Date.now() }
-        return index
-      } catch {
-        return this.snapshot?.index ?? EMPTY_OPENROUTER_INDEX
-      } finally {
-        this.inflight = undefined
+  }
+
+  /** Replace the cache file only after the new document is complete (tmp + rename). */
+  private persist(models: readonly OpenRouterModel[], at: number): void {
+    const file = this.options.cacheFile
+    if (file === undefined) return
+    try {
+      mkdirSync(dirname(file), { recursive: true })
+      const temporary = `${file}.${process.pid}.${Date.now()}.tmp`
+      writeFileSync(temporary, JSON.stringify({
+        version: CACHE_VERSION,
+        at,
+        models,
+      } satisfies CacheDocument), { encoding: 'utf8', mode: 0o600 })
+      renameSync(temporary, file)
+    } catch {
+      // The in-memory snapshot is still valid; the next sync retries the file.
+    }
+  }
+
+  private async fetchAndReplace(): Promise<OpenRouterSyncResult> {
+    try {
+      const response = await this.fetchImpl(OPENROUTER_MODELS_URL, {
+        headers: { accept: 'application/json' },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      })
+      if (!response.ok) throw new Error(`OpenRouter HTTP ${response.status}`)
+      const models = parseOpenRouterModels(await response.json())
+      if (models.length === 0) throw new Error('OpenRouter 没有返回任何模型')
+      const index = buildOpenRouterIndex(models)
+      const at = Date.now()
+      // Publish only after the whole document parsed: readers see either the
+      // previous snapshot or the new one, never a half-built index.
+      this.snapshot = { index, at }
+      this.lastError = undefined
+      this.persist(models, at)
+      return { ok: true, models: models.length, at, syncing: false }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      this.lastError = message
+      return {
+        ok: false,
+        models: this.snapshot?.index.models.length ?? 0,
+        ...this.snapshot === undefined ? {} : { at: this.snapshot.at },
+        error: message,
+        syncing: false,
       }
-    })()
+    }
+  }
+
+  /**
+   * Fetch and replace the snapshot. Concurrent callers share one request, and
+   * a failure keeps the previous snapshot and reports why.
+   */
+  sync(): Promise<OpenRouterSyncResult> {
+    if (this.inflight !== undefined) return this.inflight
+    this.inflight = this.fetchAndReplace().finally(() => { this.inflight = undefined })
     return this.inflight
   }
 
+  async models(fresh = false): Promise<OpenRouterIndex> {
+    if (fresh || this.snapshot === undefined) await this.sync()
+    return this.snapshot?.index ?? EMPTY_OPENROUTER_INDEX
+  }
+
+  /** A read-only reading for the settings card; never starts a request. */
+  status(): OpenRouterStatus {
+    return {
+      models: this.snapshot?.index.models.length ?? 0,
+      ...this.snapshot === undefined ? {} : { at: this.snapshot.at },
+      ...this.lastError === undefined ? {} : { error: this.lastError },
+      syncing: this.inflight !== undefined,
+    }
+  }
+
+  /** Drop the in-memory copy; the next read refetches (the file stays). */
   invalidate(): void {
     this.snapshot = undefined
+    this.lastError = undefined
   }
 }

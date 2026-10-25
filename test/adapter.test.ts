@@ -356,6 +356,33 @@ describe('account API', () => {
     expect(captured.body).toMatchObject({ brand: 'raccoon', signedIn: false })
   })
 
+  it('serves and syncs the shared OpenRouter snapshot', async () => {
+    const status = vi.fn(() => ({ models: 3, at: 1, syncing: false }))
+    const sync = vi.fn(async () => ({ ok: true, models: 4, at: 2, syncing: false }))
+    const { adapter } = makeAdapter()
+    const adapters = { loomy: adapter, raccoon: adapter, trae: adapter }
+
+    const reading = response()
+    await handleApi(request(`${API_PREFIX}/openrouter`), reading.res, adapters, { status, sync })
+    expect(reading.captured.status).toBe(200)
+    expect(reading.captured.body).toMatchObject({ models: 3, at: 1 })
+
+    const refreshed = response()
+    await handleApi(jsonRequest(`${API_PREFIX}/openrouter/sync`, {}), refreshed.res, adapters, { status, sync })
+    expect(refreshed.captured.status).toBe(200)
+    expect(sync).toHaveBeenCalledOnce()
+    expect(refreshed.captured.body).toMatchObject({ ok: true, models: 4 })
+  })
+
+  it('reports 503 when no router admin is mounted', async () => {
+    const { adapter } = makeAdapter()
+    const { res, captured } = response()
+    await handleApi(request(`${API_PREFIX}/openrouter`), res, {
+      loomy: adapter, raccoon: adapter, trae: adapter,
+    })
+    expect(captured.status).toBe(503)
+  })
+
   it('rejects an unknown action and an unknown brand', async () => {
     const { adapter } = makeAdapter()
     const unknownAction = response()

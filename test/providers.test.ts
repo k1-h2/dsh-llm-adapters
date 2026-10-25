@@ -170,7 +170,7 @@ describe('RaccoonProvider', () => {
     })
   })
 
-  it('refetches OpenRouter capabilities whenever models are refreshed', async () => {
+  it('keeps the shared OpenRouter snapshot when models are refreshed', async () => {
     const invalidate = vi.fn()
     const models = vi.fn(async () => EMPTY_OPENROUTER_INDEX)
     const fetchMock = vi.fn(async () => json({
@@ -189,7 +189,9 @@ describe('RaccoonProvider', () => {
     }))
     const { provider } = make(fetchMock as unknown as typeof fetch, { models, invalidate })
     const rows = await provider.models(true)
-    expect(invalidate).toHaveBeenCalledOnce()
+    // The router snapshot has its own schedule and on-disk copy; a model
+    // refresh reads it but never throws it away.
+    expect(invalidate).not.toHaveBeenCalled()
     expect(models).toHaveBeenCalledOnce()
     expect(rows[0]).toMatchObject({ name: 'Kimi K3', vision: true, reasoning: true })
   })

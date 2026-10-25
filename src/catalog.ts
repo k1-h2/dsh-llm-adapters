@@ -120,7 +120,7 @@ function effortsOf(value: unknown): string[] {
   return [...new Set(out)]
 }
 
-interface ResolvedCapabilities {
+export interface ResolvedCapabilities {
   efforts: readonly string[]
   defaultEffort?: string
   modalities: readonly string[]
@@ -134,7 +134,7 @@ interface ResolvedCapabilities {
  *    `vision`, tags) is used.
  * 3. When neither says anything, every effort and both modalities are exposed.
  */
-function resolveCapabilities(input: {
+export function resolveCapabilities(input: {
   live?: { efforts?: readonly string[]; inputModalities?: readonly string[] }
   upstreamEfforts?: readonly string[]
   upstreamReasoning?: boolean
