@@ -103,12 +103,14 @@ Trae 没有可以自建的二维码链路：设备指纹必须来自一次真实
 5. 5 分钟超时；成功后关闭窗口、删除临时目录。取消与插件卸载同样走清理路径（Windows 上用
    `taskkill /T /F` 杀掉进程树）。
 
-两条目录来源合并成一份模型表（`mergeTraeModels`）：远端目录给显示名、上下文窗口、多模态与
-倍率，`get_detail_param` 给真正可调用的 `config_name`、输出上限与折后倍率。**远端行必须有
-wire config 才保留**——`Qwen3.8-Flash` / `Kimi-K2.8-Preview` 只出现在远端 `chat_v3`，12 个
-`get_detail_param` 通道都没有它们，选中只会回 `4001`，所以直接不列出。只在 wire 里出现、且
-通过 `isPromotableTraeWireModel` 的模型才会被提升：`usage` 必须是 `chat_completion`、
-`config_source` 为 1，显示名不能等于 config 名，且不能是 `custom_model_*` / 下划线内部名。
+两条目录来源合并成一份模型表（`mergeTraeModels`）：**只考虑客户端主通道**
+（`TRAE_PRIMARY_FUNCTIONS` = `solo_work_remote` / `solo_work_lite`）里的远端行，并且每一行都
+必须在 `get_detail_param` 里找到 wire config（chat 只接受 `config_name`）。因此
+`Qwen3.8-Flash` / `Kimi-K2.8-Preview`（只在远端 `chat_v3`，任何 wire roster 都没有 config）
+不会出现；只在 `chat_v3` / `solo_coder` 里仍可调用、但客户端已下架的老模型（GLM-4.6/4.7、
+MiniMax-M2、Kimi-K2.0905、Qwen3-Coder、普通版 DeepSeek-V4-Flash/Pro）也不会出现。只在 wire
+里出现、没有主通道目录行的配置不会被提升。远端显示名归一化后相同的两行
+（`DeepSeek-V4-Flash` 与 `-Official`）只保留窗口更大的一行，不向名称里拼接 id 或括号。
 Trae 与另外两个供应商共用 `resolveCapabilities`：OpenRouter 的实时表优先（`match` 用同一套
 名称归一化），匹配不到回退目录，两边都没有就开放全部档位与模态。因此 OpenRouter 命中时
 DeepSeek V4.1 Flash 是 None/Low/High/Max，未命中时才是目录的 light/high/extra_high。
@@ -155,9 +157,9 @@ assistant 的工具调用放在 `function_call`，工具的 `parameters` 是 JSO
 `max_tokens` 会被透传（上游接受）；图片走 `image_url` 的 data URL，实测被网关正常识别。
 高级设置里的 `traeVisionModelIds` / `traeTextOnlyModelIds` 在目录合并后生效，`textOnly` 优先。
 
-模型 id 与显示名都必须能区分：id 按小写去重（`custom_model_gemini` 这种跨分组重复），两条
-不同 id 归一到同一显示名时（`DeepSeek-V4-Flash` 与 `DeepSeek-V4-Flash-Official`），后来的
-一行会追加 id 后缀，避免设置页出现两行一模一样的模型名。
+模型 id 与显示名都必须唯一：id 按小写去重（`custom_model_gemini` 这种跨分组重复）；两条
+不同 id 归一到同一显示名时（`DeepSeek-V4-Flash` 与 `DeepSeek-V4-Flash-Official`）只保留窗口
+更宽的一行，不合成 `(id)` 后缀——共享命名规则只提取上游括号内容，不新增括号。
 
 `Qwen3.8-Flash` / `Kimi-K2.8-Preview` 是客户端 TraeCode 通道的模型：5 个聊天函数和 12 个目录
 函数的 `get_detail_param` 都不返回它们的 config，网页令牌调 `/api/ide/v2/llm_raw_chat` 也会对
@@ -172,7 +174,12 @@ metadata”）。远端目录在多个分组里用不同大小写/显示名重�
 额度按区域走不同接口：国内版 `web_user_ent_usage`（已用 / 总额 + 资源包，按最早到期排序），
 国际版 `ide_user_pay_status`（套餐 / 试用）。签到只有国内版有：`checkin_credits/status` 读状态，
 `checkin_credits/claim` 领取；`checked_in` 是账号维度，`did_checked_in` 是设备维度，两者分开
-显示；缺 `x-device-id` 返回 `9004`，重复领取返回 `9095`。
+显示。
+
+签到接口只接受 **16 位纯数字**设备号：网页登录的 UUID 会固定返回 `9074`（提示“当前参与用户
+太多”，实际是设备号格式不符，实测同账号同分钟 UUID → 9074、16 位数字 → `code: 0`）。
+`checkinDeviceId()` 从网页设备号派生稳定的 16 位数字，仅用于 status / claim；聊天、额度仍用
+原设备号。缺 `x-device-id` 返回 `9004`，重复领取返回 `9095`。
 
 ### 公共的名称与能力规则
 

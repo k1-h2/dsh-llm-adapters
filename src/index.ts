@@ -87,9 +87,9 @@ export {
   RaccoonProvider, RACCOON_BASE, RACCOON_CLIENT_VERSION, raccoonAccessTokenValid, raccoonRefreshCandidate,
 } from './raccoon.ts'
 export {
-  TraeProvider, TRAE_CHAT_FUNCTIONS, TRAE_DIRECTORY_FUNCTIONS, mergeTraeModels, normalizeEffort,
-  openTraeStream, parseTraeCheckin, parseTraePlan, parseTraeRemoteModels, parseTraeUsage, parseTraeWireModels,
-  traeMessages, traeTools,
+  TraeProvider, TRAE_CHAT_FUNCTIONS, TRAE_DIRECTORY_FUNCTIONS, checkinDeviceId, mergeTraeModels,
+  normalizeEffort, openTraeStream, parseTraeCheckin, parseTraePlan, parseTraeRemoteModels,
+  parseTraeUsage, parseTraeWireModels, traeMessages, traeTools,
 } from './trae.ts'
 export type {
   TraeCatalog, TraeModelMeta, TraeProviderOptions, TraeRemoteModel, TraeWireModel,
