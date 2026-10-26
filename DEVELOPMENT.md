@@ -218,6 +218,16 @@ false`（IDE 菜单里看不到）但 `enable: true`，实测**能读图也能�
 tool-call 分片），所以照样列进目录并按 `supports_images` 标成 `vision`；窗口表里没有它们的
 `limit.context`，按模型卡各取 256K。网关名册没有这个字段，那部分仍靠 `CODEARTS_VISION_MODELS` 兜底。
 
+### 为什么 DeepSeek 的图进不来（2026-10-27 实测）
+
+DeepSeek 官方文档写明 `deepseek-flash`（V4.1-Flash-1017）接受图片，但 CodeArts 的目录把
+`deepseek-v4.1-flash` / `-1017` 标成 `supports_images: false`，网关按模型能力拒绝。实网 8 种写法
+逐一排除（`image_url` 对象 + data URL / 外部 https、`image_url` 字符串、Anthropic `image/source`、
+`input_image`、1017 变体），全部失败；同一张图交给 `kimi-k2.6-vl` 正常返回，证明请求体形态正确。
+⇒ 不是「换个字段就能传」，是通道级能力禁用。IDE 的处理是两段式（`analyzeImage` 交给 VL 模型），
+插件若要对文本模型开放读图，只能在适配器里先做一次 VL 转述（每张新图多一次会话，需缓存结果），
+不能把图直接发给文本模型。
+
 思考只有两档：`off` / `on`。网关切的是**顶层** `thinking: { type: 'disabled' }`，不是
 `reasoning_effort`；`on` 与不传等价，所以只有关闭时才发该字段。`reasoning_effort` 不是「更细的
 档位」：网关会**按模型**校验它（`deepseek-v4.1-flash` 收 `none|low|medium|high|xhigh|max`，
