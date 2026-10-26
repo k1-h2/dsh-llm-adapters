@@ -194,6 +194,18 @@ GLM-5.x、openpangu——带图会回 `InferHub.001001020.406 The request model 
 （IDE 自己的菜单里看不到），但 `enable: true`、能正常计费调用，所以插件仍然列出它们，方便需要读图
 时切过去。
 
+**DeepSeek 官方说 V4.1-Flash 能读图，为什么 CodeArts 里不行？**
+
+模型本身能。DeepSeek 文档写明 `deepseek-flash`（现由 V4.1-Flash-1017 提供，旧的
+`deepseek-v4-flash-vision-exp` 也转由它承接）接受图片，形态是 `content` 数组里的 `image_url`。
+但 CodeArts 这条通道把 `deepseek-v4.1-flash` 与 `deepseek-v4.1-flash-1017` 都标成
+`supports_images: false` / `model_category: 文本生成`，网关按**模型能力**拒绝，而不是报文格式不对。
+实网 8 种写法全部失败：data URL、外部 https、`image_url` 字符串、Anthropic `image/source`、
+`input_image`、1017 变体；同一张图交给 `kimi-k2.6-vl` 立即返回内容，说明请求体本身没问题。IDE 自己
+的做法是两段式：先用 VL 模型识图（`analyzeImage` 工具），把识别结果以文字交给主模型。插件目前没有
+做这个中转，所以文本模型不标读图。若以后要支持，代价是每张新图多一次对话（占 3 次/分钟的会话
+额度），同一张图的识别结果可以缓存复用。
+
 **CodeArts 能选更细的思考强度吗？**
 
 不能，只有开 / 关。网关确实接受 `reasoning_effort`，还会**按模型**校验取值
