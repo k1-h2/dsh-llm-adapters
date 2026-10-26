@@ -13,15 +13,16 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import { LoomyAdapter, RaccoonAdapter, TraeAdapter, resolveModelId } from './adapter.ts'
+import { CodeArtsAdapter, LoomyAdapter, RaccoonAdapter, TraeAdapter, resolveModelId } from './adapter.ts'
 import type { AdapterOptions, LocalAdapter } from './adapter.ts'
 import { AccountStore } from './account-store.ts'
 import { API_PREFIX, handleApi } from './api.ts'
-import { LoomyAuth, RaccoonAuth, TraeAuth } from './auth.ts'
-import { BRANDS, LOOMY_PROVIDER, RACCOON_PROVIDER, TRAE_PROVIDER } from './brand.ts'
+import { CodeArtsAuth, LoomyAuth, RaccoonAuth, TraeAuth } from './auth.ts'
+import { BRANDS, CODEARTS_PROVIDER, LOOMY_PROVIDER, RACCOON_PROVIDER, TRAE_PROVIDER } from './brand.ts'
 import type { BrandId } from './brand.ts'
 import { Config as ConfigSchema, liveConfig } from './config.ts'
 import type { ParsedConfig } from './config.ts'
+import { CodeArtsProvider } from './codearts.ts'
 import { LoomyProvider } from './loomy.ts'
 import { OpenRouterCatalog } from './openrouter.ts'
 import { RaccoonProvider } from './raccoon.ts'
@@ -44,11 +45,13 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
-export { LoomyAdapter, RaccoonAdapter, TraeAdapter, LocalAdapter, resolveModelId } from './adapter.ts'
-export { LoomyAuth, RaccoonAuth, TraeAuth, decodeJwtFacts } from './auth.ts'
+export { CodeArtsAdapter, LoomyAdapter, RaccoonAdapter, TraeAdapter, LocalAdapter, resolveModelId } from './adapter.ts'
+export { CodeArtsAuth, LoomyAuth, RaccoonAuth, TraeAuth, decodeJwtFacts } from './auth.ts'
 export type { AuthStatus, LocalAccount } from './auth.ts'
 export { AccountStore } from './account-store.ts'
-export type { LoomyAccountRecord, RaccoonAccountRecord, StoredAccounts, TraeAccountRecord } from './account-store.ts'
+export type {
+  CodeArtsAccountRecord, LoomyAccountRecord, RaccoonAccountRecord, StoredAccounts, TraeAccountRecord,
+} from './account-store.ts'
 export { startLoginPage } from './login-page.ts'
 export type {
   LoginBindingSpec, LoginPageHandle, LoginPageSpec, LoginPhase, LoginPoll, LoginStatus,
@@ -67,7 +70,10 @@ export type {
 } from './raccoon-login.ts'
 export { buildQrMatrix, renderQrSvg } from './qr.ts'
 export type { QrMatrix } from './qr.ts'
-export { BRANDS, LOOMY_BRAND, RACCOON_BRAND, TRAE_BRAND, LOOMY_PROVIDER, RACCOON_PROVIDER, TRAE_PROVIDER, isBrandId, normalizeTraeRegion } from './brand.ts'
+export {
+  BRANDS, CODEARTS_BRAND, CODEARTS_PROVIDER, LOOMY_BRAND, LOOMY_PROVIDER, RACCOON_BRAND, RACCOON_PROVIDER,
+  TRAE_BRAND, TRAE_PROVIDER, isBrandId, normalizeTraeRegion,
+} from './brand.ts'
 export type { BrandId, BrandProfile, TraeRegion } from './brand.ts'
 export {
   ModelCatalog, defaultEffortOf, effortLabel, parseLoomyCatalog, parseRaccoonCatalog,
@@ -98,7 +104,26 @@ export { TRAE_APP_ID, TRAE_REGION_PROFILES, TRAE_SOLO_CHAT_PATH, TRAE_WEB_USER_A
 export type { TraeRegionProfile } from './trae-endpoints.ts'
 export { TraeWebLogin, machineIdOf } from './trae-login.ts'
 export type { TraeLoginAccount, TraeWebLoginOptions } from './trae-login.ts'
-export { ProviderHttpError, buildMessages, buildTools, openAiStream, sseEvents } from './wire.ts'
+export {
+  CodeArtsProvider, CODEARTS_DEFAULT_EFFORT, CODEARTS_EFFORTS, clampMaxTokens, normalizeCodeArtsModelId,
+  parseCodeArtsPackage, parseCodeArtsRoster, pickActiveCredit, priceFactorOfLabel,
+} from './codearts.ts'
+export type {
+  CodeArtsActivity, CodeArtsModelRow, CodeArtsPackageInfo, CodeArtsProviderOptions,
+} from './codearts.ts'
+export {
+  CODEARTS_BENEFIT_FALLBACK, CODEARTS_CHAT_URL, CODEARTS_CONTEXT_WINDOWS, CODEARTS_FALLBACK_CONTEXT_WINDOW,
+  CODEARTS_MAX_OUTPUT_TOKENS, CODEARTS_SNAP_BASE, CODEARTS_VISION_MODELS, codeartsContextWindow,
+} from './codearts-endpoints.ts'
+export { headersForFetch, signRequestHuawei } from './codearts-sign.ts'
+export {
+  RefreshTokenExpiredError, buildAuthorizeUrl, exchangeAuthorizationCode, exchangeRefreshToken,
+  generateDpopKeyPair, generatePkcePair, readJwtExpiry, signDpopJws,
+} from './codearts-oauth.ts'
+export type { CodeArtsCredential, DpopKeyPair, DpopPrivateJwk, PkcePair } from './codearts-oauth.ts'
+export { CodeArtsLogin } from './codearts-login.ts'
+export type { CodeArtsLoginAccount, CodeArtsLoginOptions } from './codearts-login.ts'
+export { ProviderHttpError, buildMessages, buildTools, consumeOpenAiStream, openAiStream, sseEvents } from './wire.ts'
 export type { WireMessage } from './wire.ts'
 export { API_PREFIX, buildRows } from './api.ts'
 export { liveConfig, resolveConfig } from './config.ts'
@@ -112,8 +137,8 @@ const NS = 'llm-adapters'
 const REQUEST_IMAGE_MAX_BYTES = 1_048_576
 
 const STRUCTURAL_FIELDS: ReadonlySet<string> = new Set([
-  'loomyEnabled', 'raccoonEnabled', 'traeEnabled',
-  'loomyDisplayName', 'raccoonDisplayName', 'traeDisplayName',
+  'loomyEnabled', 'raccoonEnabled', 'traeEnabled', 'codeartsEnabled',
+  'loomyDisplayName', 'raccoonDisplayName', 'traeDisplayName', 'codeartsDisplayName',
 ])
 
 export const Config = ConfigSchema
@@ -139,6 +164,7 @@ export function apply(ctx: Context, config: ParsedConfig): void {
   const loomyAuth = new LoomyAuth(accounts)
   const raccoonAuth = new RaccoonAuth(accounts)
   const traeAuth = new TraeAuth(accounts, () => live.traeRegion())
+  const codeartsAuth = new CodeArtsAuth(accounts)
 
   const loomyProvider = new LoomyProvider({
     auth: loomyAuth,
@@ -169,6 +195,15 @@ export function apply(ctx: Context, config: ParsedConfig): void {
     openRouter,
     logger: message => ctx.logger?.warn(message),
   })
+  const codeartsProvider = new CodeArtsProvider({
+    auth: codeartsAuth,
+    store: accounts,
+    ttlMs: live.modelCacheTtlMs,
+    timeoutMs: live.catalogFetchTimeoutMs,
+    textOnly: () => new Set(live.codeartsTextOnlyModelIds()),
+    forceVision: () => new Set(live.codeartsVisionModelIds()),
+    logger: message => ctx.logger?.warn(message),
+  })
 
   // The four per-brand choices are the same shape for every provider, so they
   // are kept in one table: adding a provider means adding a row, not a branch
@@ -194,6 +229,12 @@ export function apply(ctx: Context, config: ParsedConfig): void {
       modelContextWindows: live.traeModelContextWindows,
       modelAliases: live.traeModelAliases,
     },
+    codearts: {
+      displayName: live.codeartsDisplayName,
+      disabledModels: live.codeartsDisabledModels,
+      modelContextWindows: live.codeartsModelContextWindows,
+      modelAliases: live.codeartsModelAliases,
+    },
   }
 
   const makeOptions = (brand: BrandId, provider: string): AdapterOptions => ({
@@ -208,6 +249,7 @@ export function apply(ctx: Context, config: ParsedConfig): void {
     loomy: new LoomyAdapter(makeOptions('loomy', LOOMY_PROVIDER), loomyProvider),
     raccoon: new RaccoonAdapter(makeOptions('raccoon', RACCOON_PROVIDER), raccoonProvider),
     trae: new TraeAdapter(makeOptions('trae', TRAE_PROVIDER), traeProvider),
+    codearts: new CodeArtsAdapter(makeOptions('codearts', CODEARTS_PROVIDER), codeartsProvider),
   }
 
   // Sync ticks cheaply: the configured interval is read live, so changing it in
@@ -237,7 +279,8 @@ export function apply(ctx: Context, config: ParsedConfig): void {
 
   const enabled = (id: BrandId): boolean => id === 'loomy'
     ? live.loomyEnabled()
-    : id === 'raccoon' ? live.raccoonEnabled() : live.traeEnabled()
+    : id === 'raccoon' ? live.raccoonEnabled()
+      : id === 'trae' ? live.traeEnabled() : live.codeartsEnabled()
   const directoryFor = () => BRANDS
     .filter(brand => enabled(brand.id))
     .map(brand => ({
@@ -283,6 +326,7 @@ export function apply(ctx: Context, config: ParsedConfig): void {
     adapters.loomy.close()
     adapters.raccoon.close()
     adapters.trae.close()
+    adapters.codearts.close()
   }, 'llm-adapters.dispose')
 
   ctx.inject(['webServer'], (scope) => {

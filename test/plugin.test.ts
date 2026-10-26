@@ -50,11 +50,12 @@ describe('plugin host wiring', () => {
   it('registers every provider route, the directory and the settings API', () => {
     const fake = fakeContext()
     apply(fake.ctx as never, {})
-    expect(fake.routes).toEqual(['loomy', 'raccoon', 'trae'])
+    expect(fake.routes).toEqual(['loomy', 'raccoon', 'trae', 'codearts'])
     expect(fake.directories.at(-1)).toMatchObject([
       { provider: 'loomy', displayName: 'Loomy', settingsNs: 'llm-adapters', settingsPath: [] },
       { provider: 'raccoon', displayName: '商汤小浣熊', settingsNs: 'llm-adapters', settingsPath: [] },
       { provider: 'trae', displayName: 'Trae', settingsNs: 'llm-adapters', settingsPath: [] },
+      { provider: 'codearts', displayName: '华为云 CodeArts', settingsNs: 'llm-adapters', settingsPath: [] },
     ])
     expect(fake.apiPaths).toEqual(['/api/llm-adapters'])
     expect(fake.events.has('loader/volatile-update')).toBe(true)
@@ -63,7 +64,9 @@ describe('plugin host wiring', () => {
 
   it('registers nothing when every provider is switched off', () => {
     const fake = fakeContext()
-    apply(fake.ctx as never, { loomyEnabled: false, raccoonEnabled: false, traeEnabled: false })
+    apply(fake.ctx as never, {
+      loomyEnabled: false, raccoonEnabled: false, traeEnabled: false, codeartsEnabled: false,
+    })
     expect(fake.routes).toEqual([])
     expect(fake.directories).toEqual([])
     expect(fake.apiPaths).toEqual(['/api/llm-adapters'])
@@ -73,11 +76,13 @@ describe('plugin host wiring', () => {
     const fake = fakeContext()
     apply(fake.ctx as never, {
       loomyDisplayName: '讯飞 Loomy', raccoonDisplayName: '小浣熊 Pro', traeDisplayName: 'Trae IDE',
+      codeartsDisplayName: 'CodeArts IDE',
     })
     expect(fake.directories.at(-1)).toMatchObject([
       { displayName: '讯飞 Loomy' },
       { displayName: '小浣熊 Pro' },
       { displayName: 'Trae IDE' },
+      { displayName: 'CodeArts IDE' },
     ])
   })
 })

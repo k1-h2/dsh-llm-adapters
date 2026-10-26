@@ -324,6 +324,7 @@ export async function* openAiStream(options: {
   signal?: AbortSignal
   fetchImpl?: typeof fetch
   onUnauthorized?: () => void
+  onFrame?: (frame: Record<string, unknown>) => void
 }): AsyncGenerator<StreamChunk> {
   const response = await (options.fetchImpl ?? fetch)(options.url, {
     method: 'POST',
@@ -344,6 +345,31 @@ export async function* openAiStream(options: {
     return
   }
 
+  yield* consumeOpenAiStream(response, {
+    ...options.signal === undefined ? {} : { signal: options.signal },
+    ...options.onFrame === undefined ? {} : { onFrame: options.onFrame },
+  })
+}
+
+/** Per-frame hook; a throw aborts the stream (used for in-band error frames). */
+export interface ConsumeOptions {
+  signal?: AbortSignal
+  onFrame?: (frame: Record<string, unknown>) => void
+}
+
+/**
+ * Turn an already-open OpenAI-compatible SSE response into harness chunks.
+ *
+ * Split out from {@link openAiStream} so a gateway that has to sign the exact
+ * request body (CodeArts) can do its own fetch and still reuse the frame
+ * handling. `onFrame` sees every parsed frame before it is interpreted, which
+ * is how a gateway that reports errors inside a 200 stream is caught.
+ */
+export async function* consumeOpenAiStream(
+  response: Response,
+  options: ConsumeOptions = {},
+): AsyncGenerator<StreamChunk> {
+  if (response.body === null) throw new ProviderHttpError('上游没有返回响应体', 502)
   let nextIndex = 0
   let current: { kind: 'text' | 'reasoning', index: number, text: string } | undefined
   const tools = new Map<number, ToolAccumulator>()
@@ -377,6 +403,7 @@ export async function* openAiStream(options: {
     } catch {
       continue
     }
+    options.onFrame?.(frame as unknown as Record<string, unknown>)
     if (frame.error !== undefined) {
       const message = typeof frame.error === 'string'
         ? frame.error
@@ -452,6 +479,7 @@ export async function* openAiStream(options: {
   if (reason === undefined) reason = 'stop'
   yield { type: 'finish', reason: { kind: reason } }
 }
+
 
 /** Non-streaming fallback for a gateway that ignores `stream: true`. */
 async function* nonStreaming(response: Response, signal?: AbortSignal): AsyncGenerator<StreamChunk> {

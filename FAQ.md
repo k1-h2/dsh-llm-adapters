@@ -170,6 +170,38 @@ SOLO 接口并不校验 `reasoning_effort`（`banana` / `999` / `MAX` 都返回 
 而不是让你选中后必然收到 `4001`。要支持它们需要桌面端 TraeCode 的配置与凭据，这与“只靠网页
 登录、不读本机客户端”的约束冲突，当前不做。
 
+**CodeArts 需要先装 IDE 吗？**
+
+不用。插件走的是华为云 OAuth：在浏览器里完成一次授权，宿主拿到 AK/SK 与 STS 安全令牌，之后每个
+请求都用 `SDK-HMAC-SHA256` 签名调用网关。它不读本机 CodeArts IDE 的任何文件，也不需要 `codearts`
+命令行工具；凭据只保存在插件自己的 `accounts.json` 里。
+
+**CodeArts 的模型窗口为什么和别家不一样？**
+
+上游两个目录端点（`opengw gateway/config` 与 `/v1/model/builtin`）都**不下发**上下文窗口，字段
+里连 `context` / `window` 这类键都没有。插件用的是 IDE 自己下发的 provider 配置里的
+`limit.context`（GLM-5.2 / GLM-5.3 / DeepSeek-V4.1-Flash 都是 1 048 576，openpangu 是 524 288，
+`glm-5.2-sft-harmony` 是 202 752），表里没有的模型回退到当前目录最小的真实窗口。这个值上游改过
+（GLM-5.2 在 10-21 从 202 752 变成 1M），所以设置页的窗口下拉可以按模型覆盖。
+
+**CodeArts 报 `InferHub.002002009.404 model is not registered`？**
+
+这是免费额度（benefit）模型缺 `maas_type: benefit` 头。这个头**参与签名**，普通模型带上反而报
+`unsupported model`，所以插件按目录动态判定：`opengw gateway/config` 列出的模型带该头，其余不带。
+如果账号本身没有这个免费额度包，网关会回 `InferHub.4004.200`，插件会去掉该头再试一次，仍失败时
+按「该账号没有这个模型的免费额度包」提示。
+
+**CodeArts 登录两小时后失效？**
+
+STS 令牌本来就只有两小时，插件在到期前 5 分钟用续期令牌自动换新，正常使用不需要重新登录。真正
+失效的是续期令牌（华为侧固定为登录 +30 天，续期不延长），到期后重新点一次「打开浏览器登录」即可。
+
+**CodeArts 有签到吗？**
+
+有，但只对**积分计费账户**开放：插件先读账户类型，再查活动列表里的 `USER_LOGIN`，可领取时才
+`claim`（服务端要求确认时再补 `confirm`）。Token 计费账户会显示「非积分计费账户，没有签到活动」，
+而不是报领取失败。签到与 Trae 共用同一张卡片上的按钮与状态行。
+
 **Trae 模型列表为什么和客户端对不上？**
 插件只列出 Trae 客户端当前聊天选择器的主通道模型（`solo_work_remote` / `solo_work_lite`），
 并且每一行都必须在 `get_detail_param` 里有可调用的 `config_name`。按实网 CN 账号，这个口径正好

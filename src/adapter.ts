@@ -16,6 +16,7 @@ import type { BrandId, TraeRegion } from './brand.ts'
 import type { LoginStatus } from './login-page.ts'
 import type { ProviderModel } from './catalog.ts'
 import { effortLabel } from './catalog.ts'
+import { CodeArtsProvider } from './codearts.ts'
 import { LoomyProvider } from './loomy.ts'
 import { RaccoonProvider } from './raccoon.ts'
 import { TraeProvider } from './trae.ts'
@@ -130,7 +131,7 @@ export abstract class LocalAdapter extends LlmAdapter {
     return this.client.cancelBrowserLogin()
   }
 
-  /** Claim today's Trae reward; providers without one reject it. */
+  /** Claim today's reward; providers without one reject it. */
   async claimCheckin(): Promise<CheckinStatus> {
     if (this.client.claimCheckin === undefined) throw new Error('该供应商没有签到活动')
     const result = await this.client.claimCheckin()
@@ -269,6 +270,13 @@ export class RaccoonAdapter extends LocalAdapter {
 export class TraeAdapter extends LocalAdapter {
   constructor(options: AdapterOptions, trae: TraeProvider) {
     super(options, trae)
+  }
+}
+
+/** CodeArts route; signed requests instead of a bearer token. */
+export class CodeArtsAdapter extends LocalAdapter {
+  constructor(options: AdapterOptions, codearts: CodeArtsProvider) {
+    super(options, codearts)
   }
 }
 

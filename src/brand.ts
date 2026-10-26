@@ -1,16 +1,19 @@
 /**
  * Identity of the providers this plugin serves.
  *
- * All three speak HTTP against the provider's own gateway and sign in through a
+ * All four speak HTTP against the provider's own gateway and sign in through a
  * browser flow, so they differ in endpoints, login protocol and catalog shapes
  * rather than in transport. Trae has two independent regions (mainland and
  * international) behind one provider route; the region is a setting, not a
  * second brand, so its account and model choices stay on one settings page.
  *
+ * CodeArts is the one provider that does not use a bearer token: its gateway
+ * verifies an `SDK-HMAC-SHA256` signature, which the account record carries.
+ *
  * @module dsh-llm-adapters/brand
  */
 
-export type BrandId = 'loomy' | 'raccoon' | 'trae'
+export type BrandId = 'loomy' | 'raccoon' | 'trae' | 'codearts'
 export type TraeRegion = 'cn' | 'global'
 
 export interface BrandProfile {
@@ -19,12 +22,13 @@ export interface BrandProfile {
   provider: string
   defaultDisplayName: string
   /** Config field that switches this provider on or off. */
-  enabledKey: 'loomyEnabled' | 'raccoonEnabled' | 'traeEnabled'
+  enabledKey: 'loomyEnabled' | 'raccoonEnabled' | 'traeEnabled' | 'codeartsEnabled'
 }
 
 export const LOOMY_PROVIDER = 'loomy'
 export const RACCOON_PROVIDER = 'raccoon'
 export const TRAE_PROVIDER = 'trae'
+export const CODEARTS_PROVIDER = 'codearts'
 
 export const LOOMY_BRAND: BrandProfile = {
   id: 'loomy',
@@ -47,10 +51,17 @@ export const TRAE_BRAND: BrandProfile = {
   enabledKey: 'traeEnabled',
 }
 
-export const BRANDS: readonly BrandProfile[] = [LOOMY_BRAND, RACCOON_BRAND, TRAE_BRAND]
+export const CODEARTS_BRAND: BrandProfile = {
+  id: 'codearts',
+  provider: CODEARTS_PROVIDER,
+  defaultDisplayName: '华为云 CodeArts',
+  enabledKey: 'codeartsEnabled',
+}
+
+export const BRANDS: readonly BrandProfile[] = [LOOMY_BRAND, RACCOON_BRAND, TRAE_BRAND, CODEARTS_BRAND]
 
 export function isBrandId(value: unknown): value is BrandId {
-  return value === 'loomy' || value === 'raccoon' || value === 'trae'
+  return value === 'loomy' || value === 'raccoon' || value === 'trae' || value === 'codearts'
 }
 
 /** Normalize any stored spelling to one of the two Trae regions. */

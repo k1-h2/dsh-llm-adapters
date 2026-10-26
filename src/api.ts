@@ -138,7 +138,7 @@ async function handleAccount(req: IncomingMessage, res: ServerResponse, adapters
   }
   const brand = brandFrom(body.brand)
   if (brand === undefined) {
-    send(res, 400, { error: 'brand 只接受 loomy、raccoon 或 trae' })
+    send(res, 400, { error: 'brand 只接受 loomy、raccoon、trae 或 codearts' })
     return
   }
   const adapter = adapters[brand]
@@ -165,8 +165,8 @@ async function handleAccount(req: IncomingMessage, res: ServerResponse, adapters
     return
   }
 
-  // Only Trae has a daily reward; the other adapters reject the action, so the
-  // page can keep one button that simply reports the refusal.
+  // Trae and CodeArts have a daily reward; the other adapters reject the action,
+  // so the page can keep one button that simply reports the refusal.
   if (action === 'checkin') {
     try {
       send(res, 200, { brand, checkin: await adapter.claimCheckin() })
@@ -218,7 +218,7 @@ export async function handleApi(
 
     const brand = brandFrom(url.searchParams.get('brand'))
     if (brand === undefined) {
-      send(res, 400, { error: 'brand 只接受 loomy、raccoon 或 trae' })
+      send(res, 400, { error: 'brand 只接受 loomy、raccoon、trae 或 codearts' })
       return
     }
     const adapter = adapters[brand]
