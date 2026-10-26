@@ -36,9 +36,20 @@ interface WebServerService {
   }): () => void
 }
 
+/**
+ * The mounted filesystem provider, used only to translate a host path into the
+ * execution world the host tools run in. Declared minimally so this plugin
+ * keeps only the peer dependencies it actually needs.
+ */
+interface FileSystemService {
+  processPathFromHostPath?(hostPath: string): string | undefined
+}
+
 declare module '@deepseek-ai/cordis' {
   interface Context {
     webServer?: WebServerService
+    /** Present when a filesystem provider is mounted; reached by inject. */
+    fs?: FileSystemService
   }
   interface Events {
     'loader/volatile-update'(paths: readonly (readonly string[])[]): void
@@ -149,12 +160,34 @@ export const Config = ConfigSchema
 export function apply(ctx: Context, config: ParsedConfig): void {
   const live = liveConfig(config)
   let attachments: AttachmentStore | undefined
+  let filesystem: FileSystemService | undefined
+
+  /**
+   * Where the model can find the image on disk.
+   *
+   * Pixels let it describe the picture; this path lets a "modify and save it"
+   * turn act on the file instead of searching the workspace for something that
+   * was never there. The mounted tools may see a different path than the host
+   * (a sandbox), so the filesystem provider gets the last word.
+   */
+  const imagePath = (ref: ImageAttachmentRef): string | undefined => {
+    const store = attachments
+    if (store === undefined) return undefined
+    const hostPath = store.imageHostPath(ref)
+    if (hostPath === undefined) return undefined
+    return filesystem?.processPathFromHostPath?.(hostPath) ?? hostPath
+  }
 
   const readImage = async (ref: ImageAttachmentRef, signal?: AbortSignal) => {
     const store = attachments
     if (store === undefined) return undefined
     const image = await store.readImageRequest(ref, { width: ref.width, height: ref.height, maxBytes: REQUEST_IMAGE_MAX_BYTES }, signal)
-    return { data: image.data, mediaType: image.mediaType }
+    const path = imagePath(ref)
+    return {
+      data: image.data,
+      mediaType: image.mediaType,
+      ...path === undefined ? {} : { path },
+    }
   }
 
   const accounts = new AccountStore()
@@ -275,6 +308,11 @@ export function apply(ctx: Context, config: ParsedConfig): void {
   ctx.inject(['attachments'], (scope) => {
     attachments = scope.attachments
     scope.effect(() => () => { attachments = undefined }, 'llm-adapters.attachments')
+  })
+
+  ctx.inject(['fs'], (scope) => {
+    filesystem = scope.fs
+    scope.effect(() => () => { filesystem = undefined }, 'llm-adapters.fs')
   })
 
   const routes: Partial<Record<BrandId, () => void>> = {}

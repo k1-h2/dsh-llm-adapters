@@ -96,6 +96,20 @@ describe('LocalAdapter', () => {
     })
   })
 
+  it('keeps a verified vision capability when the catalog read fails', async () => {
+    let catalog: ProviderModel[] = models
+    const { adapter } = makeAdapter({ models: async () => catalog })
+    // The first resolution sees the live catalog and remembers the capability.
+    expect((await adapter.resolveModel('loomy', 'spark-x')).inputModalities).toEqual(['text', 'image'])
+
+    // A failed refresh answers with an empty list. Declaring text-only here
+    // made DSH replace the pixels with a placeholder before the adapter ran.
+    catalog = []
+    expect((await adapter.resolveModel('loomy', 'spark-x')).inputModalities).toEqual(['text', 'image'])
+    // Nothing was ever verified for this id, so it stays text-only.
+    expect((await adapter.resolveModel('loomy', 'never-seen')).inputModalities).toEqual(['text'])
+  })
+
   it('publishes capitalized effort labels with the raw ids', async () => {
     const { adapter } = makeAdapter({
       models: async () => [{

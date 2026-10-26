@@ -9,13 +9,40 @@
  * @module dsh-llm-adapters/wire
  */
 
-import { attributionHeaders } from '@deepseek-ai/dsh-llm'
+import { attributionHeaders, offloadedImageText, requestImageHandleText } from '@deepseek-ai/dsh-llm'
 import type {
-  ContentBlock, GenerateOptions, ImageBlock, StreamChunk, ToolCallId,
+  ContentBlock, GenerateOptions, StreamChunk, ToolCallId,
 } from '@deepseek-ai/dsh-llm'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 
-export type ReadImage = (ref: ImageAttachmentRef, signal?: AbortSignal) => Promise<{ data: Uint8Array, mediaType: string } | undefined>
+/**
+ * Read one durable image occurrence into the bytes a request sends.
+ *
+ * `path` is the normalized copy in the host tools' execution world. Pixels let
+ * the model look at the image; this path is what a "edit and save it" turn
+ * needs, because otherwise the model goes hunting through the workspace for a
+ * file that was never there.
+ */
+export type ReadImage = (ref: ImageAttachmentRef, signal?: AbortSignal) => Promise<{
+  data: Uint8Array
+  mediaType: string
+  path?: string
+} | undefined>
+
+/**
+ * Model-facing handle for one image.
+ *
+ * The harness's own adapters append exactly this text — attachment identity,
+ * pixel size, the read-only normalized copy on disk, and the instruction to
+ * copy it to a writable path before editing. Reusing the helper keeps the
+ * wording (and therefore the model's behaviour) identical across routes.
+ */
+export function imageRefText(ref: ImageAttachmentRef, path: string | undefined): string {
+  if (path === undefined) {
+    return `[图片附件 ${String(ref.attachmentId)}（${ref.width}×${ref.height}px，${ref.mediaType}）]`
+  }
+  return requestImageHandleText(ref, { width: ref.width, height: ref.height }, { readonlyPath: path })
+}
 
 export class ProviderHttpError extends Error {
   constructor(
@@ -61,33 +88,40 @@ function filePlaceholder(block: Extract<ContentBlock, { type: 'file' }>): string
   return `[附件：${block.attachment.name}（${block.attachment.bytes} 字节）]`
 }
 
-/** Convert image bytes into the data URL form both gateways accept. */
-async function imagePart(block: ImageBlock, readImage: ReadImage | undefined, signal?: AbortSignal): Promise<Record<string, unknown> | string> {
-  if (block.offloaded === true || readImage === undefined) return '[图片]'
-  try {
-    const image = await readImage(block.attachment, signal)
-    if (image === undefined) return '[图片]'
-    return {
-      type: 'image_url',
-      image_url: { url: `data:${image.mediaType};base64,${Buffer.from(image.data).toString('base64')}` },
-    }
-  } catch {
-    return '[图片读取失败]'
-  }
-}
-
 async function userContent(blocks: readonly ContentBlock[], readImage: ReadImage | undefined, signal?: AbortSignal): Promise<string | Record<string, unknown>[]> {
   const parts: Record<string, unknown>[] = []
   let hasImage = false
   for (const block of blocks) {
     if (block.type === 'text') parts.push({ type: 'text', text: block.text })
     else if (block.type === 'image') {
-      const part = await imagePart(block, readImage, signal)
-      if (typeof part === 'string') parts.push({ type: 'text', text: part })
-      else {
-        hasImage = true
-        parts.push(part)
+      if (block.offloaded === true) {
+        // Dropped to fit the request image limits: the harness's own handle
+        // says so, and repeating the pixels is exactly what was avoided.
+        parts.push({ type: 'text', text: offloadedImageText(block.attachment) })
+        continue
       }
+      if (readImage === undefined) {
+        parts.push({ type: 'text', text: imageRefText(block.attachment, undefined) })
+        continue
+      }
+      let image: Awaited<ReturnType<ReadImage>>
+      try {
+        image = await readImage(block.attachment, signal)
+      } catch {
+        image = undefined
+      }
+      if (image === undefined) {
+        parts.push({ type: 'text', text: '[图片读取失败]' })
+        continue
+      }
+      // Handle first, pixels second: the text names the file the model may
+      // copy and edit, and the data URL lets it read the picture.
+      parts.push({ type: 'text', text: imageRefText(block.attachment, image.path) })
+      parts.push({
+        type: 'image_url',
+        image_url: { url: `data:${image.mediaType};base64,${Buffer.from(image.data).toString('base64')}` },
+      })
+      hasImage = true
     } else if (block.type === 'file') {
       parts.push({ type: 'text', text: filePlaceholder(block) })
     }

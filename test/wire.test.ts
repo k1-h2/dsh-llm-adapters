@@ -67,11 +67,64 @@ describe('buildMessages', () => {
     }, async () => ({ data: new Uint8Array([1, 2, 3]), mediaType: 'image/png' }))
     const content = messages[0]!.content as Record<string, unknown>[]
     expect(content[0]).toEqual({ type: 'text', text: 'look' })
-    expect(content[1]).toEqual({
+    // The handle names the attachment even when the route cannot say where the
+    // file lives; it sits before the pixels.
+    expect(content[1]).toEqual({ type: 'text', text: '[图片附件 a（1×1px，image/png）]' })
+    expect(content[2]).toEqual({
       type: 'image_url',
       image_url: { url: 'data:image/png;base64,AQID' },
     })
-    expect(content[2]).toEqual({ type: 'text', text: '[附件：a.txt（5 字节）]' })
+    expect(content[3]).toEqual({ type: 'text', text: '[附件：a.txt（5 字节）]' })
+  })
+
+  it('puts the read-only path in front of the pixels', async () => {
+    // Reading an image needs pixels; editing one needs a file path. Without
+    // this path the model answered "图片没有保存在工作目录中" and went looking
+    // through the workspace for a file that never existed.
+    const path = 'C:\\\\Users\\\\tester\\\\.dsh\\\\attachments\\\\v1\\\\objects\\\\ab\\\\abcd.png'
+    const messages = await buildMessages({
+      ...baseOptions,
+      system: undefined,
+      messages: [{
+        role: 'user',
+        id: 'u3' as never,
+        source: { kind: 'user' },
+        content: [{
+          type: 'image',
+          attachment: { attachmentId: 'sha256:abcd', mediaType: 'image/png', bytes: 3, width: 492, height: 150, name: 'shot.png' },
+        }],
+      }],
+    }, async () => ({ data: new Uint8Array([1, 2, 3]), mediaType: 'image/png', path }))
+
+    const content = messages[0]!.content as Record<string, unknown>[]
+    const handle = String((content[0] as { text: string }).text)
+    expect(handle).toContain(JSON.stringify(path))
+    expect(handle).toContain('492x150px')
+    expect(handle).toContain('Copy to a writable path ending in .png before editing')
+    expect(content[1]).toMatchObject({ type: 'image_url' })
+  })
+
+  it('keeps the offload wording for an image the harness already dropped', async () => {
+    const messages = await buildMessages({
+      ...baseOptions,
+      system: undefined,
+      messages: [{
+        role: 'user',
+        id: 'u4' as never,
+        source: { kind: 'user' },
+        content: [{
+          type: 'image',
+          offloaded: true,
+          attachment: { attachmentId: 'sha256:ef01', mediaType: 'image/jpeg', bytes: 3, width: 10, height: 10 },
+        }],
+      }],
+    }, async () => {
+      throw new Error('offloaded images must not be read again')
+    })
+
+    const content = messages[0]!.content as string
+    expect(content).toContain('image omitted to fit request image limits')
+    expect(content).toContain('sha256:ef01')
   })
 
   it('maps assistant tool calls and tool results', async () => {
