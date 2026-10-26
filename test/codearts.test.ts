@@ -9,6 +9,7 @@ import {
   CODEARTS_FALLBACK_CONTEXT_WINDOW, codeartsContextWindow,
 } from '../src/codearts-endpoints.ts'
 import { headersForFetch, sdkDateStamp, sha256Hex, signRequestHuawei } from '../src/codearts-sign.ts'
+import { CodeArtsSessionWindow } from '../src/codearts-window.ts'
 import {
   RefreshTokenExpiredError, buildAuthorizeUrl, exchangeRefreshToken, generateDpopKeyPair, generatePkcePair,
   readJwtExpiry, signDpopJws,
@@ -210,15 +211,16 @@ describe('CodeArts provider', () => {
     maxTokens: 200_000,
   }
 
-  function make(auth: Record<string, unknown>, fetchImpl: typeof fetch): CodeArtsProvider {
+  function make(auth: Record<string, unknown>, fetchImpl: typeof fetch, window = new CodeArtsSessionWindow()): CodeArtsProvider {
     return new CodeArtsProvider({
       auth: auth as never,
-      store: { saveCodearts: vi.fn() } as never,
+      store: { saveCodearts: vi.fn(), codearts: async () => undefined } as never,
       ttlMs: () => 60_000,
       timeoutMs: () => 1_000,
       textOnly: () => new Set(),
       forceVision: () => new Set(),
       fetchImpl,
+      window,
     })
   }
 
@@ -427,6 +429,68 @@ describe('CodeArts provider', () => {
       'POST /v1/ops/claim',
       'POST /v1/ops/confirm',
     ])
+  })
+
+  it('waits out the per-minute session cap instead of failing the turn', async () => {
+    vi.useFakeTimers()
+    try {
+      let calls = 0
+      const fetchMock = vi.fn(async () => {
+        calls++
+        if (calls === 1) {
+          return new Response(JSON.stringify({ error_code: 'TM.00001041', error_msg: '并发会话数已达上限(3个)' }), {
+            status: 429,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        return sse([JSON.stringify({ choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }), '[DONE]'])
+      })
+      const provider = make({
+        status: async () => ({ signedIn: true }),
+        credential: async () => ({ accessKeyId: 'AK', secretAccessKey: 'SK', securityToken: 'ST' }),
+        refresh: async () => ({ accessKeyId: 'AK', secretAccessKey: 'SK', securityToken: 'ST' }),
+        logout: async () => undefined,
+      }, fetchMock as unknown as typeof fetch)
+
+      const pending = collect(provider.stream(options, 'glm-5.3', undefined, () => undefined))
+      // The cap is a rate limit, so the retry must not fire immediately.
+      await vi.advanceTimersByTimeAsync(19_000)
+      expect(calls).toBe(1)
+      await vi.advanceTimersByTimeAsync(2_000)
+      const chunks = await pending
+      expect(calls).toBe(2)
+      expect(chunks.some(chunk => chunk.type === 'text-delta')).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reports a cap that never lifts as a readable error', async () => {
+    vi.useFakeTimers()
+    try {
+      const fetchMock = vi.fn(async () => new Response(
+        JSON.stringify({ error_code: 'TM.00001041', error_msg: '并发会话数已达上限(3个)' }),
+        { status: 429, headers: { 'content-type': 'application/json' } },
+      ))
+      // A wide window keeps this test about the retry budget, not the wait.
+      const provider = make({
+        status: async () => ({ signedIn: true }),
+        credential: async () => ({ accessKeyId: 'AK', secretAccessKey: 'SK', securityToken: 'ST' }),
+        refresh: async () => ({ accessKeyId: 'AK', secretAccessKey: 'SK', securityToken: 'ST' }),
+        logout: async () => undefined,
+      }, fetchMock as unknown as typeof fetch, new CodeArtsSessionWindow(100, 60_000))
+
+      const pending = collect(provider.stream(options, 'glm-5.3', undefined, () => undefined))
+        .catch((caught: unknown) => caught)
+      await vi.advanceTimersByTimeAsync(120_000)
+      const error = await pending
+      expect(error).toBeInstanceOf(ProviderHttpError)
+      expect((error as ProviderHttpError).status).toBe(429)
+      expect((error as ProviderHttpError).message).toContain('3 个会话')
+      expect(fetchMock).toHaveBeenCalledTimes(4)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('caps the output budget at the gateway limit', () => {

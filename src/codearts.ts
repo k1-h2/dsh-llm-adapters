@@ -42,6 +42,7 @@ import {
 } from './codearts-endpoints.ts'
 import { CodeArtsLogin } from './codearts-login.ts'
 import { headersForFetch, signRequestHuawei } from './codearts-sign.ts'
+import { CodeArtsSessionWindow, sharedSessionWindow } from './codearts-window.ts'
 import type { CodeArtsCredential } from './codearts-oauth.ts'
 import type { LoginStatus } from './login-page.ts'
 import type { CheckinStatus, QuotaPack, QuotaSnapshot } from './types.ts'
@@ -62,6 +63,8 @@ export interface CodeArtsProviderOptions {
   fetchImpl?: typeof fetch
   logger?: (message: string) => void
   loginTimeoutMs?: number
+  /** Chat budget; defaults to the process-wide window (survives hot reloads). */
+  window?: CodeArtsSessionWindow
 }
 
 /** One roster entry before it becomes a model row. */
@@ -233,7 +236,39 @@ function classifyFailure(status: number, body: string): Error {
   return new ProviderHttpError(body === '' ? `HTTP ${status}` : body.slice(0, 400), status)
 }
 
-const sleep = (ms: number): Promise<void> => new Promise(resolve => { setTimeout(resolve, ms) })
+const sleep = (ms: number, signal?: AbortSignal): Promise<void> => new Promise((resolve, reject) => {
+  if (signal?.aborted === true) {
+    reject(signal.reason instanceof Error ? signal.reason : new Error('aborted'))
+    return
+  }
+  const onAbort = (): void => {
+    clearTimeout(timer)
+    reject(signal?.reason instanceof Error ? signal.reason : new Error('aborted'))
+  }
+  const timer = setTimeout(() => {
+    signal?.removeEventListener('abort', onAbort)
+    resolve()
+  }, ms)
+  signal?.addEventListener('abort', onAbort, { once: true })
+})
+
+/** Retries for a gateway that is busy for reasons the window cannot predict. */
+const QUEUE_ATTEMPTS = 3
+/** Minimum pause before retrying a rejected call; the window adds its own. */
+const QUEUE_BACKOFF_MS = 20_000
+
+/**
+ * The message a user sees once waiting is hopeless.
+ *
+ * The raw gateway text (`TM.00001041`) reads like a bug; the limit is the
+ * trial plan's, and the only fix on this side is to say so.
+ */
+function queueExhausted(): ProviderHttpError {
+  return new ProviderHttpError(
+    'CodeArts 体验版每分钟只允许 3 个会话，当前已被占满。请稍等片刻再发，或关闭其它 CodeArts 会话。',
+    429,
+  )
+}
 
 export class CodeArtsProvider {
   private readonly catalog: ModelCatalog
@@ -241,9 +276,14 @@ export class CodeArtsProvider {
   private quotaSnapshot: { value: QuotaSnapshot, at: number } | undefined
   private quotaInflight: Promise<QuotaSnapshot> | undefined
   private benefitModels = new Set<string>(CODEARTS_BENEFIT_FALLBACK)
+  /** Models that answered `InferHub.4004.200`: no allowance pack to bill. */
+  private readonly noBenefit = new Set<string>()
+  private noBenefitLoaded = false
+  private readonly window: CodeArtsSessionWindow
   private readonly sessionId = randomUUID()
 
   constructor(private readonly options: CodeArtsProviderOptions) {
+    this.window = options.window ?? sharedSessionWindow()
     this.catalog = new ModelCatalog(() => this.loadModels(), options.ttlMs)
     this.login = new CodeArtsLogin({
       ...options.loginTimeoutMs === undefined ? {} : { timeoutMs: options.loginTimeoutMs },
@@ -251,6 +291,10 @@ export class CodeArtsProvider {
       ...options.logger === undefined ? {} : { logger: options.logger },
       save: async (account) => {
         await options.store.saveCodearts(account as CodeArtsAccountRecord)
+        // A different account starts with a clean budget: the slots the gateway
+        // remembers belong to the old one.
+        this.window.reset()
+        this.noBenefit.clear()
         this.invalidateModels()
         this.invalidateQuota()
       },
@@ -348,10 +392,36 @@ export class CodeArtsProvider {
   /** Whether this model must be called with `maas_type: benefit`. */
   isBenefitModel(model: string): boolean {
     const key = model.trim().toLowerCase()
+    // A rejection is remembered: the header costs a chat slot even when the
+    // gateway answers `InferHub.4004.200`, so guessing again every turn would
+    // spend a third of the minute's budget on a call that cannot succeed.
+    if (this.noBenefit.has(key)) return false
     for (const id of this.benefitModels) {
       if (id.toLowerCase() === key) return true
     }
     return false
+  }
+
+  /** Load the persisted "no allowance pack" verdicts once. */
+  private async loadNoBenefit(): Promise<void> {
+    if (this.noBenefitLoaded) return
+    this.noBenefitLoaded = true
+    const stored = await this.options.store.codearts()
+    for (const id of stored?.noBenefit ?? []) this.noBenefit.add(id.trim().toLowerCase())
+  }
+
+  private async rememberNoBenefit(model: string): Promise<void> {
+    const key = model.trim().toLowerCase()
+    this.noBenefit.add(key)
+    try {
+      const stored = await this.options.store.codearts()
+      if (stored === undefined) return
+      const known = new Set((stored.noBenefit ?? []).map(id => id.toLowerCase()))
+      if (known.has(key)) return
+      await this.options.store.saveCodearts({ ...stored, noBenefit: [...known, key] })
+    } catch {
+      // Persisting is an optimisation; the in-memory verdict already helps.
+    }
   }
 
   // ------------------------------------------------------------------ quota
@@ -542,10 +612,15 @@ export class CodeArtsProvider {
     }
     const payload = JSON.stringify(body)
 
+    await this.loadNoBenefit()
     let authRefreshed = false
     let benefitDropped = false
     let queueAttempts = 0
     for (;;) {
+      // The plan allows three sessions a minute for the whole account, and a
+      // rejected call spends one just like a served one. Wait for a slot here
+      // instead of firing into `TM.00001041` and hoping a retry lands later.
+      const slot = await this.window.open(options.signal)
       let response: Response
       try {
         response = await this.send(chatId, payload, model, benefitDropped, options.signal)
@@ -558,13 +633,16 @@ export class CodeArtsProvider {
           }
           if (error.kind === 'benefit' && !benefitDropped) {
             benefitDropped = true
+            await this.rememberNoBenefit(model)
             continue
           }
-          if (error.kind === 'queue' && queueAttempts < 3) {
+          if (error.kind === 'queue' && queueAttempts < QUEUE_ATTEMPTS) {
             queueAttempts++
-            await sleep(10_000)
+            slot.release()
+            await sleep(Math.max(this.window.waitMs(), QUEUE_BACKOFF_MS), options.signal)
             continue
           }
+          if (error.kind === 'queue') throw queueExhausted()
         }
         throw error
       }
@@ -591,16 +669,19 @@ export class CodeArtsProvider {
       } catch (error) {
         // A queue rejection can arrive as the first SSE frame. Retrying is only
         // safe while nothing has been emitted, or the answer would repeat.
-        if (!produced && error instanceof CodeArtsRetry && error.kind === 'queue' && queueAttempts < 3) {
+        if (!produced && error instanceof CodeArtsRetry && error.kind === 'queue' && queueAttempts < QUEUE_ATTEMPTS) {
           queueAttempts++
-          await sleep(10_000)
+          slot.release()
+          await sleep(Math.max(this.window.waitMs(), QUEUE_BACKOFF_MS), options.signal)
           continue
         }
+        if (error instanceof CodeArtsRetry && error.kind === 'queue') throw queueExhausted()
         // The same applies to an account without a benefit pack: the gateway
         // answers HTTP 200 and puts `InferHub.4004.200` in the first frame, so
         // the drop-the-header retry has to happen here, not only in `send`.
         if (!produced && error instanceof CodeArtsRetry && error.kind === 'benefit' && !benefitDropped) {
           benefitDropped = true
+          await this.rememberNoBenefit(model)
           continue
         }
         if (error instanceof CodeArtsRetry && error.kind === 'auth') {
@@ -676,6 +757,7 @@ export class CodeArtsProvider {
 
   async logoutAccount(): Promise<void> {
     await this.options.auth.logout()
+    this.window.reset()
     this.invalidateModels()
     this.invalidateQuota()
   }

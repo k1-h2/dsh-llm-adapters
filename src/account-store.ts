@@ -82,6 +82,14 @@ export interface CodeArtsAccountRecord {
     d: string
   }
   userName?: string
+  /**
+   * Models the account answered `InferHub.4004.200` for.
+   *
+   * The verdict is worth persisting: asking with `maas_type: benefit` spends
+   * one of the three chat slots the plan allows per minute, even though the
+   * call cannot succeed.
+   */
+  noBenefit?: string[]
   loginAt: number
 }
 
@@ -145,6 +153,9 @@ function codeartsRecord(value: unknown): CodeArtsAccountRecord | undefined {
   const key = jwk !== undefined && text(jwk.x) !== undefined && text(jwk.y) !== undefined && text(jwk.d) !== undefined
     ? { kty: 'EC' as const, crv: 'P-256' as const, x: text(jwk.x)!, y: text(jwk.y)!, d: text(jwk.d)! }
     : undefined
+  const noBenefit = Array.isArray(raw.noBenefit)
+    ? raw.noBenefit.filter((id): id is string => typeof id === 'string' && id.trim().length > 0).map(id => id.trim())
+    : []
   return {
     accessKeyId,
     secretAccessKey,
@@ -155,6 +166,7 @@ function codeartsRecord(value: unknown): CodeArtsAccountRecord | undefined {
     ...text(raw.codeVerifier) === undefined ? {} : { codeVerifier: text(raw.codeVerifier)! },
     ...key === undefined ? {} : { dpopPrivateJwk: key },
     ...text(raw.userName) === undefined ? {} : { userName: text(raw.userName)! },
+    ...noBenefit.length === 0 ? {} : { noBenefit },
   }
 }
 
