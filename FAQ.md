@@ -181,8 +181,26 @@ SOLO 接口并不校验 `reasoning_effort`（`banana` / `999` / `MAX` 都返回 
 上游两个目录端点（`opengw gateway/config` 与 `/v1/model/builtin`）都**不下发**上下文窗口，字段
 里连 `context` / `window` 这类键都没有。插件用的是 IDE 自己下发的 provider 配置里的
 `limit.context`（GLM-5.2 / GLM-5.3 / DeepSeek-V4.1-Flash 都是 1 048 576，openpangu 是 524 288，
-`glm-5.2-sft-harmony` 是 202 752），表里没有的模型回退到当前目录最小的真实窗口。这个值上游改过
-（GLM-5.2 在 10-21 从 202 752 变成 1M），所以设置页的窗口下拉可以按模型覆盖。
+`glm-5.2-sft-harmony` 是 202 752；两个图片模型 IDE 不下发，按模型卡各取 262 144），表里没有的模型
+回退到当前目录最小的真实窗口。这个值上游改过（GLM-5.2 在 10-21 从 202 752 变成 1M），所以设置页的
+窗口下拉可以按模型覆盖。
+
+**CodeArts 的模型能读图吗？**
+
+只有 `kimi-k2.6-vl` 和 `Qwen3-VL-235B` 能。目录里 `supports_images: true` 的就这两个（类别「图片
+理解」），实测丢一张图进去能正常回答，也照常发工具调用。其余模型——包括 `deepseek-v4.1-flash`、
+GLM-5.x、openpangu——带图会回 `InferHub.001001020.406 The request model is not multimodal`，插件
+因此不给它们标读图能力，聊天框里也不会把图片附上去。这两个模型在上游是 `display_enabled: false`
+（IDE 自己的菜单里看不到），但 `enable: true`、能正常计费调用，所以插件仍然列出它们，方便需要读图
+时切过去。
+
+**CodeArts 能选更细的思考强度吗？**
+
+不能，只有开 / 关。网关确实接受 `reasoning_effort`，还会**按模型**校验取值
+（`deepseek-v4.1-flash` 收 `none|low|medium|high|xhigh|max`，`glm-5.3` 直接拒绝 `none`），但实测它
+不改变思考长度：同一道证明题，`deepseek-v4.1-flash` 的 `reasoning_tokens` 是 `none` 388 /
+`low` 480 / `max` 515 / 不传 595，`glm-5.3` 是 `max` 709 / 不传 670——噪声比档位差还大。真正生效的是
+顶层 `thinking: { type: 'disabled' }`，实测能把 `reasoning_tokens` 压到 0，所以插件只暴露这两档。
 
 **CodeArts 报 `InferHub.002002009.404 model is not registered`？**
 
