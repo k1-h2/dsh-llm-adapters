@@ -123,6 +123,9 @@ export {
 export type { CodeArtsCredential, DpopKeyPair, DpopPrivateJwk, PkcePair } from './codearts-oauth.ts'
 export { CodeArtsLogin } from './codearts-login.ts'
 export type { CodeArtsLoginAccount, CodeArtsLoginOptions } from './codearts-login.ts'
+export {
+  CODEARTS_SESSION_LIMIT, CODEARTS_SESSION_WINDOW_MS, CodeArtsSessionWindow, sharedSessionWindow,
+} from './codearts-window.ts'
 export { ProviderHttpError, buildMessages, buildTools, consumeOpenAiStream, openAiStream, sseEvents } from './wire.ts'
 export type { WireMessage } from './wire.ts'
 export { API_PREFIX, buildRows } from './api.ts'

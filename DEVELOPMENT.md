@@ -26,6 +26,7 @@ src/
   codearts-sign.ts   华为 SDK-HMAC-SHA256 请求签名
   codearts-endpoints.ts 网关基址、窗口静态表、benefit 与 VL 清单
   codearts.ts        CodeArts 双目录合并 / 签名流式调用 / 额度 / 签到
+  codearts-window.ts CodeArts 会话预算：每 60 秒 3 次的排队窗口
   catalog.ts         目录解析、模型缓存、能力来源合并
   model-name.ts      公共名称规则：括号标签、倍率、连字符归一化、匹配 key
   openrouter.ts      OpenRouter 模型表：原子同步、磁盘缓存、通配匹配档位与模态
@@ -223,6 +224,19 @@ IDE 自身 provider 配置的 `limit.context`（`codearts-endpoints.ts` 的静�
 
 `wire.ts` 的 SSE 消费被拆成 `consumeOpenAiStream`：CodeArts 要自己签名 fetch，但帧处理与
 `openAiStream` 完全相同；`onFrame` 钩子用来抓「HTTP 200 + SSE 内嵌 `error_code`」的排队/额度错误。
+
+### CodeArts 的会话预算（`codearts-window.ts`）
+
+体验版按账号限制会话：**每滚动 60 秒 3 次**，全模型共用，与并发无关，换 `session-id` 不加额度。
+实网连续 6 次串行请求的结果是 `OK OK OK` 后整批被 `TM.00001041` 拒绝，约 61 秒后一起恢复；被拒的
+请求**不**延长锁定（第 4 次在 72.9s 被拒、93.0s 与 113.2s 再被拒，133.4s 就恢复了，而不是
+113.2 + 60）。反过来说，`InferHub.4004.200`（缺 benefit 包）是**会**占额度的，所以那条路径靠
+`noBenefit` 记住结论，而不是每次重猜。
+
+`CodeArtsSessionWindow` 因此做两件事：发请求前排队拿名额（满了就等最老的滑出窗口，`MARGIN_MS`
+留 1.5 秒吸收「本地开始 → 网关计数」之间的网络时延），以及在被 `TM.00001041` 明确拒绝时把名额
+**退回**（`slot.release()`）——占着拒绝请求的名额，会把下一分钟拖成每 20 秒一次，而网关根本没记这
+一笔。窗口是进程内单例：热重载重置计数只会让下一次请求撞上网关还记得的额度。
 
 ### 公共的名称与能力规则
 
