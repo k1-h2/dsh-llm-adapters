@@ -49,7 +49,16 @@ import type { CheckinStatus, QuotaPack, QuotaSnapshot } from './types.ts'
 import { ProviderHttpError, buildMessages, buildTools, consumeOpenAiStream } from './wire.ts'
 import type { ReadImage } from './wire.ts'
 
-/** Levels the gateway really has: thinking is a single on/off switch. */
+/**
+ * Levels the gateway really has: thinking is a single on/off switch.
+ *
+ * `reasoning_effort` exists and is validated per model (deepseek accepts
+ * `none|low|medium|high|xhigh|max`, glm-5.3 rejects `none` outright), but it
+ * does not move the answer: on a proof prompt `deepseek-v4.1-flash` spent 388
+ * reasoning tokens on `none`, 480 on `low`, 515 on `max` and 595 with the field
+ * omitted, and `glm-5.3` spent 709 on `max` against 670 omitted. Only
+ * `thinking: { type: 'disabled' }` is honoured — it drops reasoning to 0.
+ */
 export const CODEARTS_EFFORTS: readonly string[] = ['off', 'on']
 export const CODEARTS_DEFAULT_EFFORT = 'on'
 
@@ -73,6 +82,8 @@ export interface CodeArtsModelRow {
   name: string
   /** Display multiplier (`0.7x`) as the upstream spells it. */
   rateLabel?: string
+  /** `supports_images` from the builtin roster; the gateway roster never sets it. */
+  images?: boolean
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -164,7 +175,7 @@ function slotActive(slot: Record<string, unknown>, nowMs: number): boolean {
   return offset < duration * 60
 }
 
-/** Read one roster into rows, dropping vision models and duplicates. */
+/** Read one roster into rows, dropping duplicates. */
 export function parseCodeArtsRoster(items: unknown, nowMs: number = Date.now()): CodeArtsModelRow[] {
   if (!Array.isArray(items)) return []
   const seen = new Set<string>()
@@ -175,11 +186,6 @@ export function parseCodeArtsRoster(items: unknown, nowMs: number = Date.now()):
     const rawId = text(entry.model_id)
     if (rawId === undefined) continue
     const id = normalizeCodeArtsModelId(rawId)
-    // The VL models read images but answer no tool calls and carry a small
-    // window, so they cannot drive an agent loop. The gateway spells them both
-    // ways (`Qwen3-VL-235B`, `kimi-k2.6-vl`), so the check is case-insensitive.
-    const upper = id.toUpperCase()
-    if (upper.includes('-VL-') || upper.endsWith('-VL')) continue
     const key = id.toLowerCase()
     if (seen.has(key)) continue
     seen.add(key)
@@ -190,6 +196,9 @@ export function parseCodeArtsRoster(items: unknown, nowMs: number = Date.now()):
       id,
       name: text(entry.model_name) ?? id,
       ...rateLabel === undefined ? {} : { rateLabel },
+      // Only the builtin roster publishes this; the gateway roster leaves it
+      // undefined, and the static table covers those ids.
+      ...entry.supports_images === true ? { images: true } : {},
     })
   }
   return out
@@ -372,7 +381,7 @@ export class CodeArtsProvider {
       const key = row.id.toLowerCase()
       if (seen.has(key)) continue
       seen.add(key)
-      const vision = textOnly.has(row.id) ? false : forceVision.has(row.id) || isVisionModel(row.id)
+      const vision = textOnly.has(row.id) ? false : forceVision.has(row.id) || row.images === true || isVisionModel(row.id)
       const factor = priceFactorOfLabel(row.rateLabel)
       rows.push({
         id: row.id,
@@ -605,8 +614,10 @@ export class CodeArtsProvider {
       include: ['reasoning.encrypted_content'],
       reasoning_summary: 'auto',
       // The gateway's own switch is `thinking`, not `reasoning_effort`: the
-      // levels are a single on/off pair. `enabled` is the default, so it is only
-      // sent when the user turns thinking off.
+      // levels are a single on/off pair, and `enabled` is the default, so the
+      // field is only sent when the user turns thinking off. Sending
+      // `reasoning_effort` instead is not an option — it is validated per model
+      // (glm-5.3 rejects `none`) and does not change how long the model thinks.
       ...thinkingOff ? { thinking: { type: 'disabled' } } : {},
       // Streams oversized tool arguments in fragments; without it a big file
       // write arrives as one event the gateway cuts off.

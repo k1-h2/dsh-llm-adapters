@@ -209,11 +209,21 @@ CodeArts 是唯一不用 Bearer 令牌的供应商：华为 API 网关校验 `SD
 `snap-access/v1/model/builtin` 给常规模型（`builtinModels`）。两处都**不下发上下文窗口**，窗口取自
 IDE 自身 provider 配置的 `limit.context`（`codearts-endpoints.ts` 的静态表，来源与日期写在注释
 里）；表里没有的模型落到 `CODEARTS_FALLBACK_CONTEXT_WINDOW`（当前目录最小的真实窗口）——偏小只会
-提前压缩，偏大可能让上游拒绝一轮对话。VL 模型（`kimi-k2.6-vl` / `Qwen3-VL-235B`）能读图但不支持
-工具调用、窗口也小，不作为可选模型；网关两种大小写都写过，过滤按大写比较。
+提前压缩，偏大可能让上游拒绝一轮对话。
+
+读图只有两个模型：`kimi-k2.6-vl` 与 `Qwen3-VL-235B`（`builtinModels` 里 `supports_images: true`，
+类别「图片理解」）。其余模型（含 `deepseek-v4.1-flash`）带图一律回
+`InferHub.001001020.406 The request model is not multimodal`。这两个模型上游 `display_enabled:
+false`（IDE 菜单里看不到）但 `enable: true`，实测**能读图也能发工具调用**（同一请求回 8 个
+tool-call 分片），所以照样列进目录并按 `supports_images` 标成 `vision`；窗口表里没有它们的
+`limit.context`，按模型卡各取 256K。网关名册没有这个字段，那部分仍靠 `CODEARTS_VISION_MODELS` 兜底。
 
 思考只有两档：`off` / `on`。网关切的是**顶层** `thinking: { type: 'disabled' }`，不是
-`reasoning_effort`；`on` 与不传等价，所以只有关闭时才发该字段。`max_tokens` 钳到 65536（更大的值
+`reasoning_effort`；`on` 与不传等价，所以只有关闭时才发该字段。`reasoning_effort` 不是「更细的
+档位」：网关会**按模型**校验它（`deepseek-v4.1-flash` 收 `none|low|medium|high|xhigh|max`，
+`glm-5.3` 直接拒绝 `none`），但实测不影响思考长度——同一道证明题上 `deepseek-v4.1-flash` 的
+`reasoning_tokens` 是 `none` 388 / `low` 480 / `max` 515 / 不传 595，`glm-5.3` 是 `max` 709 /
+不传 670，噪声大于档位差；只有 `thinking: disabled` 能把它压到 0。`max_tokens` 钳到 65536（更大的值
 是硬 4xx）。聊天带 `tool_stream: true`（超大工具参数分片下发，否则大文件写入会被网关截断）与
 `prompt_cache_key`（否则 `cached_tokens` 恒为 0）。
 

@@ -86,6 +86,11 @@ export const CODEARTS_CONTEXT_WINDOWS: Readonly<Record<string, number>> = {
   'openpangu-2.0-flash': 524_288,
   'openpangu-2.0-pro': 524_288,
   'deepseek-v4.1-flash': 1_048_576,
+  // The two image models are hidden from the IDE's own menu, so there is no
+  // `limit.context` to read: these come from the model cards (Kimi K2.6 and
+  // Qwen3-VL-235B are both 256K).
+  'kimi-k2.6-vl': 262_144,
+  'qwen3-vl-235b': 262_144,
 }
 
 /** The window a model gets, with the documented fallback. */
@@ -97,7 +102,9 @@ export function codeartsContextWindow(modelId: string): number {
  * Models that can take an image, measured from `supports_images`.
  *
  * Every other model answers `InferHub.001001020.406 The request model is not
- * multimodal`, so the route declares image input only for these.
+ * multimodal`, so the route declares image input only for these. Both are
+ * `display_enabled: false` upstream but `enable: true`, and both answer tool
+ * calls, so they are listed even though the IDE hides them.
  */
 export const CODEARTS_VISION_MODELS: readonly string[] = ['kimi-k2.6-vl', 'Qwen3-VL-235B']
 

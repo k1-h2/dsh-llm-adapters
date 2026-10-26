@@ -130,16 +130,18 @@ describe('CodeArts OAuth', () => {
 })
 
 describe('CodeArts catalogue', () => {
-  it('strips the dated suffix and drops the vision models', () => {
+  it('strips the dated suffix, keeps the image models and drops duplicates', () => {
     expect(normalizeCodeArtsModelId('deepseek-v4-flash-0731')).toBe('deepseek-v4-flash')
     expect(normalizeCodeArtsModelId('glm-5.3-flash')).toBe('glm-5.3-flash')
     const rows = parseCodeArtsRoster([
       { model_id: 'glm-5.3', model_name: 'GLM-5.3' },
       { model_id: 'GLM-5.3', model_name: 'GLM-5.3 duplicate' },
-      { model_id: 'kimi-k2.6-vl', model_name: 'Kimi K2.6 VL' },
+      { model_id: 'kimi-k2.6-vl', model_name: 'Kimi K2.6 VL', supports_images: true },
       { model_id: 'deepseek-v4-flash-0731', model_name: 'DeepSeek-V4-Flash' },
     ])
-    expect(rows.map(row => row.id)).toEqual(['glm-5.3', 'deepseek-v4-flash'])
+    expect(rows.map(row => row.id)).toEqual(['glm-5.3', 'kimi-k2.6-vl', 'deepseek-v4-flash'])
+    expect(rows[0]?.images).toBeUndefined()
+    expect(rows[1]?.images).toBe(true)
   })
 
   it('shows the credit slot that is active now', () => {
@@ -416,12 +418,14 @@ describe('CodeArts provider', () => {
     }, fetchMock as unknown as typeof fetch)
 
     const models = await provider.models(true)
-    expect(models.map(model => model.id)).toEqual(['glm-5.3-flash', 'GLM-5.2', 'openpangu-2.0-pro'])
+    expect(models.map(model => model.id)).toEqual(['glm-5.3-flash', 'GLM-5.2', 'kimi-k2.6-vl', 'openpangu-2.0-pro'])
     expect(models[0]).toMatchObject({ reasoningEfforts: ['off', 'on'], defaultReasoningEffort: 'on' })
     expect(models[1]).toMatchObject({ contextWindow: 1_048_576, priceFactor: 0.7 })
-    expect(models[2]!.contextWindow).toBe(524_288)
-    // Only the VL models read images, and those are hidden from the picker.
-    expect(models.every(model => model.vision === false)).toBe(true)
+    // The image models are hidden from the IDE's own menu but still served.
+    expect(models[2]).toMatchObject({ contextWindow: 262_144, vision: true })
+    expect(models[3]!.contextWindow).toBe(524_288)
+    // Everything else answers `InferHub.001001020.406` when handed an image.
+    expect(models.filter(model => model.vision === true).map(model => model.id)).toEqual(['kimi-k2.6-vl'])
   })
 
   it('retries without maas_type when the first frame reports no benefit pack', async () => {
