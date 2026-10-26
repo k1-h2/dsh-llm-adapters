@@ -9,8 +9,12 @@
  * @module dsh-llm-adapters/auth
  */
 
-import type { AccountStore, LoomyAccountRecord, RaccoonAccountRecord, TraeAccountRecord } from './account-store.ts'
+import type {
+  AccountStore, CodeArtsAccountRecord, LoomyAccountRecord, RaccoonAccountRecord, TraeAccountRecord,
+} from './account-store.ts'
 import type { TraeRegion } from './brand.ts'
+import { RefreshTokenExpiredError, exchangeRefreshToken, keyPairFromStoredJwk } from './codearts-oauth.ts'
+import type { CodeArtsCredential } from './codearts-oauth.ts'
 
 export interface LocalAccount {
   name?: string
@@ -264,3 +268,117 @@ export class TraeAuth {
   }
 }
 
+
+/** Margin before the STS token's own expiry, so a call never starts on a dead one. */
+const CODEARTS_EXPIRY_MARGIN_MS = 5 * 60_000
+
+/**
+ * CodeArts credentials.
+ *
+ * There is no bearer token: the gateway verifies a signature over each request,
+ * so what this class hands out is the AK/SK/security-token triple. The STS token
+ * lives two hours and is renewed with the refresh token; both the PKCE verifier
+ * and the DPoP private key from the original login have to be reused, or Huawei
+ * rejects the renewal.
+ */
+export class CodeArtsAuth {
+  private inflight: Promise<CodeArtsCredential> | undefined
+  private lastError: string | undefined
+
+  constructor(private readonly store: AccountStore) {}
+
+  async status(): Promise<AuthStatus> {
+    const stored = await this.store.codearts()
+    if (stored === undefined) {
+      return { signedIn: false, error: 'CodeArts 尚未登录。请在设置页点「打开浏览器登录」。' }
+    }
+    const expired = stored.expiresAt !== undefined && stored.expiresAt <= Date.now()
+    const refreshable = stored.refreshToken !== undefined && stored.codeVerifier !== undefined && stored.dpopPrivateJwk !== undefined
+    const account: LocalAccount = stored.userName === undefined ? {} : { name: stored.userName }
+    return {
+      signedIn: !expired || refreshable,
+      loginAt: stored.loginAt,
+      ...stored.expiresAt === undefined ? {} : { expiresAt: stored.expiresAt },
+      ...expired && !refreshable ? { possiblyExpired: true } : {},
+      ...Object.keys(account).length === 0 ? {} : { account },
+      ...expired && !refreshable
+        ? { error: 'CodeArts 登录已过期（STS 令牌两小时），请在设置页重新登录。' }
+        : {},
+      ...this.lastError === undefined ? {} : { error: this.lastError },
+    }
+  }
+
+  /** A usable triple, renewed first when it is close to expiring. */
+  async credential(): Promise<CodeArtsCredential> {
+    const stored = await this.store.codearts()
+    if (stored === undefined) throw new Error('CodeArts 尚未登录。请在设置页点「打开浏览器登录」。')
+    const stale = stored.expiresAt !== undefined && stored.expiresAt <= Date.now() + CODEARTS_EXPIRY_MARGIN_MS
+    if (!stale) return credentialOf(stored)
+    if (stored.refreshToken === undefined || stored.codeVerifier === undefined || stored.dpopPrivateJwk === undefined) {
+      throw new Error('CodeArts 登录已过期（STS 令牌两小时），请在设置页重新登录。')
+    }
+    return this.refresh(false)
+  }
+
+  /**
+   * Renew the triple.
+   *
+   * `force` is used when the gateway rejected a signature the local clock still
+   * considered valid (revoked or rotated token). A single in-flight renewal is
+   * shared, so parallel requests do not each spend a refresh.
+   */
+  async refresh(force: boolean): Promise<CodeArtsCredential> {
+    if (this.inflight !== undefined) return this.inflight
+    this.inflight = (async () => {
+      const stored = await this.store.codearts()
+      if (stored === undefined) throw new Error('CodeArts 尚未登录。请在设置页点「打开浏览器登录」。')
+      if (stored.refreshToken === undefined || stored.codeVerifier === undefined || stored.dpopPrivateJwk === undefined) {
+        throw new Error('CodeArts 登录已过期（STS 令牌两小时），请在设置页重新登录。')
+      }
+      try {
+        const next = await exchangeRefreshToken(
+          stored.refreshToken,
+          stored.codeVerifier,
+          keyPairFromStoredJwk(stored.dpopPrivateJwk),
+        )
+        await this.store.saveCodearts({
+          ...stored,
+          accessKeyId: next.accessKeyId,
+          secretAccessKey: next.secretAccessKey,
+          securityToken: next.securityToken,
+          ...next.expiresAt === undefined ? {} : { expiresAt: next.expiresAt },
+          ...next.refreshToken === undefined ? {} : { refreshToken: next.refreshToken },
+        })
+        this.lastError = undefined
+        return next
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        this.lastError = error instanceof RefreshTokenExpiredError
+          ? 'CodeArts 登录已失效（续期令牌过期），请在设置页重新登录。'
+          : `CodeArts 续期失败：${message}`
+        throw new Error(this.lastError)
+      } finally {
+        this.inflight = undefined
+      }
+    })()
+    void force
+    return this.inflight
+  }
+
+  async logout(): Promise<void> {
+    await this.store.clear('codearts')
+    this.lastError = undefined
+  }
+}
+
+function credentialOf(record: CodeArtsAccountRecord): CodeArtsCredential {
+  return {
+    accessKeyId: record.accessKeyId,
+    secretAccessKey: record.secretAccessKey,
+    securityToken: record.securityToken,
+    ...record.expiresAt === undefined ? {} : { expiresAt: record.expiresAt },
+    ...record.refreshToken === undefined ? {} : { refreshToken: record.refreshToken },
+    ...record.codeVerifier === undefined ? {} : { codeVerifier: record.codeVerifier },
+    ...record.dpopPrivateJwk === undefined ? {} : { dpopPrivateJwk: record.dpopPrivateJwk },
+  }
+}

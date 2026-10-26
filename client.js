@@ -132,6 +132,7 @@ window.__ModuleLoader__.load({
       checkinDevice: '本机今日已签到',
       checkinReward: '可得',
       checkinFailed: '签到失败',
+      checkinUnavailable: '当前账号没有可用的签到活动',
       plan: '套餐',
       planFree: '免费版',
       planTrial: '试用中',
@@ -150,6 +151,18 @@ window.__ModuleLoader__.load({
       browserWaitingTrae: '等待登录…',
       loginGuideTrae: '点“打开浏览器登录”，在弹出的窗口里登录 Trae 即可；登录成功后会自动接回。',
       modelsEmptyTrae: '账号没有返回任何 Trae 模型。请确认账号已登录，然后点“重新读取登录态”。',
+      codeartsNav: '华为云 CodeArts',
+      codeartsTitle: '华为云 CodeArts',
+      codeartsIntro: '点“打开浏览器登录”在华为云完成授权，插件用授权得到的 AK/SK 签名调用 CodeArts 网关，不读本机 IDE 的任何文件。改动即时生效，无需重启。',
+      codeartsHint: 'CodeArts 用签名而不是令牌调用，STS 令牌两小时有效，到期会自动用续期令牌续上；续期令牌失效后重新登录一次即可。积分计费账户每天可以签到领积分。',
+      browserHintCodeArts: '点下面的按钮会在浏览器里打开华为云授权页：登录并同意授权后会自动回到本机，凭据由宿主接回，页面上不需要复制任何东西。',
+      browserPollingCodeArts: '已打开华为云授权页：完成授权后会自动接回，这个标签页可以关闭。',
+      browserTitleCodeArts: '华为云授权登录',
+      browserOpenCodeArts: '打开浏览器登录',
+      browserWaitingCodeArts: '等待授权…',
+      loginGuideCodeArts: '点“打开浏览器登录”，在弹出的华为云页面里完成授权即可；成功后会自动接回。',
+      codeartsLoginMissing: 'CodeArts 尚未登录。请点“打开浏览器登录”，在华为云页面完成授权。',
+      modelsEmptyCodeArts: '账号没有返回任何 CodeArts 模型。请确认已登录，然后点“重新读取登录态”。',
       openRouterTitle: 'OpenRouter 模型同步',
       openRouterHint: 'OpenRouter 的实时模型表用来补充思考档位与读图能力，三个供应商共用一份。缓存保存在本机，连不上时会继续使用上次成功同步的数据；刷新模型不会清空缓存。',
       openRouterInterval: '自动同步',
@@ -270,6 +283,7 @@ window.__ModuleLoader__.load({
       checkinDevice: 'This device checked in today',
       checkinReward: 'reward',
       checkinFailed: 'Check-in failed',
+      checkinUnavailable: 'No check-in available for this account',
       plan: 'Plan',
       planFree: 'Free',
       planTrial: 'Trial',
@@ -288,6 +302,18 @@ window.__ModuleLoader__.load({
       browserWaitingTrae: 'Waiting for sign-in…',
       loginGuideTrae: 'Use “Open browser sign-in” and sign in to Trae in the window that opens; the login is adopted automatically.',
       modelsEmptyTrae: 'Trae returned no models. Confirm the account is signed in, then re-read the login state.',
+      codeartsNav: 'Huawei CodeArts',
+      codeartsTitle: 'Huawei CodeArts',
+      codeartsIntro: 'Use “Open browser sign-in” to authorize on Huawei Cloud; the plugin signs CodeArts gateway calls with the resulting AK/SK and never reads the local IDE. Changes apply immediately.',
+      codeartsHint: 'CodeArts is called with a signature, not a token. The STS token lasts two hours and is renewed automatically; sign in again once the refresh token expires. Credit-billed accounts can check in once a day for credits.',
+      browserHintCodeArts: 'The button opens Huawei Cloud’s authorization page: sign in and approve, then the browser returns to this machine and the host adopts the credential. Nothing has to be copied.',
+      browserPollingCodeArts: 'The Huawei Cloud page is open: finish authorizing and the login is adopted automatically; this tab can be closed.',
+      browserTitleCodeArts: 'Huawei Cloud authorization',
+      browserOpenCodeArts: 'Open browser sign-in',
+      browserWaitingCodeArts: 'Waiting for authorization…',
+      loginGuideCodeArts: 'Use “Open browser sign-in” and authorize on the Huawei Cloud page that opens; the login is adopted automatically.',
+      codeartsLoginMissing: 'CodeArts is not signed in. Use “Open browser sign-in” and authorize on Huawei Cloud.',
+      modelsEmptyCodeArts: 'CodeArts returned no models. Confirm the account is signed in, then re-read the login state.',
       openRouterTitle: 'OpenRouter model sync',
       openRouterHint: 'OpenRouter’s live catalog supplies thinking levels and image support for all three providers. The snapshot is cached on this machine, so a failed sync keeps the last successful data; refreshing a model list never clears it.',
       openRouterInterval: 'Auto sync',
@@ -309,6 +335,7 @@ window.__ModuleLoader__.load({
       { id: 'loomy', settingsId: 'loomy', order: 40, titleKey: 'loomyTitle', navKey: 'loomyNav', introKey: 'loomyIntro' },
       { id: 'raccoon', settingsId: 'raccoon', order: 41, titleKey: 'raccoonTitle', navKey: 'raccoonNav', introKey: 'raccoonIntro' },
       { id: 'trae', settingsId: 'trae', order: 42, titleKey: 'traeTitle', navKey: 'traeNav', introKey: 'traeIntro' },
+      { id: 'codearts', settingsId: 'codearts', order: 43, titleKey: 'codeartsTitle', navKey: 'codeartsNav', introKey: 'codeartsIntro' },
     ]
 
     const FIELDS = {
@@ -339,6 +366,15 @@ window.__ModuleLoader__.load({
         vision: 'traeVisionModelIds',
         textOnly: 'traeTextOnlyModelIds',
         region: 'traeRegion',
+      },
+      codearts: {
+        enabled: 'codeartsEnabled',
+        displayName: 'codeartsDisplayName',
+        disabled: 'codeartsDisabledModels',
+        windows: 'codeartsModelContextWindows',
+        aliases: 'codeartsModelAliases',
+        vision: 'codeartsVisionModelIds',
+        textOnly: 'codeartsTextOnlyModelIds',
       },
     }
 
@@ -687,7 +723,7 @@ window.__ModuleLoader__.load({
             ),
           )
         }
-        if (brand.id === 'trae') {
+        if (brand.id === 'trae' || brand.id === 'codearts') {
           const packs = Array.isArray(quota.packs) ? quota.packs : []
           const plan = typeof quota.plan === 'string' && quota.plan !== '' ? quota.plan : undefined
           const usedText = quota.used === undefined
@@ -697,6 +733,12 @@ window.__ModuleLoader__.load({
             plan === undefined && quota.total === undefined && usedText === undefined && packs.length === 0
               ? h('div', { style: css.note }, t('quotaUnavailable'))
               : null,
+            brand.id !== 'codearts' || quota.total === undefined
+              ? null
+              : h('div', { style: css.line },
+                  h('span', { style: css.label }, t('quota')),
+                  h('span', { style: css.value }, `${creditsOf(quota.total)} ${t('points')}`),
+                ),
             plan === undefined ? null : h('div', { style: css.line },
               h('span', { style: css.label }, t('plan')),
               h('span', { style: css.value }, plan),
@@ -759,7 +801,7 @@ window.__ModuleLoader__.load({
       // Trae CN grants one reward per account per day, but its device flag can
       // also block the claim; the two reasons are shown apart so "本机已签"
       // never reads as "this account already claimed".
-      const checkin = brand.id === 'trae' ? status?.checkin : undefined
+      const checkin = brand.id === 'trae' || brand.id === 'codearts' ? status?.checkin : undefined
       const checkinBlocked = checkin === undefined
         || checkin.available === false
         || checkin.claimed === true
@@ -767,33 +809,47 @@ window.__ModuleLoader__.load({
       const checkinLabel = checkin?.claimed === true
         ? t('checkinClaimed')
         : checkin?.deviceClaimed === true ? t('checkinDevice') : t('checkinClaim')
-      const checkinPanel = signedIn && checkin !== undefined && checkin.available !== false
+      // A failed activity read is shown rather than hidden: hiding it is what
+      // makes "no check-in" and "check-in broken" look the same. Trae keeps the
+      // old behaviour, because its international edition has no activity at all.
+      const checkinPanel = signedIn && checkin !== undefined
+        && (checkin.available !== false || brand.id === 'codearts')
         ? h('div', { style: css.bar },
             h('button', {
               style: { ...css.btn, ...css.btnPrimary },
               disabled: checkinBlocked || checkinBusy || actionBusy,
               onClick: () => void claimCheckin(),
             }, checkinBusy ? t('checkinBusy') : checkinLabel),
-            checkin.reward === undefined || checkin.claimed === true || checkin.deviceClaimed === true
-              ? null
-              : h('span', { style: css.note }, `${t('checkinReward')} +${creditsOf(checkin.reward)} ${t('points')}`),
+            checkin.available === false
+              ? h('span', { style: css.note }, checkin.message ?? t('checkinUnavailable'))
+              : checkin.reward === undefined || checkin.claimed === true || checkin.deviceClaimed === true
+                ? null
+                : h('span', { style: css.note }, `${t('checkinReward')} +${creditsOf(checkin.reward)} ${t('points')}`),
           )
         : null
 
       const browserRunning = browser?.running === true
       const browserPanel = h('div', { style: css.loginBox },
-        h('h4', { style: css.h4 }, brand.id === 'trae' ? t('browserTitleTrae') : t('browserTitle')),
+        h('h4', { style: css.h4 }, brand.id === 'trae'
+          ? t('browserTitleTrae')
+          : brand.id === 'codearts' ? t('browserTitleCodeArts') : t('browserTitle')),
         h('div', { style: css.note }, brand.id === 'loomy'
           ? t('browserHintLoomy')
-          : brand.id === 'raccoon' ? t('browserHintRaccoon') : t('browserHintTrae')),
+          : brand.id === 'raccoon'
+            ? t('browserHintRaccoon')
+            : brand.id === 'codearts' ? t('browserHintCodeArts') : t('browserHintTrae')),
         h('div', { style: css.bar },
           h('button', {
             style: { ...css.btn, ...css.btnPrimary },
             disabled: browserRunning || actionBusy || regionBusy,
             onClick: () => void startBrowserLogin(),
           }, browserRunning
-            ? brand.id === 'trae' ? t('browserWaitingTrae') : t('browserWaiting')
-            : brand.id === 'trae' ? t('browserOpenTrae') : t('browserOpen')),
+            ? brand.id === 'trae'
+              ? t('browserWaitingTrae')
+              : brand.id === 'codearts' ? t('browserWaitingCodeArts') : t('browserWaiting')
+            : brand.id === 'trae'
+              ? t('browserOpenTrae')
+              : brand.id === 'codearts' ? t('browserOpenCodeArts') : t('browserOpen')),
           browserRunning
             ? h('button', {
                 style: css.btn,
@@ -812,7 +868,9 @@ window.__ModuleLoader__.load({
         browserRunning
           ? h('div', { style: css.note }, typeof browser?.message === 'string' && browser.message !== ''
               ? browser.message
-              : brand.id === 'trae' ? t('browserPollingTrae') : t('browserPolling'))
+              : brand.id === 'trae'
+                ? t('browserPollingTrae')
+                : brand.id === 'codearts' ? t('browserPollingCodeArts') : t('browserPolling'))
           : null,
         browser !== undefined && browser.running === false && browser.error !== undefined
           ? h('div', { style: css.err }, browser.error)
@@ -857,7 +915,9 @@ window.__ModuleLoader__.load({
         ),
         h('div', { style: css.note }, brand.id === 'loomy'
           ? t('loomyHint')
-          : brand.id === 'raccoon' ? t('raccoonHint') : t('traeHint')),
+          : brand.id === 'raccoon'
+            ? t('raccoonHint')
+            : brand.id === 'codearts' ? t('codeartsHint') : t('traeHint')),
         signedIn
           ? h('div', { style: css.line },
               h('span', { style: css.label }, t('account')),
@@ -882,7 +942,9 @@ window.__ModuleLoader__.load({
         !signedIn && status !== undefined
           ? h('div', { style: css.guide },
               h('div', { style: css.guideText }, status?.error ?? signInGuide(t, brand)),
-              h('div', { style: css.note }, brand.id === 'trae' ? t('loginGuideTrae') : t('loginGuide')),
+              h('div', { style: css.note }, brand.id === 'trae'
+                ? t('loginGuideTrae')
+                : brand.id === 'codearts' ? t('loginGuideCodeArts') : t('loginGuide')),
             )
           : null,
         signedIn
@@ -1297,7 +1359,9 @@ window.__ModuleLoader__.load({
           ? h('div', { style: css.guide },
               h('div', { style: css.guideText }, brand.id === 'loomy'
                 ? t('modelsEmptyLoomy')
-                : brand.id === 'raccoon' ? t('modelsEmptyRaccoon') : t('modelsEmptyTrae')),
+                : brand.id === 'raccoon'
+                  ? t('modelsEmptyRaccoon')
+                  : brand.id === 'codearts' ? t('modelsEmptyCodeArts') : t('modelsEmptyTrae')),
             )
           : h('div', { style: css.list }, rows.length > 0
               ? rows
@@ -1314,7 +1378,8 @@ window.__ModuleLoader__.load({
 
     function signInGuide(t, brand) {
       if (brand.id === 'loomy') return t('loomyLoginMissing')
-      return brand.id === 'raccoon' ? t('raccoonLoginMissing') : t('traeLoginMissing')
+      if (brand.id === 'raccoon') return t('raccoonLoginMissing')
+      return brand.id === 'codearts' ? t('codeartsLoginMissing') : t('traeLoginMissing')
     }
 
     function BundleSettings({ ctx, t, view }) {

@@ -6,7 +6,7 @@
 
 ```
 src/
-  index.ts           注册 loomy / raccoon / trae 路由、设置接口与配置目录
+  index.ts           注册 loomy / raccoon / trae / codearts 路由、设置接口与配置目录
   adapter.ts         把 DSH 请求接到 provider client，模型解析与上下文窗口
   api.ts             /models、/status、/account/browser、/account
   auth.ts            插件凭据状态、JWT 到期判定、退出登录
@@ -21,6 +21,11 @@ src/
   loomy.ts           Loomy 目录 / 积分 / 流式调用
   raccoon.ts         小浣熊目录 / 余额 / 流式调用
   trae.ts            Trae 目录合并 / SOLO 流式调用 / 额度 / 签到
+  codearts-login.ts  CodeArts 浏览器授权：本地回调、PKCE/DPoP、ticket 回退
+  codearts-oauth.ts  STS 令牌换取与续期（PKCE + DPoP，零依赖 JWS）
+  codearts-sign.ts   华为 SDK-HMAC-SHA256 请求签名
+  codearts-endpoints.ts 网关基址、窗口静态表、benefit 与 VL 清单
+  codearts.ts        CodeArts 双目录合并 / 签名流式调用 / 额度 / 签到
   catalog.ts         目录解析、模型缓存、能力来源合并
   model-name.ts      公共名称规则：括号标签、倍率、连字符归一化、匹配 key
   openrouter.ts      OpenRouter 模型表：原子同步、磁盘缓存、通配匹配档位与模态
@@ -181,6 +186,44 @@ metadata”）。远端目录在多个分组里用不同大小写/显示名重�
 `checkinDeviceId()` 从网页设备号派生稳定的 16 位数字，仅用于 status / claim；聊天、额度仍用
 原设备号。缺 `x-device-id` 返回 `9004`，重复领取返回 `9095`。
 
+### CodeArts（`codearts-login.ts` + `codearts.ts`）
+
+CodeArts 是唯一不用 Bearer 令牌的供应商：华为 API 网关校验 `SDK-HMAC-SHA256`，所以每次请求都要
+用 AK/SK + STS 安全令牌对**确切的请求体**签名。
+
+登录分两段。宿主在 `127.0.0.1` 起一个 ≥10000 端口的回调服务器（portal 拒绝更低的端口），把
+`portal/authorize` 地址交给设置页打开；华为回调带 `code` 时用 PKCE（S256）+ DPoP（ES256）换 STS
+凭据，带 `secret` 时退回旧的 ticket 轮询（只有 AK/SK，没有续期令牌）。两条都算成功——把旧路径
+判成失败会让用户永远停在「等待授权」。PKCE verifier 与 DPoP 私钥随凭据保存：续期必须复用同一对，
+换一对会被 STS 拒绝。续期令牌的 `exp` 固定为登录 +30 天且续期不延长，所以判据只看
+`invalid_grant` / `ExpiredRefreshToken`；`InvalidDPoPHeader` 属于单次请求失败（时钟偏差、重放窗口），
+把它当终态会把材料完好的账号一步标死。
+
+签名有三处细节，任一错都只回 `APIG.0301 verify ak sk signature fail`：路径必须以 `/` 结尾；`host`
+参与签名但不发送（由 fetch 生成）；`Agent-Type` / `X-Language` 必须在**签名之后**追加（进 canonical
+会验签失败）。`maas_type: benefit` 相反——它**必须**参与签名，缺失时免费额度模型回
+`InferHub.002002009.404`。
+
+目录来自两个端点：`opengw gateway/config` 给 benefit 模型（`result.models`），
+`snap-access/v1/model/builtin` 给常规模型（`builtinModels`）。两处都**不下发上下文窗口**，窗口取自
+IDE 自身 provider 配置的 `limit.context`（`codearts-endpoints.ts` 的静态表，来源与日期写在注释
+里）；表里没有的模型落到 `CODEARTS_FALLBACK_CONTEXT_WINDOW`（当前目录最小的真实窗口）——偏小只会
+提前压缩，偏大可能让上游拒绝一轮对话。VL 模型（`kimi-k2.6-vl` / `Qwen3-VL-235B`）能读图但不支持
+工具调用、窗口也小，不作为可选模型；网关两种大小写都写过，过滤按大写比较。
+
+思考只有两档：`off` / `on`。网关切的是**顶层** `thinking: { type: 'disabled' }`，不是
+`reasoning_effort`；`on` 与不传等价，所以只有关闭时才发该字段。`max_tokens` 钳到 65536（更大的值
+是硬 4xx）。聊天带 `tool_stream: true`（超大工具参数分片下发，否则大文件写入会被网关截断）与
+`prompt_cache_key`（否则 `cached_tokens` 恒为 0）。
+
+额度来自 `snap-manager/v1/statistics/plugin`：`usageTotalPackageCredit` 是汇总行，**不能**再和三个
+分类一起当资源包求和（会翻倍）；只有基础包能拿到真实到期（套餐 `end_date`），赠送包与按需包如实
+留空。签到是三步（账户类型 → 活动列表 → claim + confirm），只在积分计费账户上可用，
+`claimable=false` 且状态属已领取时才算「今天已领」。
+
+`wire.ts` 的 SSE 消费被拆成 `consumeOpenAiStream`：CodeArts 要自己签名 fetch，但帧处理与
+`openAiStream` 完全相同；`onFrame` 钩子用来抓「HTTP 200 + SSE 内嵌 `error_code`」的排队/额度错误。
+
 ### 公共的名称与能力规则
 
 这些规则在 `src/model-name.ts` 与 `src/openrouter.ts`，Loomy、Raccoon 以及以后新增的供应商
@@ -210,7 +253,7 @@ Loomy 的 `GET /models` 自带 `reasoning_efforts` 与 `default_reasoning_effort
 
 ### OpenRouter 快照（`openrouter.ts`）
 
-一份快照由三个供应商共享，由 `index.ts` 创建并注入。`models()` 只读内存（缓存为空时才触发
+一份快照由四个供应商共享，由 `index.ts` 创建并注入。`models()` 只读内存（缓存为空时才触发
 一次同步），刷新供应商目录不会清空它；`sync()` 是唯一会发网络请求的入口，由 30 秒 tick 按
 `openRouterSyncMinutes` 判断是否到期，设置页的「立即同步」也调用它。
 
@@ -248,6 +291,8 @@ Raccoon 的思考控制有两条通道，都要发：`extra_body.thinking.type =
   已登录处理，等网关 401 再提示重新扫码。两者都没有刷新流程。
 - Trae：一个区域一条记录（`trae.cn` / `trae.global`），带令牌、设备指纹与登录时间；JWT 的
   `exp` 只用于提前提示过期。退出登录只清当前区域。
+- CodeArts：AK/SK + STS 安全令牌，外加续期所需的 refresh token、PKCE verifier 与 DPoP 私钥。
+  到期前 5 分钟自动续期，续期结果写回同一条记录；续期令牌失效才需要重新授权。
 
 `RaccoonAuth.accessToken(true)` 只用于网关明确拒绝令牌的路径，它会直接报“登录已失效”，
 不再尝试刷新或回读任何文件。
@@ -258,8 +303,11 @@ Raccoon 的思考控制有两条通道，都要发：`extra_body.thinking.type =
 | --- | --- |
 | `GET /api/llm-adapters/models?brand=` | 实时目录 + 开关 / 窗口，`fresh=1` 清缓存 |
 | `GET /api/llm-adapters/status?brand=` | 登录状态、到期时间、额度 |
-| `GET /api/llm-adapters/account/browser?brand=` | 登录进度（本地登录页 URL 或 Trae 的浏览器状态） |
+| `GET /api/llm-adapters/account/browser?brand=` | 登录进度（本地登录页 URL、Trae 的浏览器状态或 CodeArts 的授权页地址） |
 | `POST /api/llm-adapters/account` | `browser` / `browser-cancel` / `checkin` / `logout` |
+
+`checkin` 由 Trae（国内版）与 CodeArts 实现，其余供应商会明确拒绝；`browser` 对 CodeArts 返回
+华为云授权页地址，页面在新标签页打开它，之后仍由宿主轮询 `/account/browser` 接回。
 
 写操作在 body 里带 `brand`，URL 不承载写目标。`browser` 还可以带 `region`（`cn` / `global`），
 只有 Trae 使用它。配置写入仍走宿主 `configForms` 的修订栅栏，不经过插件自己的写接口。设置页
@@ -288,9 +336,10 @@ npm run build
 ```
 
 `vitest` 覆盖目录解析、登录页状态机、Loomy 长轮询与扫码绑定、小浣熊扫码轮询、Trae 两份目录
-的合并与档位映射、额度 / 套餐 / 签到解析、SSE 与工具调用、凭据存储与并发、过期判定、设置
-API。登录相关的测试全部注入假 `fetch`，不访问真实上游，也不启动浏览器。需要真机验证时，手动
-点一次「打开扫码登录」或「打开浏览器登录」，确认接回、模型列表与一次对话。
+的合并与档位映射、CodeArts 的签名 / PKCE-DPoP / 双目录 / 倍率时段 / 额度 / 签到、SSE 与工具
+调用、凭据存储与并发、过期判定、设置 API。登录相关的测试全部注入假 `fetch`，不访问真实上游，
+也不启动浏览器。需要真机验证时，手动点一次「打开扫码登录」或「打开浏览器登录」，确认接回、
+模型列表与一次对话。
 
 ## 易变点
 
@@ -306,3 +355,7 @@ API。登录相关的测试全部注入假 `fetch`，不访问真实上游，也
 - Trae 依赖 `DevToolsActivePort` 与 CDP 的 `Network.getAllCookies`、以及页面里的
   `localStorage.__msuuid__`；浏览器或站点改版后先看 `trae-login.ts` 的 `DEVICE_EXPRESSION`
   与 `authPost` 路径。两个区域的基址集中在 `trae-endpoints.ts`，站点换域名只需改那一处。
+- CodeArts 依赖华为云的 `portal/authorize` 参数拼写（`code_challenge_method` 必须是 `SHA-256`
+  而不是 `S256`，否则 portal 退回 ticket 流程）、`sts…/v1/oauth2/tokens` 的 DPoP 校验，以及
+  两个目录端点的字段名（`model_id` / `builtinModels` / `result.models`）。窗口静态表与 benefit
+  清单都在 `codearts-endpoints.ts`；上游调整窗口或新增 benefit 模型时改那一处。

@@ -51,11 +51,13 @@ describe('client bundle', () => {
   it('declares one settings section per provider and matching config fields', () => {
     expect(exports.name).toBe('dsh-llm-adapters')
     expect(exports.inject).toEqual(['slots', 'locale', 'configForms'])
-    expect(exports.__test.BRANDS.map(brand => brand.id)).toEqual(['loomy', 'raccoon', 'trae'])
+    expect(exports.__test.BRANDS.map(brand => brand.id)).toEqual(['loomy', 'raccoon', 'trae', 'codearts'])
     expect(exports.__test.FIELDS.loomy.enabled).toBe('loomyEnabled')
     expect(exports.__test.FIELDS.raccoon.enabled).toBe('raccoonEnabled')
     expect(exports.__test.FIELDS.trae.enabled).toBe('traeEnabled')
     expect(exports.__test.FIELDS.trae.region).toBe('traeRegion')
+    expect(exports.__test.FIELDS.codearts.enabled).toBe('codeartsEnabled')
+    expect(exports.__test.FIELDS.codearts.windows).toBe('codeartsModelContextWindows')
   })
 
   it('keeps Trae as one card with a region switch and a check-in button', () => {

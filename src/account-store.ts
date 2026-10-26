@@ -58,10 +58,38 @@ export interface TraeAccountRecord {
   expiresAt?: number
 }
 
+/**
+ * One CodeArts sign-in.
+ *
+ * The gateway takes no bearer token: every request is signed with the AK/SK
+ * pair plus the STS security token. `refreshToken`, `codeVerifier` and the DPoP
+ * private key are kept because a refresh has to reuse the same PKCE verifier and
+ * the same key — a fresh pair is rejected.
+ */
+export interface CodeArtsAccountRecord {
+  accessKeyId: string
+  secretAccessKey: string
+  securityToken: string
+  /** Epoch ms; the STS token lasts two hours. */
+  expiresAt?: number
+  refreshToken?: string
+  codeVerifier?: string
+  dpopPrivateJwk?: {
+    kty: 'EC'
+    crv: 'P-256'
+    x: string
+    y: string
+    d: string
+  }
+  userName?: string
+  loginAt: number
+}
+
 export interface StoredAccounts {
   loomy?: LoomyAccountRecord
   raccoon?: RaccoonAccountRecord
   trae?: Partial<Record<TraeRegion, TraeAccountRecord>>
+  codearts?: CodeArtsAccountRecord
 }
 
 const FILE_NAME = 'accounts.json'
@@ -102,6 +130,31 @@ function traeRecord(value: unknown, region: TraeRegion): TraeAccountRecord | und
     ...text(raw.userId) === undefined ? {} : { userId: text(raw.userId)! },
     ...text(raw.name) === undefined ? {} : { name: text(raw.name)! },
     ...number(raw.expiresAt) === undefined ? {} : { expiresAt: number(raw.expiresAt)! },
+  }
+}
+
+function codeartsRecord(value: unknown): CodeArtsAccountRecord | undefined {
+  const raw = record(value)
+  const accessKeyId = text(raw?.accessKeyId)
+  const secretAccessKey = text(raw?.secretAccessKey)
+  const securityToken = text(raw?.securityToken)
+  if (raw === undefined || accessKeyId === undefined || secretAccessKey === undefined || securityToken === undefined) {
+    return undefined
+  }
+  const jwk = record(raw.dpopPrivateJwk)
+  const key = jwk !== undefined && text(jwk.x) !== undefined && text(jwk.y) !== undefined && text(jwk.d) !== undefined
+    ? { kty: 'EC' as const, crv: 'P-256' as const, x: text(jwk.x)!, y: text(jwk.y)!, d: text(jwk.d)! }
+    : undefined
+  return {
+    accessKeyId,
+    secretAccessKey,
+    securityToken,
+    loginAt: number(raw.loginAt) ?? Date.now(),
+    ...number(raw.expiresAt) === undefined ? {} : { expiresAt: number(raw.expiresAt)! },
+    ...text(raw.refreshToken) === undefined ? {} : { refreshToken: text(raw.refreshToken)! },
+    ...text(raw.codeVerifier) === undefined ? {} : { codeVerifier: text(raw.codeVerifier)! },
+    ...key === undefined ? {} : { dpopPrivateJwk: key },
+    ...text(raw.userName) === undefined ? {} : { userName: text(raw.userName)! },
   }
 }
 
@@ -164,6 +217,8 @@ export class AccountStore {
         }
       }
     }
+    const codearts = codeartsRecord(raw.codearts)
+    if (codearts !== undefined) out.codearts = codearts
     return out
   }
 
@@ -177,6 +232,10 @@ export class AccountStore {
 
   async trae(region: TraeRegion): Promise<TraeAccountRecord | undefined> {
     return (await this.read()).trae?.[normalizeTraeRegion(region)]
+  }
+
+  async codearts(): Promise<CodeArtsAccountRecord | undefined> {
+    return (await this.read()).codearts
   }
 
   async saveLoomy(record: LoomyAccountRecord): Promise<void> {
@@ -195,6 +254,10 @@ export class AccountStore {
     }))
   }
 
+  async saveCodearts(record: CodeArtsAccountRecord): Promise<void> {
+    await this.update(current => ({ ...current, codearts: record }))
+  }
+
   async clear(brand: BrandId, region?: TraeRegion): Promise<void> {
     await this.update(current => {
       const next: StoredAccounts = { ...current }
@@ -210,7 +273,8 @@ export class AccountStore {
         return next
       }
       if (brand === 'loomy') delete next.loomy
-      else delete next.raccoon
+      else if (brand === 'raccoon') delete next.raccoon
+      else delete next.codearts
       return next
     })
   }
