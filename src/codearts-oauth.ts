@@ -33,6 +33,15 @@ export interface CodeArtsCredential {
   refreshToken?: string
   codeVerifier?: string
   dpopPrivateJwk?: DpopPrivateJwk
+  /** Display only, from the refresh token's profile; never used for signing. */
+  userName?: string
+}
+
+/** Who the credential belongs to, as the portal encoded it in the token. */
+export interface CodeArtsUserProfile {
+  userId?: string
+  userName?: string
+  domainId?: string
 }
 
 export interface PkcePair {
@@ -126,14 +135,48 @@ export function signDpopJws(keyPair: DpopKeyPair, htm: string, htu: string): str
 export function readJwtExpiry(token: string): number | undefined {
   const parts = token.split('.')
   if (parts.length !== 3) return undefined
+  const payload = decodeBase64UrlJson(parts[1]!)
+  const exp = payload?.exp
+  if (typeof exp !== 'number' || !Number.isFinite(exp)) return undefined
+  const ms = exp * 1000
+  return Math.abs(ms) > 1e14 ? undefined : ms
+}
+
+function decodeBase64UrlJson(value: string): Record<string, unknown> | undefined {
   try {
-    const payload = JSON.parse(Buffer.from(parts[1]!, 'base64url').toString('utf8')) as Record<string, unknown>
-    const exp = payload.exp
-    if (typeof exp !== 'number' || !Number.isFinite(exp)) return undefined
-    const ms = exp * 1000
-    return Math.abs(ms) > 1e14 ? undefined : ms
+    const parsed: unknown = JSON.parse(Buffer.from(value, 'base64url').toString('utf8'))
+    return parsed === null || typeof parsed !== 'object' ? undefined : parsed as Record<string, unknown>
   } catch {
     return undefined
+  }
+}
+
+/**
+ * Read the account identity out of a refresh token.
+ *
+ * The STS response carries no profile — `credentials` is the AK/SK/token triple
+ * and nothing else — so a card built from it alone has nothing to put next to
+ * 账号. The portal does name the user, but only inside the refresh token: its
+ * `user_profile` claim is a second base64 JSON blob holding `account_name`,
+ * `principal_id` and `account_id`. Decoding it is read-only and needs no extra
+ * request; without it the field stays empty and the page says so.
+ */
+export function readUserProfile(token: string | undefined): CodeArtsUserProfile | undefined {
+  if (token === undefined) return undefined
+  const parts = token.split('.')
+  if (parts.length !== 3) return undefined
+  const encoded = decodeBase64UrlJson(parts[1]!)?.user_profile
+  if (typeof encoded !== 'string') return undefined
+  const profile = decodeBase64UrlJson(encoded)
+  if (profile === undefined) return undefined
+  const name = typeof profile.account_name === 'string' ? profile.account_name.trim() : ''
+  const userId = typeof profile.principal_id === 'string' ? profile.principal_id : undefined
+  const domainId = typeof profile.account_id === 'string' ? profile.account_id : undefined
+  if (name === '' && userId === undefined && domainId === undefined) return undefined
+  return {
+    ...name === '' ? {} : { userName: name },
+    ...userId === undefined ? {} : { userId },
+    ...domainId === undefined ? {} : { domainId },
   }
 }
 
@@ -220,20 +263,28 @@ export async function exchangeRefreshToken(
   }, keyPair, fetcher)
   const credential = credentialFrom(token, codeVerifier, keyPair)
   // A refresh response may omit the rotated refresh token; keep the old one so
-  // the next refresh is still possible.
-  return { ...credential, refreshToken: credential.refreshToken ?? refreshToken }
+  // the next refresh is still possible. The name rides on that token, so it has
+  // to be read from whichever one this credential ends up carrying.
+  const userName = credential.userName ?? readUserProfile(refreshToken)?.userName
+  return {
+    ...credential,
+    refreshToken: credential.refreshToken ?? refreshToken,
+    ...userName === undefined ? {} : { userName },
+  }
 }
 
 function credentialFrom(token: TokenResponse, codeVerifier: string, keyPair: DpopKeyPair): CodeArtsCredential {
   const credentials = token.credentials ?? {}
   const expiration = credentials.expiration
   const expiresAt = expiration === undefined ? undefined : Date.parse(expiration)
+  const userName = readUserProfile(token.refresh_token)?.userName
   return {
     accessKeyId: credentials.access_key_id ?? '',
     secretAccessKey: credentials.secret_access_key ?? '',
     securityToken: credentials.security_token ?? '',
     ...expiresAt === undefined || Number.isNaN(expiresAt) ? {} : { expiresAt },
     ...token.refresh_token === undefined ? {} : { refreshToken: token.refresh_token },
+    ...userName === undefined ? {} : { userName },
     codeVerifier,
     dpopPrivateJwk: keyPair.privateKeyJwk,
   }

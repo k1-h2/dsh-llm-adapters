@@ -91,7 +91,7 @@ window.__ModuleLoader__.load({
       browserHintLoomy: '会打开一个本地登录页：用微信扫码登录 Loomy；首次使用的微信账号需要在页面里绑定手机号。',
       browserHintRaccoon: '会打开一个本地登录页：用微信扫码登录小浣熊，扫码确认后插件会自动接回。',
       loomyHint: 'Loomy 会话约 14 天有效，且没有刷新令牌；过期后再点“打开扫码登录”即可。',
-      raccoonHint: '小浣熊扫码登录的令牌约 30 天有效，到期后重新扫码即可。思考档位（None / Low / High / Max，xhigh 除外）在聊天框的模型菜单里切换，每次刷新模型时按 OpenRouter 实时校正。',
+      raccoonHint: '小浣熊扫码登录的令牌约 30 天有效，到期后重新扫码即可。',
       loginLogout: '退出登录',
       loginConfirmLogout: '确定要退出当前账号吗？',
       loginFailedPrefix: '登录失败',
@@ -242,7 +242,7 @@ window.__ModuleLoader__.load({
       browserHintLoomy: 'A local sign-in page opens: scan it in WeChat to sign in to Loomy. A WeChat account using Loomy for the first time must bind a phone number on that page.',
       browserHintRaccoon: 'A local sign-in page opens: scan it in WeChat to sign in to Raccoon, and the plugin adopts the login once you confirm.',
       loomyHint: 'A Loomy session lasts about 14 days and has no refresh token; use “Open QR sign-in” again when it expires.',
-      raccoonHint: 'A Raccoon QR login lasts about 30 days; scan again when it expires. Pick a thinking level (off / low / high / max) in the chat model menu; levels are reconciled against OpenRouter on each model refresh.',
+      raccoonHint: 'A Raccoon QR login lasts about 30 days; scan again when it expires.',
       loginLogout: 'Sign out',
       loginConfirmLogout: 'Sign out of this account?',
       loginFailedPrefix: 'Sign-in failed',
@@ -455,6 +455,11 @@ window.__ModuleLoader__.load({
       packLabel: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
       packAmount: { fontFamily: 'ui-monospace, monospace', textAlign: 'right', whiteSpace: 'nowrap' },
       packExpiry: { opacity: 0.6, whiteSpace: 'nowrap', fontSize: '0.92em' },
+      meterBox: { display: 'flex', flexDirection: 'column', gap: '5px', marginTop: '2px' },
+      meterText: { display: 'flex', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap', fontSize: '0.86em' },
+      meterPercent: { marginLeft: 'auto', opacity: 0.62, fontSize: '0.92em' },
+      meter: { height: '6px', borderRadius: '999px', background: 'var(--dsw-alias-border-l2, rgba(128,128,128,0.25))', overflow: 'hidden' },
+      meterFill: { height: '100%', borderRadius: '999px', background: 'var(--dsw-alias-brand-primary, #4c6ef5)' },
     }
 
     const API = (() => {
@@ -526,6 +531,25 @@ window.__ModuleLoader__.load({
     function creditsOf(value) {
       if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
       return value.toLocaleString('zh-CN', { maximumFractionDigits: 2 })
+    }
+
+    /**
+     * A usage bar needs both halves: what was spent and what the account was
+     * granted. Loomy and Raccoon only report what is left, so they keep the
+     * plain figure rather than a bar with an invented denominator.
+     */
+    function meterPercentOf(quota) {
+      const spent = typeof quota?.used === 'number' && Number.isFinite(quota.used) ? quota.used : undefined
+      const granted = typeof quota?.total === 'number' && Number.isFinite(quota.total) ? quota.total : undefined
+      if (spent === undefined || granted === undefined || granted <= 0) return undefined
+      return Math.min(100, Math.max(0, (spent / granted) * 100))
+    }
+
+    function percentLabel(value) {
+      const text = value > 0 && value < 1
+        ? value.toFixed(2)
+        : value < 10 ? value.toFixed(1) : String(Math.round(value))
+      return `${text}%`
     }
 
     function dateLabel(value) {
@@ -726,30 +750,50 @@ window.__ModuleLoader__.load({
         if (brand.id === 'trae' || brand.id === 'codearts') {
           const packs = Array.isArray(quota.packs) ? quota.packs : []
           const plan = typeof quota.plan === 'string' && quota.plan !== '' ? quota.plan : undefined
-          const usedText = quota.used === undefined
+          const spent = typeof quota.used === 'number' && Number.isFinite(quota.used) ? quota.used : undefined
+          const granted = typeof quota.total === 'number' && Number.isFinite(quota.total) ? quota.total : undefined
+          const percent = meterPercentOf(quota)
+          const usedText = spent === undefined
             ? undefined
-            : `${creditsOf(quota.used)}${quota.total === undefined ? '' : ` / ${creditsOf(quota.total)}`} ${t('points')}`
+            : `${creditsOf(spent)}${granted === undefined ? '' : ` / ${creditsOf(granted)}`} ${t('points')}`
           return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '5px' } },
-            plan === undefined && quota.total === undefined && usedText === undefined && packs.length === 0
+            plan === undefined && granted === undefined && usedText === undefined && packs.length === 0
               ? h('div', { style: css.note }, t('quotaUnavailable'))
               : null,
-            brand.id !== 'codearts' || quota.total === undefined
-              ? null
-              : h('div', { style: css.line },
-                  h('span', { style: css.label }, t('quota')),
-                  h('span', { style: css.value }, `${creditsOf(quota.total)} ${t('points')}`),
-                ),
             plan === undefined ? null : h('div', { style: css.line },
               h('span', { style: css.label }, t('plan')),
               h('span', { style: css.value }, plan),
               quota.trialEndsAt === undefined ? null : h('span', { style: css.label }, t('trialEnds')),
               quota.trialEndsAt === undefined ? null : h('span', { style: css.value }, dateLabel(quota.trialEndsAt)),
             ),
-            usedText === undefined ? null : h('div', { style: css.line },
-              h('span', { style: css.label }, t('quota')),
-              h('span', { style: css.value }, usedText),
-              quota.ratio === undefined ? null : h('span', { style: css.label }, `${Math.round(quota.ratio)}%`),
-            ),
+            // Both halves present → a bar. A visible sliver is kept for a
+            // spend that rounds to zero, or the bar reads as "untouched".
+            percent === undefined
+              ? granted === undefined
+                ? null
+                : h('div', { style: css.line },
+                    h('span', { style: css.label }, t('quota')),
+                    h('span', { style: css.value }, `${creditsOf(granted)} ${t('points')}`),
+                  )
+              : h('div', { style: css.meterBox },
+                  h('div', { style: css.meterText },
+                    h('span', { style: css.label }, t('usedOf')),
+                    h('span', { style: css.value }, usedText),
+                    h('span', { style: css.meterPercent }, percentLabel(percent)),
+                  ),
+                  h('div', { style: css.meter },
+                    h('div', {
+                      style: { ...css.meterFill, width: `${percent > 0 ? Math.max(percent, 1.5) : 0}%` },
+                    }),
+                  ),
+                ),
+            percent === undefined && usedText !== undefined
+              ? h('div', { style: css.line },
+                  h('span', { style: css.label }, t('usedOf')),
+                  h('span', { style: css.value }, usedText),
+                  quota.ratio === undefined ? null : h('span', { style: css.label }, `${Math.round(quota.ratio)}%`),
+                )
+              : null,
             packs.length === 0 ? null : (() => {
               // Collapsed (the default) is one summary row: how many packs, the
               // combined total and the nearest expiry. Expanding lists every
@@ -1581,7 +1625,8 @@ window.__ModuleLoader__.load({
     exports.name = 'dsh-llm-adapters'
     exports.__test = {
       BRANDS, FIELDS, REGIONS, OPENROUTER_INTERVALS, regionOf, zh, en, css, windowLabel, creditsOf,
-      ownerLabel, priceText, dateLabel, readCache, writeCache, AccountCard, SettingsPage, BundleSettings,
+      meterPercentOf, percentLabel, ownerLabel, priceText, dateLabel, readCache, writeCache, AccountCard,
+      SettingsPage, BundleSettings,
     }
     return module.exports
   },
