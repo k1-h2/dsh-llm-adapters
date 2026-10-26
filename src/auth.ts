@@ -13,7 +13,7 @@ import type {
   AccountStore, CodeArtsAccountRecord, LoomyAccountRecord, RaccoonAccountRecord, TraeAccountRecord,
 } from './account-store.ts'
 import type { TraeRegion } from './brand.ts'
-import { RefreshTokenExpiredError, exchangeRefreshToken, keyPairFromStoredJwk } from './codearts-oauth.ts'
+import { RefreshTokenExpiredError, exchangeRefreshToken, keyPairFromStoredJwk, readUserProfile } from './codearts-oauth.ts'
 import type { CodeArtsCredential } from './codearts-oauth.ts'
 
 export interface LocalAccount {
@@ -294,7 +294,10 @@ export class CodeArtsAuth {
     }
     const expired = stored.expiresAt !== undefined && stored.expiresAt <= Date.now()
     const refreshable = stored.refreshToken !== undefined && stored.codeVerifier !== undefined && stored.dpopPrivateJwk !== undefined
-    const account: LocalAccount = stored.userName === undefined ? {} : { name: stored.userName }
+    // The name lives in the refresh token, so an account stored before this was
+    // read still shows it without waiting for a renewal or a new sign-in.
+    const userName = stored.userName ?? readUserProfile(stored.refreshToken)?.userName
+    const account: LocalAccount = userName === undefined ? {} : { name: userName }
     return {
       signedIn: !expired || refreshable,
       loginAt: stored.loginAt,
@@ -348,6 +351,7 @@ export class CodeArtsAuth {
           securityToken: next.securityToken,
           ...next.expiresAt === undefined ? {} : { expiresAt: next.expiresAt },
           ...next.refreshToken === undefined ? {} : { refreshToken: next.refreshToken },
+          ...next.userName === undefined ? {} : { userName: next.userName },
         })
         this.lastError = undefined
         return next

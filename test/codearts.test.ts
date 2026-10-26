@@ -12,7 +12,7 @@ import { headersForFetch, sdkDateStamp, sha256Hex, signRequestHuawei } from '../
 import { CodeArtsSessionWindow } from '../src/codearts-window.ts'
 import {
   RefreshTokenExpiredError, buildAuthorizeUrl, exchangeRefreshToken, generateDpopKeyPair, generatePkcePair,
-  readJwtExpiry, signDpopJws,
+  readJwtExpiry, readUserProfile, signDpopJws,
 } from '../src/codearts-oauth.ts'
 import { ProviderHttpError } from '../src/wire.ts'
 
@@ -176,25 +176,71 @@ describe('CodeArts catalogue', () => {
   })
 })
 
+describe('CodeArts identity', () => {
+  function refreshToken(profile: Record<string, unknown>): string {
+    const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url')
+    return `${encode({ alg: 'RS256' })}.${encode({ exp: 1_792_751_133, user_profile: encode(profile) })}.sig`
+  }
+
+  it('reads the account name out of the refresh token profile', () => {
+    const token = refreshToken({
+      account_id: '27c94208359d4f50b93a4852dd193797c',
+      account_name: 'why15855103187',
+      principal_id: 'ffe45f95fe6f4f199b7dbed365215cbc',
+    })
+    expect(readUserProfile(token)).toEqual({
+      userName: 'why15855103187',
+      userId: 'ffe45f95fe6f4f199b7dbed365215cbc',
+      domainId: '27c94208359d4f50b93a4852dd193797c',
+    })
+  })
+
+  it('stays empty when the token carries no profile', () => {
+    expect(readUserProfile(undefined)).toBeUndefined()
+    expect(readUserProfile('opaque')).toBeUndefined()
+    expect(readUserProfile(refreshToken({}))).toBeUndefined()
+  })
+
+  it('carries the name into the credential a renewal produces', async () => {
+    const fetcher = vi.fn(async () => json({
+      credentials: { access_key_id: 'AK', secret_access_key: 'SK', security_token: 'ST' },
+      refresh_token: refreshToken({ account_name: 'alice' }),
+    }))
+    const credential = await exchangeRefreshToken(
+      'old.token.sig', 'verifier', generateDpopKeyPair(), fetcher as unknown as typeof fetch,
+    )
+    expect(credential.userName).toBe('alice')
+  })
+})
+
 describe('CodeArts quota', () => {
-  it('keeps the total row out of the pack list', () => {
+  const metrics = [
+    { name: 'usageTotalPackageCredit', package_credit_amount: 25_500, package_credit_used: 1_000, package_credit_remain: 24_500 },
+    { name: 'usageBasicPackageCredit', package_credit_amount: 500, package_credit_used: 0, package_credit_remain: 500 },
+    { name: 'usageBonusPackageCredit', package_credit_amount: 25_000, package_credit_used: 1_000, package_credit_remain: 24_000 },
+  ]
+
+  it('keeps the total row out of the pack list but keeps its figures', () => {
     const info = parseCodeArtsPackage({
       package: { is_credit_package: true, package_name_cn: '个人体验版', status: 'NORMAL' },
       end_date: '2026-10-27',
-      metrics: [
-        { name: 'usageTotalPackageCredit', package_credit_amount: 25_500, package_credit_used: 0, package_credit_remain: 25_500 },
-        { name: 'usageBasicPackageCredit', package_credit_amount: 500, package_credit_used: 0, package_credit_remain: 500 },
-        { name: 'usageBonusPackageCredit', package_credit_amount: 25_000, package_credit_used: 0, package_credit_remain: 25_000 },
-      ],
+      metrics,
     })
     expect(info.isCreditPackage).toBe(true)
     expect(info.packageName).toBe('个人体验版')
-    expect(info.credit.total).toBe(25_500)
+    // The summary row is the only place that reports the allowance and the
+    // spend together, which is exactly what a used/total bar needs.
+    expect(info.credit).toMatchObject({ amount: 25_500, used: 1_000, remaining: 24_500 })
     // Summing the summary row with its own categories would double the credits.
     expect(info.credit.packs.map(pack => pack.label)).toEqual(['基础积分包', '赠送积分包'])
     expect(info.credit.packs[0]!.expiresAt).toBe(Date.parse('2026-10-27'))
     // Bonus credits expire per grant; borrowing the subscription date is a lie.
     expect(info.credit.packs[1]!.expiresAt).toBeUndefined()
+  })
+
+  it('adds the categories up when the gateway omits the summary row', () => {
+    const info = parseCodeArtsPackage({ metrics: metrics.slice(1) })
+    expect(info.credit).toMatchObject({ amount: 25_500, used: 1_000, remaining: 24_500 })
   })
 })
 
@@ -223,6 +269,23 @@ describe('CodeArts provider', () => {
       window,
     })
   }
+
+  it('reports the allowance and the spend so the card can draw a bar', async () => {
+    const provider = make({
+      status: async () => ({ signedIn: true }),
+      credential: async () => ({ accessKeyId: 'AK', secretAccessKey: 'SK', securityToken: 'ST' }),
+      refresh: async () => ({ accessKeyId: 'AK', secretAccessKey: 'SK', securityToken: 'ST' }),
+      logout: async () => undefined,
+    }, (async () => json({
+      package: { is_credit_package: true, package_name_cn: '体验版' },
+      metrics: [
+        { name: 'usageTotalPackageCredit', package_credit_amount: 21_500, package_credit_used: 13.05, package_credit_remain: 21_486.95 },
+        { name: 'usageBonusPackageCredit', package_credit_amount: 21_000, package_credit_used: 13.05, package_credit_remain: 20_986.95 },
+      ],
+    })) as unknown as typeof fetch)
+
+    expect(await provider.quota(true)).toMatchObject({ total: 21_500, used: 13.05, plan: '体验版' })
+  })
 
   it('sends a signed chat request with thinking off and a clamped budget', async () => {
     const seen: { headers: Record<string, string>, body: Record<string, unknown> }[] = []

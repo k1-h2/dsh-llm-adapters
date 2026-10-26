@@ -12,7 +12,7 @@ export interface QuotaPack {
 }
 
 export interface QuotaSnapshot {
-  /** Points/credits left when the upstream reports one figure. */
+  /** The headline figure: credits left for Loomy/Raccoon, the allowance for Trae and CodeArts. */
   total?: number
   /** Spendable now; Loomy only. */
   available?: number
@@ -22,8 +22,9 @@ export interface QuotaSnapshot {
   daily?: number
   /** Loomy's daily cycle label, when present. */
   cycle?: string
-  /** Trae: amount already consumed and the percentage it represents. */
+  /** Consumed so far. Together with `total` it drives the card's usage bar. */
   used?: number
+  /** Upstream-reported percentage; the card prefers its own used/total figure. */
   ratio?: number
   /** Trae CN: per-package breakdown, soonest expiry first. */
   packs?: readonly QuotaPack[]

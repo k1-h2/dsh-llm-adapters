@@ -15,22 +15,27 @@ interface ClientExports {
     OPENROUTER_INTERVALS: { value: number, labelKey: string }[]
     windowLabel: (value: number) => string
     creditsOf: (value: number) => string
+    meterPercentOf: (quota: Record<string, unknown> | undefined) => number | undefined
+    percentLabel: (value: number) => string
     priceText: (t: (key: string) => string, factor: number) => string
     ownerLabel: (t: (key: string) => string, owner: string) => string
     dateLabel: (value: number) => string
+    writeCache: (brand: string, kind: string, value: unknown) => void
+    AccountCard: (props: Record<string, unknown>) => unknown
   }
 }
 
-function loadClient(): ClientExports {
+function loadClient(react?: Record<string, unknown>): ClientExports {
   const source = readFileSync(path.join(process.cwd(), 'client.js'), 'utf8')
   let definition: { factory: (require: (id: string) => unknown) => ClientExports } | undefined
   const window = {
     __ModuleLoader__: {
       load(value: typeof definition) { definition = value },
     },
+    localStorage: { getItem: () => null, setItem: () => undefined },
   }
   const document = { baseURI: 'http://127.0.0.1:3080/' }
-  const React = {
+  const React = react ?? {
     createElement: () => null,
     useState: () => undefined,
     useEffect: () => undefined,
@@ -43,6 +48,44 @@ function loadClient(): ClientExports {
   run(window, document)
   if (definition === undefined) throw new Error('client bundle did not register')
   return definition.factory(() => React)
+}
+
+/** The smallest React that renders a tree instead of nothing. */
+const TREE_REACT = {
+  createElement: (type: string, props: unknown, ...children: unknown[]) => ({
+    type,
+    props: { ...(props ?? {}) as object, children },
+  }),
+  useState: (value: unknown) => [typeof value === 'function' ? (value as () => unknown)() : value, () => undefined],
+  useEffect: () => undefined,
+  useCallback: (fn: unknown) => fn,
+  useMemo: (fn: () => unknown) => fn(),
+  useRef: (value: unknown) => ({ current: value }),
+  useSyncExternalStore: (_subscribe: unknown, get: () => unknown) => get(),
+}
+
+interface Element {
+  type: string
+  props: { style?: Record<string, unknown>, children?: unknown[] }
+}
+
+function walk(node: unknown, visit: (element: Element) => void): void {
+  if (node === null || node === undefined || typeof node !== 'object') return
+  if (Array.isArray(node)) {
+    for (const child of node) walk(child, visit)
+    return
+  }
+  const element = node as Element
+  visit(element)
+  for (const child of element.props.children ?? []) walk(child, visit)
+}
+
+function textOf(node: unknown, out: string[] = []): string[] {
+  if (typeof node === 'string' || typeof node === 'number') out.push(String(node))
+  else if (node !== null && typeof node === 'object') {
+    for (const child of (node as Element).props.children ?? []) textOf(child, out)
+  }
+  return out
 }
 
 describe('client bundle', () => {
@@ -127,5 +170,65 @@ describe('client bundle', () => {
     const ownerText = (key: string) => key === 'ownerEnterprise' ? '企业' : '个人'
     expect(exports.__test.ownerLabel(ownerText, 'users')).toBe('个人')
     expect(exports.__test.ownerLabel(ownerText, 'org')).toBe('企业')
+  })
+
+  it('draws a credit bar only when both the spend and the allowance are known', () => {
+    const { meterPercentOf, percentLabel } = exports.__test
+    // CodeArts and Trae CN report both halves; Loomy and Raccoon only what is left.
+    expect(meterPercentOf({ used: 13.05, total: 21_500 })).toBeCloseTo(0.0607, 4)
+    expect(meterPercentOf({ used: 50, total: 200 })).toBe(25)
+    expect(meterPercentOf({ total: 1_000 })).toBeUndefined()
+    expect(meterPercentOf({ used: 10 })).toBeUndefined()
+    expect(meterPercentOf({ used: 10, total: 0 })).toBeUndefined()
+    expect(meterPercentOf(undefined)).toBeUndefined()
+    expect(percentLabel(0.0607)).toBe('0.06%')
+    expect(percentLabel(25)).toBe('25%')
+    expect(percentLabel(100)).toBe('100%')
+  })
+
+  it('keeps the Raccoon card free of the thinking-level note', () => {
+    expect(exports.__test.zh.raccoonHint).toBe('小浣熊扫码登录的令牌约 30 天有效，到期后重新扫码即可。')
+    expect(exports.__test.en.raccoonHint).toBe('A Raccoon QR login lasts about 30 days; scan again when it expires.')
+  })
+
+  it('renders the credit bar and the account name on the CodeArts card', () => {
+    const tree = loadClient(TREE_REACT)
+    const { writeCache, AccountCard, zh, css } = tree.__test
+    writeCache('codearts', 'status', {
+      signedIn: true,
+      loginAt: Date.now(),
+      account: { name: 'why15855103187' },
+      quota: {
+        total: 21_500,
+        used: 13.05,
+        plan: '体验版',
+        packs: [
+          { label: '基础积分包', total: 500, used: 0 },
+          { label: '赠送积分包', total: 21_000, used: 13.05 },
+        ],
+        at: Date.now(),
+      },
+    })
+    const rendered = AccountCard({
+      t: (key: string) => (zh as Record<string, string>)[key] ?? key,
+      brand: { id: 'codearts' },
+      region: 'cn',
+      onRegionChange: () => undefined,
+      reloadSignal: 0,
+      onStatus: () => undefined,
+      onAfterRefresh: () => undefined,
+    })
+    const text = textOf(rendered).join(' ')
+    expect(text).toContain('why15855103187')
+    expect(text).toContain('13.05 / 21,500 积分')
+    expect(text).toContain('0.06%')
+    // Exactly one bar, filled to the smallest visible width: 0.06% would not
+    // render at all, and a bar that looks empty reads as "untouched".
+    const bars: Element[] = []
+    walk(rendered, element => {
+      if (element.props.style === css.meter) bars.push(element)
+    })
+    expect(bars).toHaveLength(1)
+    expect((bars[0]!.props.children?.[0] as Element).props.style).toMatchObject({ width: '1.5%' })
   })
 })

@@ -219,8 +219,14 @@ IDE 自身 provider 配置的 `limit.context`（`codearts-endpoints.ts` 的静�
 
 额度来自 `snap-manager/v1/statistics/plugin`：`usageTotalPackageCredit` 是汇总行，**不能**再和三个
 分类一起当资源包求和（会翻倍）；只有基础包能拿到真实到期（套餐 `end_date`），赠送包与按需包如实
-留空。签到是三步（账户类型 → 活动列表 → claim + confirm），只在积分计费账户上可用，
-`claimable=false` 且状态属已领取时才算「今天已领」。
+留空。汇总行同时给出 `package_credit_amount` / `package_credit_used` / `package_credit_remain`，
+前两项是卡片进度条唯一的「总额 + 已用」来源（缺汇总行时由分类行相加补出）。签到是三步（账户类型 →
+活动列表 → claim + confirm），只在积分计费账户上可用，`claimable=false` 且状态属已领取时才算「今天已领」。
+
+账号名不在 STS 响应里（那里只有 AK/SK/安全令牌），而在**续期令牌**的 `user_profile` 声明中：再套
+一层 base64 的 JSON，含 `account_name` / `principal_id` / `account_id`。`readUserProfile` 解它，
+`CodeArtsAuth.status()` 在记录里没有名字时当场解一次（老账号无需重新登录），续期时再写回记录。
+`?secret=` 票据登录拿不到续期令牌，那条路径没有名字。
 
 `wire.ts` 的 SSE 消费被拆成 `consumeOpenAiStream`：CodeArts 要自己签名 fetch，但帧处理与
 `openAiStream` 完全相同；`onFrame` 钩子用来抓「HTTP 200 + SSE 内嵌 `error_code`」的排队/额度错误。

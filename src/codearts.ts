@@ -452,8 +452,12 @@ export class CodeArtsProvider {
     const payload = record(await this.signedGet(credential, `${CODEARTS_SNAP_BASE}${CODEARTS_PACKAGE_INFO_PATH}`))
     if (payload === undefined) throw new Error('CodeArts 没有返回账户信息')
     const info = parseCodeArtsPackage(payload)
+    // `amount` is the allowance and `used` the spend; a bar needs both. A
+    // gateway that only reports what is left still gets the plain figure.
+    const total = info.credit.amount ?? info.credit.remaining
     return {
-      ...info.credit.total === undefined ? {} : { total: info.credit.total },
+      ...total === undefined ? {} : { total },
+      ...info.credit.used === undefined ? {} : { used: info.credit.used },
       ...info.packageName === '' ? {} : { plan: info.packageName },
       ...info.credit.packs.length === 0 ? {} : { packs: info.credit.packs },
       at: Date.now(),
@@ -788,15 +792,25 @@ export interface CodeArtsPackageInfo {
   isCreditPackage: boolean
   packageName: string
   packageStatus: string
-  credit: { total?: number, packs: QuotaPack[] }
+  credit: {
+    /** Granted by the subscription (`package_credit_amount` on the summary row). */
+    amount?: number
+    /** Already spent (`package_credit_used` on the summary row). */
+    used?: number
+    /** Still spendable (`package_credit_remain` on the summary row). */
+    remaining?: number
+    packs: QuotaPack[]
+  }
 }
 
 /**
  * Parse `snap-manager/v1/statistics/plugin`.
  *
  * The total row is a summary of the three category rows, so it is never also
- * listed as a pack — summing both would double every credit. Only the basic
- * pack gets a real expiry (the subscription's `end_date`); the bonus and
+ * listed as a pack — summing both would double every credit. It is, however,
+ * the only row that reports the allowance *and* the spend together, which is
+ * what a used/total bar needs, so its three figures are kept as-is. Only the
+ * basic pack gets a real expiry (the subscription's `end_date`); the bonus and
  * on-demand packs have no per-pack date, and borrowing the subscription date
  * for them would claim credits expire when they do not.
  */
@@ -810,36 +824,47 @@ export function parseCodeArtsPackage(payload: Record<string, unknown>): CodeArts
     usageBonusPackageCredit: '赠送积分包',
   }
   const packs: QuotaPack[] = []
-  let totalRemain: number | undefined
-  let sawCredit = false
+  let summary: { amount?: number, used?: number, remaining?: number } | undefined
   for (const item of Array.isArray(payload.metrics) ? payload.metrics : []) {
     const metric = record(item)
     if (metric === undefined) continue
     const name = text(metric.name) ?? ''
-    const amount = num(metric.package_credit_amount) ?? 0
-    const used = num(metric.package_credit_used) ?? 0
-    const remain = num(metric.package_credit_remain) ?? 0
+    const amount = num(metric.package_credit_amount)
+    const used = num(metric.package_credit_used)
+    const remain = num(metric.package_credit_remain)
     if (name === 'usageTotalPackageCredit') {
-      sawCredit = true
-      totalRemain = remain
+      summary = {
+        ...amount === undefined ? {} : { amount },
+        ...used === undefined ? {} : { used },
+        ...remain === undefined ? {} : { remaining: remain },
+      }
       continue
     }
     const label = labels[name]
     if (label === undefined) continue
-    sawCredit = true
-    if (amount <= 0 && remain <= 0) continue
+    const granted = amount ?? 0
+    const left = remain ?? 0
+    if (granted <= 0 && left <= 0) continue
     const expiresAt = name === 'usageBasicPackageCredit' && endMs !== undefined && !Number.isNaN(endMs)
       ? endMs
       : undefined
-    packs.push({ label, total: amount, used, ...expiresAt === undefined ? {} : { expiresAt } })
+    packs.push({
+      label,
+      total: granted,
+      used: used ?? 0,
+      ...expiresAt === undefined ? {} : { expiresAt },
+    })
   }
+  // A gateway that answers with categories but no summary row still has to
+  // produce a total, so the categories are added up instead.
+  const granted = packs.reduce((sum, pack) => sum + (pack.total ?? 0), 0)
+  const spent = packs.reduce((sum, pack) => sum + (pack.used ?? 0), 0)
+  const credit = summary
+    ?? (packs.length === 0 ? {} : { amount: granted, used: spent, remaining: Math.max(0, granted - spent) })
   return {
     isCreditPackage: pkg.is_credit_package === true || String(pkg.is_credit_package).toLowerCase() === 'true',
     packageName: text(pkg.package_name_cn) ?? text(pkg.package_name_en) ?? '',
     packageStatus: text(pkg.status) ?? '',
-    credit: {
-      ...sawCredit ? { total: totalRemain ?? packs.reduce((sum, pack) => sum + (pack.total ?? 0) - (pack.used ?? 0), 0) } : {},
-      packs,
-    },
+    credit: { ...credit, packs },
   }
 }
