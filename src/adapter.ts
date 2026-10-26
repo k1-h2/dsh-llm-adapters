@@ -76,6 +76,16 @@ function modelInfo(provider: string, model: ProviderModel): LlmModelInfo {
 }
 
 export abstract class LocalAdapter extends LlmAdapter {
+  /**
+   * Last verified image capability per model id.
+   *
+   * A missed catalog read used to fall back to text-only, and DSH then strips
+   * the pixels before this adapter ever runs: a vision model silently lost the
+   * image for that turn. Remembering the last answer keeps the declared
+   * capability stable across a transient miss.
+   */
+  private readonly knownVision = new Map<string, boolean>()
+
   constructor(
     protected readonly options: AdapterOptions,
     protected readonly client: ProviderClient,
@@ -94,7 +104,9 @@ export abstract class LocalAdapter extends LlmAdapter {
   /** The live catalog including switched-off models; the settings page shows those. */
   async describeCatalog(): Promise<readonly ProviderModel[]> {
     if (!(await this.client.signedIn())) return []
-    return this.client.models()
+    const models = await this.client.models()
+    for (const model of models) this.knownVision.set(model.id, model.vision)
+    return models
   }
 
   async isSignedIn(): Promise<boolean> {
@@ -177,6 +189,7 @@ export abstract class LocalAdapter extends LlmAdapter {
     if (!(await this.client.signedIn())) return []
     const disabled = new Set(this.options.disabledModels())
     const models = await this.client.models()
+    for (const model of models) this.knownVision.set(model.id, model.vision)
     // DSH rejects a provider whose rows repeat an id, so a catalog bug must not
     // take the whole route down: the first row for an id wins.
     const seen = new Set<string>()
@@ -193,6 +206,11 @@ export abstract class LocalAdapter extends LlmAdapter {
   override async resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
     const target = resolveModelId(model, this.options.modelAliases())
     const live = (await this.client.models()).find(entry => entry.id === target)
+    if (live !== undefined) this.knownVision.set(target, live.vision)
+    // A missed catalog read must not turn a vision model into a text-only one:
+    // DSH strips the pixels before this adapter runs when the declared
+    // capability says text only.
+    const vision = live === undefined ? this.knownVision.get(target) === true : live.vision
     const contextWindow = this.contextWindowFor(target) ?? live?.contextWindow ?? 200_000
     const maxTokens = live?.maxTokens ?? this.options.defaultMaxTokens()
     return {
@@ -200,7 +218,7 @@ export abstract class LocalAdapter extends LlmAdapter {
       id: model,
       name: live?.name ?? target,
       ...live?.description === undefined ? {} : { description: live.description },
-      inputModalities: live?.vision === true ? ['text', 'image'] : ['text'],
+      inputModalities: vision ? ['text', 'image'] : ['text'],
       context: { contextWindow },
       defaultMaxTokens: Math.max(1, Math.floor(maxTokens)),
       ...live?.reasoningEfforts === undefined || live.reasoningEfforts.length === 0

@@ -359,8 +359,17 @@ Trae 的区域是配置项 `traeRegion`，不是第二个 brand：设置页切�
 ## 传输层
 
 `wire.ts` 把 DSH 的 content blocks 投影成 OpenAI 消息：文本、图片（attachment store → data
-URL）、文件（占位文本）、assistant 工具调用、tool 结果。SSE 解析支持 CRLF 跨块；工具分片
+URL + 路径句柄）、文件（占位文本）、assistant 工具调用、tool 结果。SSE 解析支持 CRLF 跨块；工具分片
 先缓存到流尾再一次性发出，保证 id 与参数完整。
+
+**图片除了像素还要给路径。** 像素让模型「看见」图片，但用户说「取反色后保存」时它需要知道文件在哪。
+DSH 的原生适配器会在图片旁附上 `requestImageHandleText()`：附件名、像素尺寸、**只读归一化副本的
+宿主路径**，以及「编辑前先复制成可写 `.png`」的指示；只发像素时模型只能去工作区里瞎找（实测回
+「图片没有保存在工作目录中」）。现在 `ReadImage` 的返回值带上 `path`（`attachments.imageHostPath()`
+取宿主路径，再经 `ctx.fs.processPathFromHostPath()` 映射到工具执行世界），`userContent()` 在
+`image_url` 前插入 `imageRefText()` 生成的同一句文案；被请求限额丢弃的图片走
+`offloadedImageText()`。适配器还会记住每个模型上一次验证过的 `vision` 能力：目录某次读不到时不再
+谎报 text-only——那会让 DSH 在适配器之前就把像素换成占位符。
 
 - 上游只给 `[DONE]`、不给 `finish_reason` 时（Loomy 会这样截断），标记为 `max-tokens`。
 - usage 全部向上取整并保证 `reasoningTokens <= outputTokens`；DSH 的持久化校验不接受小数。
