@@ -20,12 +20,14 @@ import type { ProviderModel } from './catalog.ts'
 import { fetchJson } from './http.ts'
 import { OpenRouterCatalog } from './openrouter.ts'
 import type { OpenRouterLookup } from './openrouter.ts'
-import type { QuotaSnapshot } from './types.ts'
+import type { CheckinStatus, QuotaSnapshot } from './types.ts'
 import { ProviderHttpError, buildBody, buildMessages, buildTools, openAiStream } from './wire.ts'
 import type { ReadImage } from './wire.ts'
 
 export const RACCOON_BASE = 'https://xiaohuanxiong.com/api/web'
 export const RACCOON_CLIENT_VERSION = 'v1.0.35'
+/** The page whose first authenticated load carries the daily-points grant. */
+export const RACCOON_CHECKIN_URL = 'https://xiaohuanxiong.com/work/home'
 
 /** Desktop identity the official client sends; the gateway varies by platform. */
 function raccoonClientPlatform(): string {
@@ -52,10 +54,26 @@ function numeric(value: unknown): number | undefined {
   return undefined
 }
 
+function record(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
+}
+
 function messageOf(payload: unknown): string | undefined {
   if (payload === null || typeof payload !== 'object') return undefined
   const record = payload as Record<string, unknown>
   return typeof record.message === 'string' && record.message.length > 0 ? record.message : undefined
+}
+
+/** The date label Raccoon uses for the daily grant (Beijing time). */
+function raccoonDay(value: string | number | Date): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(typeof value === 'string' || typeof value === 'number' ? new Date(value) : value)
 }
 
 function raccoonHeaders(token: string): Record<string, string> {
@@ -195,12 +213,16 @@ export class RaccoonProvider {
   }
 
   /** Run one JSON call; a rejected token means this login needs a new scan. */
-  private async authorizedJson<T>(path: string, init: { method?: string, body?: unknown } = {}): Promise<T> {
+  private async authorizedJson<T>(
+    path: string,
+    init: { method?: string, body?: unknown } = {},
+    extraHeaders: Record<string, string> = {},
+  ): Promise<T> {
     const token = await this.options.auth.accessToken()
     try {
       return await fetchJson<T>(`${RACCOON_BASE}${path}`, {
         ...init,
-        headers: this.headers(token),
+        headers: { ...this.headers(token), ...extraHeaders },
         timeoutMs: this.options.timeoutMs(),
         fetchImpl: this.options.fetchImpl,
       })
@@ -288,6 +310,88 @@ export class RaccoonProvider {
 
   invalidateQuota(): void {
     this.quotaCache = undefined
+  }
+
+  /**
+   * Today's daily-points bill, when the website has already granted it.
+   *
+   * Raccoon has no standalone check-in endpoint. The daily points are issued
+   * by the server on the first authenticated web visit and announced through
+   * `point_grant_popups` on `setting_info`; the bills list is the durable proof.
+   */
+  private async dailyGrant(): Promise<{ points?: number } | undefined> {
+    const payload = await this.authorizedJson<unknown>('/points/v2/bills?paging.limit=50&type=all')
+    const root = record(payload) ?? {}
+    if (typeof root.code === 'number' && root.code !== 0) {
+      throw new Error(messageOf(payload) ?? `小浣熊积分流水返回 code=${root.code}`)
+    }
+    const data = record(root.data) ?? root
+    const items = Array.isArray(data.items) ? data.items : []
+    const today = raccoonDay(Date.now())
+    for (const raw of items) {
+      const item = record(raw)
+      if (item?.biz_type !== 'daily_grant') continue
+      const stamp = item.grant_at ?? item.created_at
+      if (typeof stamp !== 'string' && typeof stamp !== 'number') continue
+      let day: string
+      try {
+        day = raccoonDay(stamp)
+      } catch {
+        continue
+      }
+      if (day !== today) continue
+      const points = numeric(item.points)
+      return points === undefined ? {} : { points }
+    }
+    return undefined
+  }
+
+  async checkinStatus(): Promise<CheckinStatus> {
+    const grant = await this.dailyGrant()
+    if (grant !== undefined) {
+      return {
+        available: true,
+        claimed: true,
+        deviceClaimed: false,
+        ...grant.points === undefined ? {} : { reward: grant.points },
+        message: '今日每日积分已到账',
+      }
+    }
+    return {
+      available: true,
+      claimed: false,
+      deviceClaimed: false,
+      message: '每日积分在当天首次打开网页时发放',
+      url: RACCOON_CHECKIN_URL,
+    }
+  }
+
+  async claimCheckin(): Promise<CheckinStatus> {
+    // `setting_info` is the call the website makes on load; it is also the one
+    // that carries the point-grant popups. Ask as the web client so the server
+    // treats it as a normal page visit rather than a desktop API call.
+    await this.authorizedJson('/office/v3/setting_info', {}, {
+      'x-client-platform': 'web',
+      'x-client-version': '131.0.0.0',
+    })
+    const grant = await this.dailyGrant()
+    if (grant === undefined) {
+      return {
+        available: true,
+        claimed: false,
+        deviceClaimed: false,
+        message: '每日积分尚未到账；请打开网页签到',
+        url: RACCOON_CHECKIN_URL,
+      }
+    }
+    this.invalidateQuota()
+    return {
+      available: true,
+      claimed: true,
+      deviceClaimed: false,
+      ...grant.points === undefined ? {} : { reward: grant.points },
+      message: '每日积分已到账',
+    }
   }
 
   async *stream(

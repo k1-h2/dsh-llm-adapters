@@ -15,6 +15,8 @@ import type {
 import type { TraeRegion } from './brand.ts'
 import { RefreshTokenExpiredError, exchangeRefreshToken, keyPairFromStoredJwk, readUserProfile } from './codearts-oauth.ts'
 import type { CodeArtsCredential } from './codearts-oauth.ts'
+import { responseError } from './http.ts'
+import { TRAE_REGION_PROFILES, TRAE_WEB_USER_AGENT } from './trae-endpoints.ts'
 
 export interface LocalAccount {
   name?: string
@@ -36,8 +38,8 @@ export interface AuthStatus {
 
 /** Expiry margin for Raccoon's JWT, so a call does not start on a dead token. */
 const RACCOON_EXPIRY_MARGIN_MS = 30_000
-/** Same margin for Trae's web token. */
-const TRAE_EXPIRY_MARGIN_MS = 30_000
+/** Renew Trae's token well before its eight-hour expiry. */
+const TRAE_EXPIRY_MARGIN_MS = 5 * 60_000
 
 function traeLabel(region: TraeRegion): string {
   return region === 'cn' ? 'Trae 国内版' : 'Trae 国际版'
@@ -199,16 +201,81 @@ export class RaccoonAuth {
 }
 
 /**
+ * The two expiries a Trae record can carry.
+ *
+ * Older records stored the website-session expiry in `expiresAt` because the
+ * short JWT was not known separately. The JWT's own `exp` is authoritative, so
+ * read it from the token and treat a much longer stored value as the session.
+ */
+function traeExpiries(stored: TraeAccountRecord): { token?: number, session?: number } {
+  const jwt = decodeJwtFacts(stored.accessToken).expiresAt
+  const token = jwt ?? stored.expiresAt
+  const session = stored.sessionExpiresAt
+    ?? (jwt !== undefined && stored.expiresAt !== undefined && stored.expiresAt > jwt + 60_000
+      ? stored.expiresAt
+      : undefined)
+  return {
+    ...token === undefined ? {} : { token },
+    ...session === undefined ? {} : { session },
+  }
+}
+
+/** The token document `GetUserToken` returns, tolerating the nested envelope. */
+function traeTokenOf(payload: unknown): string | undefined {
+  if (payload === null || typeof payload !== 'object') return undefined
+  const result = (payload as Record<string, unknown>).Result
+  if (result === null || typeof result !== 'object') return undefined
+  const token = (result as Record<string, unknown>).Token
+  return typeof token === 'string' && token.trim().length > 0 ? token.trim() : undefined
+}
+
+function traeSessionExpiryOf(payload: unknown): number | undefined {
+  if (payload === null || typeof payload !== 'object') return undefined
+  const result = (payload as Record<string, unknown>).Result
+  if (result === null || typeof result !== 'object') return undefined
+  return timestampOf((result as Record<string, unknown>).ExpiredAt)
+}
+
+/** Merge `Set-Cookie` lines into the stored jar, so a rotated session survives. */
+function mergeSetCookies(current: string, headers: readonly string[]): string {
+  const jar = new Map<string, string>()
+  for (const part of current.split(';')) {
+    const index = part.indexOf('=')
+    if (index <= 0) continue
+    const name = part.slice(0, index).trim()
+    if (name !== '') jar.set(name, part.slice(index + 1).trim())
+  }
+  for (const header of headers) {
+    const first = header.split(';', 1)[0] ?? ''
+    const index = first.indexOf('=')
+    if (index <= 0) continue
+    const name = first.slice(0, index).trim()
+    if (name === '') continue
+    if (/(?:^|;)\s*max-age=0\b/i.test(header)) {
+      jar.delete(name)
+      continue
+    }
+    jar.set(name, first.slice(index + 1).trim())
+  }
+  return [...jar.entries()].map(([name, value]) => `${name}=${value}`).join('; ')
+}
+
+/**
  * Trae's web login, one per region.
  *
- * The token is the same `Cloud-IDE-JWT` the website uses. There is no refresh
- * flow this plugin can rely on, so an expired token is a user-visible sign-in
- * action — the same contract the other two providers have.
+ * The `Cloud-IDE-JWT` the website issues lives about eight hours, but the
+ * website session behind it lives about fourteen days. The cookies captured at
+ * sign-in are replayed against `GetUserToken` to renew the short token silently;
+ * only when the session itself dies does the user have to sign in again.
  */
 export class TraeAuth {
+  private readonly inflight = new Map<TraeRegion, Promise<string>>()
+  private lastError: string | undefined
+
   constructor(
     private readonly store: AccountStore,
     private readonly currentRegion: () => TraeRegion,
+    private readonly fetchImpl: typeof fetch = fetch,
   ) {}
 
   region(): TraeRegion {
@@ -221,32 +288,119 @@ export class TraeAuth {
     if (stored === undefined) {
       return { signedIn: false, error: `${traeLabel(region)}尚未登录。请在设置页点「打开浏览器登录」。` }
     }
+    const now = Date.now()
+    const { token, session } = traeExpiries(stored)
+    const tokenExpired = token !== undefined && token <= now + TRAE_EXPIRY_MARGIN_MS
+    const sessionExpired = session !== undefined && session <= now + TRAE_EXPIRY_MARGIN_MS
+    const refreshable = stored.cookies !== undefined && !sessionExpired
+    const signedIn = !tokenExpired || refreshable
     const account = traeAccount(stored)
-    const expired = stored.expiresAt !== undefined && stored.expiresAt <= Date.now() + TRAE_EXPIRY_MARGIN_MS
+    // With a renewable session the user cares about the website-session
+    // deadline, not the eight-hour JWT the plugin replaces on its own.
+    const expiresAt = refreshable ? session ?? token : token
     return {
-      signedIn: !expired,
+      signedIn,
       loginAt: stored.loginAt,
-      ...stored.expiresAt === undefined ? {} : { expiresAt: stored.expiresAt },
-      ...expired ? { possiblyExpired: true } : {},
+      ...expiresAt === undefined ? {} : { expiresAt },
+      ...!signedIn ? { possiblyExpired: true } : {},
       ...Object.keys(account).length === 0 ? {} : { account },
-      ...expired ? { error: `${traeLabel(region)}登录已过期，请在设置页重新登录。` } : {},
+      ...!signedIn
+        ? { error: sessionExpired
+          ? `${traeLabel(region)}网页会话已过期，请重新登录。`
+          : `${traeLabel(region)}登录已过期，请在设置页重新登录。` }
+        : tokenExpired && this.lastError !== undefined ? { error: this.lastError } : {},
     }
   }
 
-  /** The bearer token, or an actionable error when there is none. */
+  /**
+   * The bearer token, or an actionable error when there is none.
+   *
+   * A token near its expiry is renewed first; `force` means the gateway already
+   * rejected it, so the renewal is attempted even if the clock disagrees.
+   */
   async accessToken(force = false): Promise<string> {
     const region = this.region()
     const stored = await this.store.trae(region)
     if (stored === undefined) {
       throw new Error(`${traeLabel(region)}尚未登录。请在设置页点「打开浏览器登录」。`)
     }
-    if (force) {
-      throw new Error(`${traeLabel(region)}登录已失效，请在设置页重新登录。`)
+    const { token, session } = traeExpiries(stored)
+    const expired = token !== undefined && token <= Date.now() + TRAE_EXPIRY_MARGIN_MS
+    if (!force && !expired) return stored.accessToken
+    if (stored.cookies === undefined) {
+      throw new Error(`${traeLabel(region)}登录已${force ? '失效' : '过期'}，请在设置页重新登录。`)
     }
-    if (stored.expiresAt !== undefined && stored.expiresAt <= Date.now() + TRAE_EXPIRY_MARGIN_MS) {
-      throw new Error(`${traeLabel(region)}登录已过期，请在设置页重新登录。`)
+    if (session !== undefined && session <= Date.now() + TRAE_EXPIRY_MARGIN_MS) {
+      throw new Error(`${traeLabel(region)}网页会话已过期，请重新登录。`)
     }
-    return stored.accessToken
+    return this.refresh(region)
+  }
+
+  /** Renew the eight-hour JWT with the stored website cookies. */
+  private async refresh(region: TraeRegion): Promise<string> {
+    const existing = this.inflight.get(region)
+    if (existing !== undefined) return existing
+    const task = (async () => {
+      const stored = await this.store.trae(region)
+      if (stored === undefined || stored.cookies === undefined) {
+        throw new Error(`${traeLabel(region)}登录已失效，请在设置页重新登录。`)
+      }
+      const profile = TRAE_REGION_PROFILES[region]
+      let response: Response
+      try {
+        response = await this.fetchImpl(`${profile.apiBase}/cloudide/api/v3/common/GetUserToken`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            accept: 'application/json',
+            cookie: stored.cookies,
+            origin: profile.webOrigin,
+            referer: `${profile.webOrigin}/`,
+            'user-agent': TRAE_WEB_USER_AGENT,
+          },
+          body: '{}',
+          signal: AbortSignal.timeout(15_000),
+        })
+      } catch (error) {
+        const message = `Trae 令牌续期失败：${error instanceof Error ? error.message : String(error)}`
+        this.lastError = message
+        throw new Error(message)
+      }
+      if (!response.ok) {
+        const message = response.status === 401 || response.status === 403
+          ? `${traeLabel(region)}网页会话已失效，请重新登录。`
+          : `Trae 令牌续期失败：${await responseError(response)}`
+        this.lastError = message
+        throw new Error(message)
+      }
+      const payload: unknown = await response.json().catch(() => undefined)
+      const token = traeTokenOf(payload)
+      if (token === undefined) {
+        const message = 'Trae 令牌续期失败：响应里没有令牌。'
+        this.lastError = message
+        throw new Error(message)
+      }
+      const sessionExpiresAt = traeSessionExpiryOf(payload) ?? stored.sessionExpiresAt
+      const expiresAt = decodeJwtFacts(token).expiresAt ?? sessionExpiresAt
+      const headers = response.headers as Headers & { getSetCookie?: () => string[] }
+      const setCookies = headers.getSetCookie?.() ?? []
+      const cookies = setCookies.length === 0 ? stored.cookies : mergeSetCookies(stored.cookies, setCookies)
+      await this.store.saveTrae({
+        ...stored,
+        accessToken: token,
+        cookies,
+        ...expiresAt === undefined ? {} : { expiresAt },
+        ...sessionExpiresAt === undefined ? {} : { sessionExpiresAt },
+      })
+      this.lastError = undefined
+      return token
+    })()
+    this.inflight.set(region, task)
+    try {
+      return await task
+    } finally {
+      this.inflight.delete(region)
+    }
   }
 
   /** The fingerprints captured from the web session, replayed on every call. */
@@ -264,7 +418,16 @@ export class TraeAuth {
   }
 
   async logout(): Promise<void> {
-    await this.store.clear('trae', this.region())
+    const region = this.region()
+    const running = this.inflight.get(region)
+    if (running !== undefined) {
+      // Let a renewal finish before deleting the record, or it would write the
+      // account back after the sign-out.
+      await running.catch(() => undefined)
+    }
+    this.inflight.delete(region)
+    this.lastError = undefined
+    await this.store.clear('trae', region)
   }
 }
 

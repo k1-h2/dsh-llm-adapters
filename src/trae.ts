@@ -23,6 +23,8 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto'
+import { rmSync } from 'node:fs'
+import { join } from 'node:path'
 import type { GenerateOptions, StreamChunk, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { AccountStore } from './account-store.ts'
 import { TraeAuth } from './auth.ts'
@@ -216,6 +218,16 @@ export function checkinDeviceId(deviceId: string): string {
   // 1e15..1e16-1 keeps exactly 16 digits and never starts with 0.
   const value = BigInt(`0x${hex.slice(0, 16)}`) % 9_000_000_000_000_000n + 1_000_000_000_000_000n
   return value.toString()
+}
+
+/**
+ * The persistent browser profile used for one region.
+ *
+ * Reusing it keeps Trae's device fingerprint stable across sign-ins, so a
+ * re-login does not look like a brand-new device to its risk checks.
+ */
+export function traeBrowserProfileDir(store: AccountStore, region: TraeRegion): string {
+  return join(store.directory(), 'trae-browser', region)
 }
 
 /** Map one upstream effort name to our id, dropping names we do not know. */
@@ -870,7 +882,9 @@ export function parseTraePlan(payload: unknown): QuotaSnapshot {
 
 export function parseTraeCheckin(payload: unknown): CheckinStatus {
   const root = record(payload) ?? {}
-  const reward = (num(root.credits) ?? 0) + (num(root.extra_credits) ?? 0)
+  // `extra_credits` is a campaign bonus the site does not add to the daily
+  // reward; summing it made the card promise 200 when the check-in pays 100.
+  const reward = num(root.credits) ?? 0
   return {
     available: root.enable !== false,
     claimed: root.checked_in === true,
@@ -1228,6 +1242,7 @@ export class TraeProvider {
     const target = region ?? this.options.region()
     const flow = new TraeWebLogin({
       region: target,
+      profileDir: traeBrowserProfileDir(this.options.store, target),
       ...this.options.loginTimeoutMs === undefined ? {} : { timeoutMs: this.options.loginTimeoutMs },
       ...this.options.logger === undefined ? {} : { logger: this.options.logger },
       save: async (account: TraeLoginAccount) => {
@@ -1240,6 +1255,8 @@ export class TraeProvider {
           ...account.userId === undefined ? {} : { userId: account.userId },
           ...account.name === undefined ? {} : { name: account.name },
           ...account.expiresAt === undefined ? {} : { expiresAt: account.expiresAt },
+          ...account.cookies === undefined ? {} : { cookies: account.cookies },
+          ...account.sessionExpiresAt === undefined ? {} : { sessionExpiresAt: account.sessionExpiresAt },
         })
         this.invalidateModels()
         this.invalidateQuota()
@@ -1258,9 +1275,23 @@ export class TraeProvider {
   }
 
   async logoutAccount(): Promise<void> {
+    const region = this.options.region()
+    await this.loginFlow?.cancel()
     await this.options.auth.logout()
     this.invalidateModels()
     this.invalidateQuota()
+    try {
+      // The persistent profile still holds the website cookies; leaving it
+      // behind would let the next sign-in silently restore the same account.
+      rmSync(traeBrowserProfileDir(this.options.store, region), {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 100,
+      })
+    } catch {
+      /* a still-running browser keeps a lock; the session is already gone */
+    }
   }
 
   close(): void {

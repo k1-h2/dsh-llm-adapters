@@ -54,8 +54,17 @@ export interface TraeAccountRecord {
   userId?: string
   name?: string
   loginAt: number
-  /** Absent when the login response carried no expiry; treat as signed in. */
+  /** The `Cloud-IDE-JWT` expiry (about 8 hours); absent when the JWT carries none. */
   expiresAt?: number
+  /**
+   * Cookies captured from the sign-in browser.
+   *
+   * `GetUserToken` accepts these instead of a password, so the short-lived JWT
+   * can be renewed silently until the web session itself expires.
+   */
+  cookies?: string
+  /** The website session's expiry, read from the login response (about 14 days). */
+  sessionExpiresAt?: number
 }
 
 /**
@@ -138,6 +147,8 @@ function traeRecord(value: unknown, region: TraeRegion): TraeAccountRecord | und
     ...text(raw.userId) === undefined ? {} : { userId: text(raw.userId)! },
     ...text(raw.name) === undefined ? {} : { name: text(raw.name)! },
     ...number(raw.expiresAt) === undefined ? {} : { expiresAt: number(raw.expiresAt)! },
+    ...text(raw.cookies) === undefined ? {} : { cookies: text(raw.cookies)! },
+    ...number(raw.sessionExpiresAt) === undefined ? {} : { sessionExpiresAt: number(raw.sessionExpiresAt)! },
   }
 }
 

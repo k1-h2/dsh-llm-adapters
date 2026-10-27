@@ -98,16 +98,18 @@ Trae 没有可以自建的二维码链路：设备指纹必须来自一次真实
 而是**自己启动一个浏览器**：
 
 1. 找一个本机 Chromium 系浏览器（`DSH_TRAE_BROWSER` 可指定），用
-   `--remote-debugging-port=0 --user-data-dir=<临时目录>` 启动，打开 `www.trae.cn` 或
-   `www.trae.ai`。临时配置目录与用户自己的浏览器完全隔离。
+   `--remote-debugging-port=0 --user-data-dir=<插件数据目录>/trae-browser/<region>` 启动，
+   打开 `www.trae.cn` 或 `www.trae.ai`。配置目录与用户自己的浏览器隔离，但**跨登录保留**，
+   让同一区域始终复用同一设备指纹；启动参数还关掉了 `AutomationControlled` 特征。
 2. 读 `DevToolsActivePort` 得到调试端口，`/json/list` 找到页面，用 WebSocket 连 CDP。
 3. 每 2 秒 `Network.getAllCookies` 拼 `Cookie` 头，回放给 `CheckLogin`；登录后
    `common/GetUserToken` 换 `Cloud-IDE-JWT`，`trae/GetUserInfo` 取账号信息。
 4. 设备指纹取自该会话的 `localStorage.__msuuid__`（没有时 `msid`，再没有就生成一个并留在
-   页面里）；`machineId = sha256("trae-web-machine\0" + deviceId)`。这两项和令牌一起写入
-   账号记录，之后每次请求都原样重放。
-5. 5 分钟超时；成功后关闭窗口、删除临时目录。取消与插件卸载同样走清理路径（Windows 上用
-   `taskkill /T /F` 杀掉进程树）。
+   页面里）；`machineId = sha256("trae-web-machine\0" + deviceId)`。这两项、JWT、网页
+   cookie 与网页会话到期时间一起写入账号记录。JWT 约 8 小时，网页会话约 14 天。
+5. 5 分钟超时；成功后关闭窗口但保留配置目录。取消、失败与插件卸载同样走清理路径（Windows
+   上用 `taskkill /T /F` 杀掉进程树）。退出登录会删除该区域的配置目录，避免下次登录被
+   浏览器 cookie 自动接回。
 
 两条目录来源合并成一份模型表（`mergeTraeModels`）：**只考虑客户端主通道**
 （`TRAE_PRIMARY_FUNCTIONS` = `solo_work_remote` / `solo_work_lite`）里的远端行，并且每一行都
@@ -329,8 +331,10 @@ Raccoon 的思考控制有两条通道，都要发：`extra_body.thinking.type =
 - Loomy：登录时声明 14 天有效期并把到期时间存进记录；过期后状态变为未登录，提示重新扫码。
 - 小浣熊：扫码得到的 access token 若是 JWT，按 `exp` 判断；没有 JWT 声明的不透明令牌按
   已登录处理，等网关 401 再提示重新扫码。两者都没有刷新流程。
-- Trae：一个区域一条记录（`trae.cn` / `trae.global`），带令牌、设备指纹与登录时间；JWT 的
-  `exp` 只用于提前提示过期。退出登录只清当前区域。
+- Trae：一个区域一条记录（`trae.cn` / `trae.global`），带令牌、设备指纹、登录时间、登录时
+  捕获的网页 cookie 与网页会话到期时间。JWT 的 `exp` 约 8 小时，到期前 5 分钟用 cookie 调
+  `common/GetUserToken` 自动续期；续期失败才提示重新登录。退出登录清当前区域并删除该区域的
+  浏览器配置目录。
 - CodeArts：AK/SK + STS 安全令牌，外加续期所需的 refresh token、PKCE verifier 与 DPoP 私钥。
   到期前 5 分钟自动续期，续期结果写回同一条记录；续期令牌失效才需要重新授权。
 

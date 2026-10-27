@@ -91,7 +91,7 @@ window.__ModuleLoader__.load({
       browserHintLoomy: '会打开一个本地登录页：用微信扫码登录 Loomy；首次使用的微信账号需要在页面里绑定手机号。',
       browserHintRaccoon: '会打开一个本地登录页：用微信扫码登录小浣熊，扫码确认后插件会自动接回。',
       loomyHint: 'Loomy 会话约 14 天有效，且没有刷新令牌；过期后再点“打开扫码登录”即可。',
-      raccoonHint: '小浣熊扫码登录的令牌约 30 天有效，到期后重新扫码即可。',
+      raccoonHint: '小浣熊扫码登录的令牌约 30 天有效；每日积分在网页当天首次加载时发放，插件会尝试代领，未到账时可点「打开网页签到」。',
       loginLogout: '退出登录',
       loginConfirmLogout: '确定要退出当前账号吗？',
       loginFailedPrefix: '登录失败',
@@ -118,7 +118,7 @@ window.__ModuleLoader__.load({
       traeNav: 'Trae',
       traeTitle: 'Trae',
       traeIntro: '先选国内版或国际版，再点“打开浏览器登录”在 Trae 官网登录。设备指纹由这次网页登录生成，不需要安装桌面客户端。改动即时生效，无需重启。',
-      traeHint: 'Trae 的令牌来自网页登录；过期后重新登录即可。国内版每天可签到领积分，国际版没有签到活动。',
+      traeHint: 'Trae 的网页令牌只有约 8 小时，插件会用登录时拿到的网页会话自动续期；网页会话失效后才需重新登录。国内版每天可签到领积分，国际版没有签到活动。',
       traeLoginMissing: 'Trae 尚未登录。请点“打开浏览器登录”。',
       regionLabel: '区域',
       regionCn: '国内版 · trae.cn',
@@ -131,6 +131,8 @@ window.__ModuleLoader__.load({
       checkinClaimed: '今日已签到',
       checkinDevice: '本机今日已签到',
       checkinReward: '可得',
+      checkinReceived: '已到账',
+      checkinOpenWeb: '打开网页签到',
       checkinFailed: '签到失败',
       checkinUnavailable: '当前账号没有可用的签到活动',
       plan: '套餐',
@@ -144,12 +146,12 @@ window.__ModuleLoader__.load({
       packDetail: '详细信息',
       packCollapse: '收起',
       usedOf: '已用',
-      browserHintTrae: '点下面的按钮会打开一个独立的浏览器窗口（不会动你自己的浏览器配置）：在其中登录 Trae，登录成功后窗口会自动关闭。',
+      browserHintTrae: '点下面的按钮会打开一个独立的浏览器窗口（不会动你自己的浏览器配置）：在其中登录 Trae，登录成功后窗口会自动关闭。国际版若提示 account is at risk，请点 Log in 用你平时能登录的同一个账号（Google/GitHub）进入，不要用新邮箱重新注册；独立配置首次登录会被 Trae 当成新设备。',
       browserPollingTrae: '浏览器已打开：请在窗口里登录 Trae，成功后会自动接回，这个窗口随后会关闭。',
       browserTitleTrae: '浏览器登录',
       browserOpenTrae: '打开浏览器登录',
       browserWaitingTrae: '等待登录…',
-      loginGuideTrae: '点“打开浏览器登录”，在弹出的窗口里登录 Trae 即可；登录成功后会自动接回。',
+      loginGuideTrae: '点“打开浏览器登录”，在弹出的窗口里登录 Trae 即可；登录成功后会自动接回。国际版请用 Log in 登录已有账号，不要新建邮箱账号，否则容易触发 account is at risk。',
       modelsEmptyTrae: '账号没有返回任何 Trae 模型。请确认账号已登录，然后点“重新读取登录态”。',
       codeartsNav: '华为云 CodeArts',
       codeartsTitle: '华为云 CodeArts',
@@ -242,7 +244,7 @@ window.__ModuleLoader__.load({
       browserHintLoomy: 'A local sign-in page opens: scan it in WeChat to sign in to Loomy. A WeChat account using Loomy for the first time must bind a phone number on that page.',
       browserHintRaccoon: 'A local sign-in page opens: scan it in WeChat to sign in to Raccoon, and the plugin adopts the login once you confirm.',
       loomyHint: 'A Loomy session lasts about 14 days and has no refresh token; use “Open QR sign-in” again when it expires.',
-      raccoonHint: 'A Raccoon QR login lasts about 30 days; scan again when it expires.',
+      raccoonHint: 'A Raccoon QR login lasts about 30 days. Daily points are issued on the first web visit of the day; the plugin tries to collect them, and “Open check-in page” is the fallback.',
       loginLogout: 'Sign out',
       loginConfirmLogout: 'Sign out of this account?',
       loginFailedPrefix: 'Sign-in failed',
@@ -269,7 +271,7 @@ window.__ModuleLoader__.load({
       traeNav: 'Trae',
       traeTitle: 'Trae',
       traeIntro: 'Pick the mainland or international edition, then use “Open browser sign-in” to sign in on Trae’s website. The device fingerprint comes from that web session, so no desktop client is needed. Changes apply immediately.',
-      traeHint: 'Trae tokens come from the web sign-in; sign in again when one expires. The mainland edition offers a daily check-in for credits; the international edition has none.',
+      traeHint: 'Trae’s web token lasts about 8 hours; the plugin renews it with the website session captured at sign-in, so you only sign in again when that session dies. The mainland edition offers daily check-in credits; the international edition has none.',
       traeLoginMissing: 'Trae is not signed in. Use “Open browser sign-in”.',
       regionLabel: 'Region',
       regionCn: 'Mainland · trae.cn',
@@ -282,6 +284,8 @@ window.__ModuleLoader__.load({
       checkinClaimed: 'Already checked in today',
       checkinDevice: 'This device checked in today',
       checkinReward: 'reward',
+      checkinReceived: 'received',
+      checkinOpenWeb: 'Open check-in page',
       checkinFailed: 'Check-in failed',
       checkinUnavailable: 'No check-in available for this account',
       plan: 'Plan',
@@ -295,12 +299,12 @@ window.__ModuleLoader__.load({
       packDetail: 'Details',
       packCollapse: 'Collapse',
       usedOf: 'used',
-      browserHintTrae: 'The button opens a dedicated browser window (your own browser profile is untouched): sign in to Trae there and the window closes itself.',
+      browserHintTrae: 'The button opens a dedicated browser window (your own browser profile is untouched): sign in to Trae there and the window closes itself. If the international edition says “account is at risk”, use Log in with the same Google/GitHub account that works in your normal browser — do not create another email account; a fresh profile looks like a new device to Trae.',
       browserPollingTrae: 'The browser is open: sign in to Trae in that window; the login is adopted automatically and the window then closes.',
       browserTitleTrae: 'Browser sign-in',
       browserOpenTrae: 'Open browser sign-in',
       browserWaitingTrae: 'Waiting for sign-in…',
-      loginGuideTrae: 'Use “Open browser sign-in” and sign in to Trae in the window that opens; the login is adopted automatically.',
+      loginGuideTrae: 'Use “Open browser sign-in” and sign in to Trae in the window that opens; the login is adopted automatically. On the international edition, use Log in with your existing account instead of creating a new email account, which often triggers account is at risk.',
       modelsEmptyTrae: 'Trae returned no models. Confirm the account is signed in, then re-read the login state.',
       codeartsNav: 'Huawei CodeArts',
       codeartsTitle: 'Huawei CodeArts',
@@ -845,7 +849,9 @@ window.__ModuleLoader__.load({
       // Trae CN grants one reward per account per day, but its device flag can
       // also block the claim; the two reasons are shown apart so "本机已签"
       // never reads as "this account already claimed".
-      const checkin = brand.id === 'trae' || brand.id === 'codearts' ? status?.checkin : undefined
+      const checkin = brand.id === 'trae' || brand.id === 'codearts' || brand.id === 'raccoon'
+        ? status?.checkin
+        : undefined
       const checkinBlocked = checkin === undefined
         || checkin.available === false
         || checkin.claimed === true
@@ -856,6 +862,18 @@ window.__ModuleLoader__.load({
       // A failed activity read is shown rather than hidden: hiding it is what
       // makes "no check-in" and "check-in broken" look the same. Trae keeps the
       // old behaviour, because its international edition has no activity at all.
+      const checkinNote = checkin === undefined
+        ? undefined
+        : checkin.available === false
+          ? checkin.message ?? t('checkinUnavailable')
+          : brand.id === 'raccoon' && checkin.claimed === false
+            ? checkin.message
+            : undefined
+      const rewardNote = checkin === undefined || checkin.reward === undefined
+        || checkin.deviceClaimed === true
+        ? null
+        : h('span', { style: css.note },
+            `${checkin.claimed === true ? t('checkinReceived') : t('checkinReward')} +${creditsOf(checkin.reward)} ${t('points')}`)
       const checkinPanel = signedIn && checkin !== undefined
         && (checkin.available !== false || brand.id === 'codearts')
         ? h('div', { style: css.bar },
@@ -864,11 +882,16 @@ window.__ModuleLoader__.load({
               disabled: checkinBlocked || checkinBusy || actionBusy,
               onClick: () => void claimCheckin(),
             }, checkinBusy ? t('checkinBusy') : checkinLabel),
-            checkin.available === false
-              ? h('span', { style: css.note }, checkin.message ?? t('checkinUnavailable'))
-              : checkin.reward === undefined || checkin.claimed === true || checkin.deviceClaimed === true
-                ? null
-                : h('span', { style: css.note }, `${t('checkinReward')} +${creditsOf(checkin.reward)} ${t('points')}`),
+            checkinNote === undefined ? null : h('span', { style: css.note }, checkinNote),
+            rewardNote,
+            typeof checkin.url === 'string' && checkin.url !== ''
+              ? h('a', {
+                  href: checkin.url,
+                  target: '_blank',
+                  rel: 'noreferrer',
+                  style: css.link,
+                }, t('checkinOpenWeb'))
+              : null,
           )
         : null
 
