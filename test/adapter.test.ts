@@ -255,6 +255,19 @@ describe('context window choices', () => {
     // The reference's half-step between a 200K default and a 1M Max.
     expect(rows[0]!.contextWindows).toContain(500_000)
   })
+
+  it('never lists two sizes that print as the same label', async () => {
+    const wide: ProviderModel = {
+      id: 'big-model', name: 'Big', contextWindow: 1_048_576,
+      vision: false, reasoning: false,
+    }
+    const { adapter } = makeAdapter({ models: async () => [wide] })
+    const rows = await buildRows(adapter)
+    expect(rows[0]!.contextWindows).toContain(1_048_576)
+    // 1,000,000 is also "1M" in the menu; the automatic step is dropped.
+    expect(rows[0]!.contextWindows).not.toContain(1_000_000)
+    expect(rows[0]!.contextWindows).toContain(500_000)
+  })
 })
 
 describe('settings API', () => {

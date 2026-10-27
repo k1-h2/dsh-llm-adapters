@@ -50,16 +50,18 @@ import { ProviderHttpError, buildMessages, buildTools, consumeOpenAiStream } fro
 import type { ReadImage } from './wire.ts'
 
 /**
- * Levels the gateway really has: thinking is a single on/off switch.
+ * Levels the gateway accepts, plus the two-state switch this route started with.
  *
- * `reasoning_effort` exists and is validated per model (deepseek accepts
- * `none|low|medium|high|xhigh|max`, glm-5.3 rejects `none` outright), but it
- * does not move the answer: on a proof prompt `deepseek-v4.1-flash` spent 388
- * reasoning tokens on `none`, 480 on `low`, 515 on `max` and 595 with the field
- * omitted, and `glm-5.3` spent 709 on `max` against 670 omitted. Only
- * `thinking: { type: 'disabled' }` is honoured — it drops reasoning to 0.
+ * `reasoning_effort` is validated per model (deepseek accepts
+ * `none|low|medium|high|xhigh|max`, glm-5.3 rejects `none` outright), and the
+ * IDE's own client offers the levels, so they are forwarded as-is. Whether a
+ * level changes the answer is up to the model: on a proof prompt
+ * `deepseek-v4.1-flash` spent 388 reasoning tokens on `none`, 480 on `low`,
+ * 515 on `max` and 595 with the field omitted. `off` (and a legacy `none`)
+ * keeps using the one switch that definitely works, `thinking: disabled`;
+ * `on` is the old default and sends neither field.
  */
-export const CODEARTS_EFFORTS: readonly string[] = ['off', 'on']
+export const CODEARTS_EFFORTS: readonly string[] = ['off', 'on', 'low', 'medium', 'high', 'xhigh', 'max']
 export const CODEARTS_DEFAULT_EFFORT = 'on'
 
 export interface CodeArtsProviderOptions {
@@ -603,7 +605,12 @@ export class CodeArtsProvider {
   ): AsyncGenerator<StreamChunk> {
     const messages = await buildMessages(options, readImage)
     const tools = buildTools(options)
-    const thinkingOff = options.reasoningEffort === 'off' || options.reasoningEffort === 'none'
+    const effort = options.reasoningEffort
+    const thinkingOff = effort === 'off' || effort === 'none'
+    // `on` is the historical two-state default and sends nothing; every
+    // remaining level is forwarded. `none` stays mapped to the hard switch
+    // because glm-5.3 rejects it as a `reasoning_effort` value.
+    const wireEffort = effort === undefined || thinkingOff || effort === 'on' ? undefined : effort
     const chatId = randomUUID()
     const body = {
       model,
@@ -613,12 +620,10 @@ export class CodeArtsProvider {
       prompt_cache_key: this.sessionId,
       include: ['reasoning.encrypted_content'],
       reasoning_summary: 'auto',
-      // The gateway's own switch is `thinking`, not `reasoning_effort`: the
-      // levels are a single on/off pair, and `enabled` is the default, so the
-      // field is only sent when the user turns thinking off. Sending
-      // `reasoning_effort` instead is not an option — it is validated per model
-      // (glm-5.3 rejects `none`) and does not change how long the model thinks.
+      // `thinking` is the switch that always works; `reasoning_effort` carries
+      // the level the upstream validates per model.
       ...thinkingOff ? { thinking: { type: 'disabled' } } : {},
+      ...wireEffort === undefined ? {} : { reasoning_effort: wireEffort },
       // Streams oversized tool arguments in fragments; without it a big file
       // write arrives as one event the gateway cuts off.
       tool_stream: true,

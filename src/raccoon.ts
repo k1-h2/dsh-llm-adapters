@@ -66,6 +66,17 @@ function messageOf(payload: unknown): string | undefined {
   return typeof record.message === 'string' && record.message.length > 0 ? record.message : undefined
 }
 
+function epochOf(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return value < 1e12 ? value * 1_000 : value
+  }
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value)
+    return Number.isFinite(parsed) ? parsed : undefined
+  }
+  return undefined
+}
+
 /** The date label Raccoon uses for the daily grant (Beijing time). */
 function raccoonDay(value: string | number | Date): string {
   return new Intl.DateTimeFormat('en-CA', {
@@ -144,6 +155,7 @@ export class RaccoonProvider {
   readonly catalog: ModelCatalog
   private quotaCache: { at: number, value: QuotaSnapshot } | undefined
   private quotaInflight: Promise<QuotaSnapshot> | undefined
+  private checkinInflight: Promise<CheckinStatus> | undefined
   private loginFlow: RaccoonQrLogin | undefined
   private readonly openRouter: OpenRouterLookup
 
@@ -319,7 +331,7 @@ export class RaccoonProvider {
    * by the server on the first authenticated web visit and announced through
    * `point_grant_popups` on `setting_info`; the bills list is the durable proof.
    */
-  private async dailyGrant(): Promise<{ points?: number } | undefined> {
+  private async dailyGrant(): Promise<{ points?: number, grantedAt?: number } | undefined> {
     const payload = await this.authorizedJson<unknown>('/points/v2/bills?paging.limit=50&type=all')
     const root = record(payload) ?? {}
     if (typeof root.code === 'number' && root.code !== 0) {
@@ -331,17 +343,24 @@ export class RaccoonProvider {
     for (const raw of items) {
       const item = record(raw)
       if (item?.biz_type !== 'daily_grant') continue
-      const stamp = item.grant_at ?? item.created_at
-      if (typeof stamp !== 'string' && typeof stamp !== 'number') continue
-      let day: string
+      // `grant_at` is the day the points belong to; `created_at` is when the
+      // server actually issued them. Both have to name today, so a grant made
+      // yesterday for yesterday can never be reported as today's.
+      const day = item.grant_at ?? item.created_at
+      if (typeof day !== 'string' && typeof day !== 'number') continue
+      let label: string
       try {
-        day = raccoonDay(stamp)
+        label = raccoonDay(day)
       } catch {
         continue
       }
-      if (day !== today) continue
+      if (label !== today) continue
+      const issued = epochOf(item.created_at) ?? epochOf(item.grant_at)
       const points = numeric(item.points)
-      return points === undefined ? {} : { points }
+      return {
+        ...points === undefined ? {} : { points },
+        ...issued === undefined ? {} : { grantedAt: issued },
+      }
     }
     return undefined
   }
@@ -354,7 +373,9 @@ export class RaccoonProvider {
         claimed: true,
         deviceClaimed: false,
         ...grant.points === undefined ? {} : { reward: grant.points },
+        ...grant.grantedAt === undefined ? {} : { grantedAt: grant.grantedAt },
         message: '今日每日积分已到账',
+        url: RACCOON_CHECKIN_URL,
       }
     }
     return {
@@ -390,7 +411,26 @@ export class RaccoonProvider {
       claimed: true,
       deviceClaimed: false,
       ...grant.points === undefined ? {} : { reward: grant.points },
+      ...grant.grantedAt === undefined ? {} : { grantedAt: grant.grantedAt },
       message: '每日积分已到账',
+      url: RACCOON_CHECKIN_URL,
+    }
+  }
+
+  /**
+   * One automatic check-in pass: report today's grant, or ask the website path
+   * to issue it. Shared so overlapping timers cannot spend two call slots.
+   */
+  async ensureDailyCheckin(): Promise<CheckinStatus> {
+    if (this.checkinInflight !== undefined) return this.checkinInflight
+    this.checkinInflight = (async () => {
+      const status = await this.checkinStatus()
+      return status.claimed ? status : this.claimCheckin()
+    })()
+    try {
+      return await this.checkinInflight
+    } finally {
+      this.checkinInflight = undefined
     }
   }
 

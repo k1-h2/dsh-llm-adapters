@@ -49,6 +49,8 @@ export interface Config {
   catalogFetchTimeoutSeconds?: number
   /** Minutes between automatic OpenRouter syncs; 0 disables the schedule. */
   openRouterSyncMinutes?: number
+  /** Minutes between Raccoon daily-point checks; 0 disables the monitor. */
+  raccoonCheckinMinutes?: number
 }
 
 export const Config = z.object({
@@ -89,6 +91,7 @@ export const Config = z.object({
   modelCacheTtlSeconds: z.number().step(1).min(10).max(86_400).default(120).description('模型列表缓存时长（秒）。调小可更快看到账号侧变化。').volatile(),
   catalogFetchTimeoutSeconds: z.number().step(1).min(1).max(300).default(20).description('读取模型目录、额度等请求的时限（秒）。').volatile(),
   openRouterSyncMinutes: z.number().step(1).min(0).max(43_200).default(60).description('OpenRouter 模型元数据的自动同步间隔（分钟）。0 表示关闭自动同步；缓存保存在本机，连不上时继续使用上次成功同步的数据。').volatile(),
+  raccoonCheckinMinutes: z.number().step(1).min(0).max(1_440).default(30).description('小浣熊每日积分自动监测间隔（分钟）：到点核对积分流水，未到账时按网页方式尝试触发。0 表示关闭自动监测；「打开网页签到」入口始终保留。').volatile(),
 })
 
 export interface ResolvedConfig {
@@ -125,6 +128,7 @@ export interface ResolvedConfig {
   modelCacheTtlMs: number
   catalogFetchTimeoutMs: number
   openRouterSyncMinutes: number
+  raccoonCheckinMinutes: number
 }
 
 export type ParsedConfig = { readonly [K in keyof Config]?: unknown }
@@ -171,6 +175,7 @@ export function liveConfig(config: ParsedConfig | undefined): LiveConfig {
     modelCacheTtlMs: () => positive(field('modelCacheTtlSeconds'), 120) * 1_000,
     catalogFetchTimeoutMs: () => positive(field('catalogFetchTimeoutSeconds'), 20) * 1_000,
     openRouterSyncMinutes: () => nonNegative(field('openRouterSyncMinutes'), 60),
+    raccoonCheckinMinutes: () => nonNegative(field('raccoonCheckinMinutes'), 30),
   }
 }
 
@@ -210,6 +215,7 @@ export function resolveConfig(config: ParsedConfig | undefined): ResolvedConfig 
     modelCacheTtlMs: live.modelCacheTtlMs(),
     catalogFetchTimeoutMs: live.catalogFetchTimeoutMs(),
     openRouterSyncMinutes: live.openRouterSyncMinutes(),
+    raccoonCheckinMinutes: live.raccoonCheckinMinutes(),
   }
 }
 

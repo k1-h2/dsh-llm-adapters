@@ -47,6 +47,8 @@ export interface CheckinStatus {
   claimed: boolean
   deviceClaimed: boolean
   reward?: number
+  /** When the reward was actually issued (epoch ms), so "today" is verifiable. */
+  grantedAt?: number
   message?: string
   /** A page the user can open when the provider has no claimable API. */
   url?: string

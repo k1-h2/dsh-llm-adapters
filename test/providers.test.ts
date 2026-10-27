@@ -220,11 +220,17 @@ describe('RaccoonProvider', () => {
 
   it('reads today\'s daily grant from the points bills', async () => {
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date())
+    const issued = `${today}T00:13:52+08:00`
     const fetchMock = vi.fn(async (url: string) => {
       expect(url).toContain('/points/v2/bills')
       return json({
         code: 0,
-        data: { items: [{ biz_type: 'daily_grant', points: 300, grant_at: `${today}T00:00:00+08:00` }] },
+        data: {
+          items: [{
+            biz_type: 'daily_grant', points: 300,
+            grant_at: `${today}T00:00:00+08:00`, created_at: issued,
+          }],
+        },
       })
     })
     const { provider } = make(fetchMock as unknown as typeof fetch)
@@ -232,8 +238,40 @@ describe('RaccoonProvider', () => {
       available: true,
       claimed: true,
       reward: 300,
+      grantedAt: Date.parse(issued),
       message: '今日每日积分已到账',
+      url: 'https://xiaohuanxiong.com/work/home',
     })
+  })
+
+  it('does not treat yesterday\'s grant as today\'s', async () => {
+    const fetchMock = vi.fn(async () => json({
+      code: 0,
+      data: { items: [{ biz_type: 'daily_grant', points: 300, grant_at: '2020-01-01T00:00:00+08:00' }] },
+    }))
+    const { provider } = make(fetchMock as unknown as typeof fetch)
+    expect(await provider.checkinStatus()).toMatchObject({
+      claimed: false,
+      url: 'https://xiaohuanxiong.com/work/home',
+    })
+  })
+
+  it('reuses an existing grant instead of calling the website again', async () => {
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date())
+    let settingCalls = 0
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith('/office/v3/setting_info')) {
+        settingCalls++
+        return json({ code: 0, data: {} })
+      }
+      return json({
+        code: 0,
+        data: { items: [{ biz_type: 'daily_grant', points: 300, grant_at: `${today}T00:00:00+08:00` }] },
+      })
+    })
+    const { provider } = make(fetchMock as unknown as typeof fetch)
+    expect(await provider.ensureDailyCheckin()).toMatchObject({ claimed: true, reward: 300 })
+    expect(settingCalls).toBe(0)
   })
 
   it('tries the web setting call before reporting a missing grant', async () => {
@@ -254,7 +292,11 @@ describe('RaccoonProvider', () => {
       throw new Error(`unexpected ${url}`)
     })
     const { provider } = make(fetchMock as unknown as typeof fetch)
-    expect(await provider.claimCheckin()).toMatchObject({ claimed: true, reward: 300 })
+    expect(await provider.claimCheckin()).toMatchObject({
+      claimed: true,
+      reward: 300,
+      url: 'https://xiaohuanxiong.com/work/home',
+    })
     expect(seen).toEqual({ setting: true, platform: 'web' })
   })
 

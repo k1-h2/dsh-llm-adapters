@@ -189,6 +189,14 @@ metadata”）。远端目录在多个分组里用不同大小写/显示名重�
 `checkinDeviceId()` 从网页设备号派生稳定的 16 位数字，仅用于 status / claim；聊天、额度仍用
 原设备号。缺 `x-device-id` 返回 `9004`，重复领取返回 `9095`。
 
+### 小浣熊的每日积分（`raccoon.ts`）
+
+没有独立的签到端点：积分由服务端在当天首次网页访问时发放，`setting_info` 的
+`point_grant_popups` 只是通知，`/points/v2/bills` 里 `biz_type=daily_grant` 的记录才是可核对的
+凭据。插件只把 `grant_at` 属于今天（北京时间）的记录算作今日签到，并把 `created_at` 作为到账时间
+显示；`ensureDailyCheckin()` 先读流水，未到账才以 web 身份调用 `setting_info`。宿主按
+`raccoonCheckinMinutes`（0 关闭）定时跑这一遍，卡片上的网页入口始终保留。
+
 ### CodeArts（`codearts-login.ts` + `codearts.ts`）
 
 CodeArts 是唯一不用 Bearer 令牌的供应商：华为 API 网关校验 `SDK-HMAC-SHA256`，所以每次请求都要
@@ -244,6 +252,11 @@ DeepSeek 官方文档写明 `deepseek-flash`（V4.1-Flash-1017）接受图片，
 留空。汇总行同时给出 `package_credit_amount` / `package_credit_used` / `package_credit_remain`，
 前两项是卡片进度条唯一的「总额 + 已用」来源（缺汇总行时由分类行相加补出）。签到是三步（账户类型 →
 活动列表 → claim + confirm），只在积分计费账户上可用，`claimable=false` 且状态属已领取时才算「今天已领」。
+
+思考档位对每个模型声明 `off|on|low|medium|high|xhigh|max`。`off` 映射到 `thinking: disabled`
+（唯一实测能把 `reasoning_tokens` 压到 0 的开关）；`on` 是旧默认，两个字段都不发；其余档位原样写进
+`reasoning_effort`。网关按模型校验取值（`glm-5.3` 不接受 `none`），所以 `none` 只作为 `off` 的
+兼容别名，不作为独立档位暴露。
 
 账号名不在 STS 响应里（那里只有 AK/SK/安全令牌），而在**续期令牌**的 `user_profile` 声明中：再套
 一层 base64 的 JSON，含 `account_name` / `principal_id` / `account_id`。`readUserProfile` 解它，
