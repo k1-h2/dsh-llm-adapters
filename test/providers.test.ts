@@ -218,6 +218,59 @@ describe('RaccoonProvider', () => {
     })
   })
 
+  it('reads today\'s daily grant from the points bills', async () => {
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date())
+    const fetchMock = vi.fn(async (url: string) => {
+      expect(url).toContain('/points/v2/bills')
+      return json({
+        code: 0,
+        data: { items: [{ biz_type: 'daily_grant', points: 300, grant_at: `${today}T00:00:00+08:00` }] },
+      })
+    })
+    const { provider } = make(fetchMock as unknown as typeof fetch)
+    expect(await provider.checkinStatus()).toMatchObject({
+      available: true,
+      claimed: true,
+      reward: 300,
+      message: '今日每日积分已到账',
+    })
+  })
+
+  it('tries the web setting call before reporting a missing grant', async () => {
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date())
+    const seen: { setting: boolean, platform?: string } = { setting: false }
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      if (url.endsWith('/office/v3/setting_info')) {
+        seen.setting = true
+        seen.platform = (init.headers as Record<string, string>)['x-client-platform']
+        return json({ code: 0, data: { point_grant_popups: [] } })
+      }
+      if (url.includes('/points/v2/bills')) {
+        return json({
+          code: 0,
+          data: { items: [{ biz_type: 'daily_grant', points: 300, created_at: `${today}T00:13:00+08:00` }] },
+        })
+      }
+      throw new Error(`unexpected ${url}`)
+    })
+    const { provider } = make(fetchMock as unknown as typeof fetch)
+    expect(await provider.claimCheckin()).toMatchObject({ claimed: true, reward: 300 })
+    expect(seen).toEqual({ setting: true, platform: 'web' })
+  })
+
+  it('points at the web page when the grant did not arrive', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith('/office/v3/setting_info')) return json({ code: 0, data: {} })
+      if (url.includes('/points/v2/bills')) return json({ code: 0, data: { items: [] } })
+      throw new Error(`unexpected ${url}`)
+    })
+    const { provider } = make(fetchMock as unknown as typeof fetch)
+    expect(await provider.claimCheckin()).toMatchObject({
+      claimed: false,
+      url: 'https://xiaohuanxiong.com/work/home',
+    })
+  })
+
   it('maps the thinking switch and effort level onto the request body', async () => {
     const bodies: Record<string, unknown>[] = []
     const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {

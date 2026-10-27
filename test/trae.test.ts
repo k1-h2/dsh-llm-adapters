@@ -523,7 +523,7 @@ describe('Trae quota and check-in parsing', () => {
 
   it('keeps the account and device flags apart', () => {
     expect(parseTraeCheckin({ enable: true, checked_in: false, did_checked_in: true, credits: 10, extra_credits: 5 }))
-      .toEqual({ available: true, claimed: false, deviceClaimed: true, reward: 15 })
+      .toEqual({ available: true, claimed: false, deviceClaimed: true, reward: 10 })
     expect(parseTraeCheckin({ enable: false, checked_in: true }))
       .toMatchObject({ available: false, claimed: true, deviceClaimed: false })
   })
@@ -544,6 +544,11 @@ describe('TraeAuth', () => {
     loginAt: 1,
   }
 
+  function token(expiresAt: number): string {
+    const body = Buffer.from(JSON.stringify({ exp: Math.floor(expiresAt / 1000) })).toString('base64url')
+    return `header.${body}.signature`
+  }
+
   it('keeps one account per region and names the missing one', async () => {
     const { store, auth } = make('cn')
     await store.saveTrae(record)
@@ -560,6 +565,56 @@ describe('TraeAuth', () => {
     await store.saveTrae({ ...record, expiresAt: Date.now() - 1000 })
     expect(await auth.status()).toMatchObject({ signedIn: false, possiblyExpired: true })
     await expect(auth.accessToken()).rejects.toThrow('登录已过期')
+  })
+
+  it('uses the JWT expiry when an older record stored the website-session expiry', async () => {
+    const { store } = make('cn')
+    const jwtExpiresAt = Math.floor((Date.now() + 3600_000) / 1000) * 1000
+    const auth = new TraeAuth(store, () => 'cn')
+    await store.saveTrae({
+      ...record,
+      accessToken: token(jwtExpiresAt),
+      // The previous implementation wrote the 14-day session expiry here.
+      expiresAt: Date.now() + 14 * 24 * 3600_000,
+    })
+    const status = await auth.status()
+    expect(status).toMatchObject({ signedIn: true, expiresAt: jwtExpiresAt })
+  })
+
+  it('renews the short-lived token with the stored website cookies', async () => {
+    const { store } = make('cn')
+    const fresh = token(Date.now() + 8 * 3600_000)
+    const sessionExpiresAt = Date.now() + 14 * 24 * 3600_000
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(url).toContain('/cloudide/api/v3/common/GetUserToken')
+      expect((init?.headers as Record<string, string>).cookie).toBe('sid=abc')
+      return json({ Result: { Token: fresh, ExpiredAt: Math.floor(sessionExpiresAt / 1000) } })
+    })
+    const auth = new TraeAuth(store, () => 'cn', fetchImpl as unknown as typeof fetch)
+    await store.saveTrae({
+      ...record,
+      accessToken: token(Date.now() - 1000),
+      expiresAt: Date.now() - 1000,
+      cookies: 'sid=abc',
+      sessionExpiresAt,
+    })
+    expect(await auth.status()).toMatchObject({ signedIn: true, expiresAt: sessionExpiresAt })
+    await expect(auth.accessToken()).resolves.toBe(fresh)
+    expect(await store.trae('cn')).toMatchObject({ accessToken: fresh, cookies: 'sid=abc' })
+  })
+
+  it('asks for a new sign-in when the website session is gone', async () => {
+    const { store } = make('cn')
+    const fetchImpl = vi.fn(async () => new Response('{}', { status: 401 }))
+    const auth = new TraeAuth(store, () => 'cn', fetchImpl as unknown as typeof fetch)
+    await store.saveTrae({
+      ...record,
+      accessToken: token(Date.now() - 1000),
+      expiresAt: Date.now() - 1000,
+      cookies: 'sid=old',
+      sessionExpiresAt: Date.now() + 24 * 3600_000,
+    })
+    await expect(auth.accessToken()).rejects.toThrow('网页会话已失效')
   })
 
   it('signs out only the current region', async () => {

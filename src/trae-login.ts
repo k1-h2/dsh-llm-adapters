@@ -11,16 +11,16 @@
  *    the page), which Trae's check-in route requires and which therefore must
  *    belong to this web session rather than to a machine install.
  *
- * Cookies never leave this module: they are read over the DevTools protocol and
- * replayed host-side only to exchange them for a token. The temporary profile
- * is deleted when the flow ends.
+ * Cookies are captured over the DevTools protocol and kept in the plugin's own
+ * account store so the short-lived JWT can be renewed later; the dedicated
+ * browser profile stays on disk and is reused for subsequent sign-ins.
  *
  * @module dsh-llm-adapters/trae-login
  */
 
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { TraeRegion } from './brand.ts'
@@ -34,11 +34,16 @@ export interface TraeLoginAccount {
   machineId: string
   userId?: string
   name?: string
+  /** The JWT expiry, not the longer website-session expiry. */
   expiresAt?: number
+  cookies?: string
+  sessionExpiresAt?: number
 }
 
 export interface TraeWebLoginOptions {
   region: TraeRegion
+  /** Keep this profile across sign-ins so the device looks stable to Trae. */
+  profileDir?: string
   save(account: TraeLoginAccount): Promise<void>
   timeoutMs?: number
   logger?: (message: string) => void
@@ -314,6 +319,7 @@ export class TraeWebLogin {
   private signedIn = false
   private browser: ChildProcess | undefined
   private profile: string | undefined
+  private persistentProfile = false
   private cdp: CdpClient | undefined
   private timer: NodeJS.Timeout | undefined
   private deadline: NodeJS.Timeout | undefined
@@ -381,6 +387,7 @@ export class TraeWebLogin {
     this.closed = false
     this.polling = false
     this.failures = 0
+    this.persistentProfile = false
   }
 
   private async launch(): Promise<void> {
@@ -389,7 +396,9 @@ export class TraeWebLogin {
     if (executable === undefined) {
       throw new Error('没有找到 Chrome 或 Edge。请先安装其中一个浏览器后再登录。')
     }
-    const directory = mkdtempSync(join(tmpdir(), 'dsh-trae-login-'))
+    const directory = this.options.profileDir ?? mkdtempSync(join(tmpdir(), 'dsh-trae-login-'))
+    this.persistentProfile = this.options.profileDir !== undefined
+    if (this.persistentProfile) mkdirSync(directory, { recursive: true })
     this.profile = directory
     const child = spawn(executable, [
       '--remote-debugging-port=0',
@@ -398,6 +407,9 @@ export class TraeWebLogin {
       '--no-default-browser-check',
       '--disable-sync',
       '--disable-background-networking',
+      // A fresh automation-controlled profile is exactly what Trae's risk SDK
+      // flags; keep the ordinary browser fingerprint for this dedicated profile.
+      '--disable-blink-features=AutomationControlled',
       '--disable-features=Translate,MediaRouter',
       `${profile.webOrigin}/login?redirect_url=${encodeURIComponent(`${profile.webOrigin}/`)}`,
     ], { stdio: 'ignore' })
@@ -453,7 +465,10 @@ export class TraeWebLogin {
       const captured = await this.cdp.evaluate<string>(DEVICE_EXPRESSION).catch(() => '')
       const deviceId = text(captured) ?? randomUUID()
       const name = await this.readName(profile, cookie)
-      const expiresAt = epochMs(result.ExpiredAt) ?? jwtExpiry(token)
+      const sessionExpiresAt = epochMs(result.ExpiredAt)
+      // `ExpiredAt` is the website session (about 14 days); the JWT itself
+      // lasts about 8 hours and is the one every API call checks.
+      const expiresAt = jwtExpiry(token) ?? sessionExpiresAt
       await this.options.save({
         accessToken: token,
         deviceId,
@@ -461,6 +476,8 @@ export class TraeWebLogin {
         ...text(result.UserID) === undefined ? {} : { userId: text(result.UserID)! },
         ...name === undefined ? {} : { name },
         ...expiresAt === undefined ? {} : { expiresAt },
+        cookies: cookie,
+        ...sessionExpiresAt === undefined ? {} : { sessionExpiresAt },
       })
       this.signedIn = true
       this.settle('done', '登录成功，浏览器窗口会自动关闭。')
@@ -524,8 +541,10 @@ export class TraeWebLogin {
       }
     }
     const directory = this.profile
+    const persistent = this.persistentProfile
     this.profile = undefined
-    if (directory !== undefined) {
+    this.persistentProfile = false
+    if (directory !== undefined && !persistent) {
       const timer = setTimeout(() => {
         try {
           rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })

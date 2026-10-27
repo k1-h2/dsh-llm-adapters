@@ -48,6 +48,8 @@ export interface CheckinStatus {
   deviceClaimed: boolean
   reward?: number
   message?: string
+  /** A page the user can open when the provider has no claimable API. */
+  url?: string
 }
 
 export interface ProviderStatus extends AuthStatus {

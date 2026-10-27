@@ -187,8 +187,10 @@ describe('client bundle', () => {
   })
 
   it('keeps the Raccoon card free of the thinking-level note', () => {
-    expect(exports.__test.zh.raccoonHint).toBe('小浣熊扫码登录的令牌约 30 天有效，到期后重新扫码即可。')
-    expect(exports.__test.en.raccoonHint).toBe('A Raccoon QR login lasts about 30 days; scan again when it expires.')
+    expect(exports.__test.zh.raccoonHint).toContain('30 天')
+    expect(exports.__test.zh.raccoonHint).toContain('每日积分')
+    expect(exports.__test.en.raccoonHint).toContain('30 days')
+    expect(exports.__test.en.raccoonHint).toContain('Daily points')
   })
 
   it('renders the credit bar and the account name on the CodeArts card', () => {
@@ -230,5 +232,63 @@ describe('client bundle', () => {
     })
     expect(bars).toHaveLength(1)
     expect((bars[0]!.props.children?.[0] as Element).props.style).toMatchObject({ width: '1.5%' })
+  })
+
+  it('shows the Raccoon check-in panel and its web fallback', () => {
+    const tree = loadClient(TREE_REACT)
+    const { writeCache, AccountCard, zh } = tree.__test
+    writeCache('raccoon', 'status', {
+      signedIn: true,
+      loginAt: Date.now(),
+      quota: { total: 8029, available: 8029, at: Date.now() },
+      checkin: {
+        available: true,
+        claimed: false,
+        deviceClaimed: false,
+        message: '每日积分在当天首次打开网页时发放',
+        url: 'https://xiaohuanxiong.com/work/home',
+      },
+    })
+    const rendered = AccountCard({
+      t: (key: string) => (zh as Record<string, string>)[key] ?? key,
+      brand: { id: 'raccoon' },
+      region: 'cn',
+      onRegionChange: () => undefined,
+      reloadSignal: 0,
+      onStatus: () => undefined,
+      onAfterRefresh: () => undefined,
+    })
+    const text = textOf(rendered).join(' ')
+    expect(text).toContain('签到领积分')
+    expect(text).toContain('每日积分在当天首次打开网页时发放')
+    expect(text).toContain('打开网页签到')
+    const links: Element[] = []
+    walk(rendered, element => {
+      if (element.type === 'a') links.push(element)
+    })
+    expect(links.some(link => (link.props as { href?: string }).href === 'https://xiaohuanxiong.com/work/home')).toBe(true)
+  })
+
+  it('labels a received Raccoon grant as credited, not still pending', () => {
+    const tree = loadClient(TREE_REACT)
+    const { writeCache, AccountCard, zh } = tree.__test
+    writeCache('raccoon', 'status', {
+      signedIn: true,
+      loginAt: Date.now(),
+      quota: { total: 8329, available: 8329, at: Date.now() },
+      checkin: { available: true, claimed: true, deviceClaimed: false, reward: 300 },
+    })
+    const rendered = AccountCard({
+      t: (key: string) => (zh as Record<string, string>)[key] ?? key,
+      brand: { id: 'raccoon' },
+      region: 'cn',
+      onRegionChange: () => undefined,
+      reloadSignal: 0,
+      onStatus: () => undefined,
+      onAfterRefresh: () => undefined,
+    })
+    const text = textOf(rendered).join(' ')
+    expect(text).toContain('今日已签到')
+    expect(text).toContain('已到账 +300 积分')
   })
 })
