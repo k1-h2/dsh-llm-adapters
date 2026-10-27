@@ -403,6 +403,9 @@ npm test
 npm run build
 ```
 
+`lib/` 随源码一起提交：从 GitHub 直装（`github:k1-h2/dsh-llm-adapters`）时 pnpm 不会执行构建，
+没有 `lib/index.js` 的包会在启用时报 `ERR_MODULE_NOT_FOUND`。改完 `src/` 必须重新构建并提交产物。
+
 `vitest` 覆盖目录解析、登录页状态机、Loomy 长轮询与扫码绑定、小浣熊扫码轮询、Trae 两份目录
 的合并与档位映射、CodeArts 的签名 / PKCE-DPoP / 双目录 / 倍率时段 / 额度 / 签到、SSE 与工具
 调用、凭据存储与并发、过期判定、设置 API。登录相关的测试全部注入假 `fetch`，不访问真实上游，
