@@ -56,6 +56,17 @@ export declare const CODEARTS_LOGIN_PLUGIN_VERSION = "5.2.0";
 /** The gateway rejects a larger `max_tokens`; 65 536 is the IDE's own cap. */
 export declare const CODEARTS_MAX_OUTPUT_TOKENS = 65536;
 /**
+ * `reasoning_effort` values the gateway validates, in the order the settings
+ * page shows them.
+ *
+ * `none` is deliberately absent: it is only the legacy spelling of `off`,
+ * which is sent as `thinking: disabled` instead, and `glm-5.3` rejects it as a
+ * level outright. OpenRouter's `supported_efforts` is intersected with this
+ * list, so an editor-only level (`minimal`) never reaches a model that would
+ * answer 4xx for it.
+ */
+export declare const CODEARTS_EFFORT_LEVELS: readonly string[];
+/**
  * Window used when a model is not in the table: the smallest one the catalogue
  * is known to publish (openpangu / sft-harmony). Erring small costs an early
  * compaction; erring large costs a rejected turn.

@@ -96,6 +96,31 @@ describe('LocalAdapter', () => {
     })
   })
 
+  it('matches a re-spelled id to the catalogue row it names', async () => {
+    // DSH hands back whatever the picker stored, and a display name or a changed
+    // hyphen used to miss the row entirely: the model then ran on the 200K
+    // fallback with no reasoning controls, whatever the upstream really offers.
+    const { adapter } = makeAdapter({
+      models: async () => [{
+        id: 'sn-kimi-k3', name: 'Kimi K3', contextWindow: 1_000_000, vision: false, reasoning: true,
+        reasoningEfforts: ['high', 'max'], defaultReasoningEffort: 'high',
+      }],
+    }, { brand: 'raccoon', provider: 'raccoon' })
+    const info = await adapter.resolveModel('raccoon', 'Kimi-K3')
+    expect(info.name).toBe('Kimi K3')
+    expect(info.context).toEqual({ contextWindow: 1_000_000 })
+    expect(info.reasoning?.efforts.map(effort => effort.id)).toEqual(['high', 'max'])
+  })
+
+  it('applies the stored window and the disable list across spellings', async () => {
+    const { adapter } = makeAdapter()
+    // The settings page writes the id the catalogue published; a hand-edited
+    // override or selection arrives with the display name instead.
+    const info = await adapter.resolveModel('loomy', 'Spark X')
+    expect(info.context).toEqual({ contextWindow: 500_000 })
+    expect(adapter.isModelDisabled('DeepSeek-V4-Flash-0731')).toBe(true)
+  })
+
   it('keeps a verified vision capability when the catalog read fails', async () => {
     let catalog: ProviderModel[] = models
     const { adapter } = makeAdapter({ models: async () => catalog })

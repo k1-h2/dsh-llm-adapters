@@ -87,8 +87,8 @@ CodeArts 走华为云 OAuth：浏览器里授权后，宿主拿到 AK/SK 与 STS
   其余括号内容转为标签；逐个启用 / 关闭，并可指定上下文窗口。Trae 会显示目录里的倍率
   （如 `x0.06`），上下文下拉同时提供默认窗口、500K 与上游声明的 Max 档（如 1M），同一标签的
   窗口只出现一次；CodeArts 同样显示倍率（如 `0.18x`，随峰谷时段变化），窗口取自 IDE 配置里的
-  实测值。CodeArts 的思考档位保留原来的 `On` / `Off`，并增加上游接受的
-  `Low` / `Medium` / `High` / `Xhigh` / `Max`；`Off` 仍直接关闭思考，`On` 不额外发送参数。
+  实测值。CodeArts 的思考档位保留原来的 `On` / `Off`，其余档位取 OpenRouter 实时表与网关可
+  接受取值的交集；`Off` 仍直接关闭思考，`On` 不额外发送参数。
   四个供应商共用同一套
   能力规则：OpenRouter 的实时表优先，匹配不到回退各自目录，两边都没有就全部开放；
   所以 DeepSeek V4.1 Flash 的菜单是 `None` / `Low` / `High` / `Max`（默认 `High`），`xhigh`

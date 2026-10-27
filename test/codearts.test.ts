@@ -2,14 +2,16 @@ import { describe, expect, it, vi } from 'vitest'
 import { createPublicKey, verify } from 'node:crypto'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import {
-  CODEARTS_EFFORTS, CodeArtsProvider, clampMaxTokens, normalizeCodeArtsModelId, parseCodeArtsPackage,
-  parseCodeArtsRoster, pickActiveCredit, priceFactorOfLabel,
+  CODEARTS_EFFORTS, CodeArtsProvider, clampMaxTokens, codeartsEfforts, normalizeCodeArtsModelId,
+  parseCodeArtsPackage, parseCodeArtsRoster, pickActiveCredit, priceFactorOfLabel,
 } from '../src/codearts.ts'
 import {
-  CODEARTS_FALLBACK_CONTEXT_WINDOW, codeartsContextWindow,
+  CODEARTS_EFFORT_LEVELS, CODEARTS_FALLBACK_CONTEXT_WINDOW, codeartsContextWindow,
 } from '../src/codearts-endpoints.ts'
 import { headersForFetch, sdkDateStamp, sha256Hex, signRequestHuawei } from '../src/codearts-sign.ts'
 import { CodeArtsSessionWindow } from '../src/codearts-window.ts'
+import { EMPTY_OPENROUTER_INDEX, buildOpenRouterIndex } from '../src/openrouter.ts'
+import type { OpenRouterIndex } from '../src/openrouter.ts'
 import {
   RefreshTokenExpiredError, buildAuthorizeUrl, exchangeRefreshToken, generateDpopKeyPair, generatePkcePair,
   readJwtExpiry, readUserProfile, signDpopJws,
@@ -246,6 +248,16 @@ describe('CodeArts quota', () => {
   })
 })
 
+describe('CodeArts reasoning levels', () => {
+  it('keeps the two-state switch and drops levels the gateway rejects', () => {
+    expect(codeartsEfforts()).toEqual([...CODEARTS_EFFORTS])
+    // `none` is this route's spelling of `off`, and `minimal` is editor-only.
+    expect(codeartsEfforts({ efforts: ['none', 'minimal', 'low', 'high'] })).toEqual(['off', 'on', 'low', 'high'])
+    expect(codeartsEfforts({ efforts: [...CODEARTS_EFFORT_LEVELS].reverse() })).toEqual(CODEARTS_EFFORTS)
+    expect(codeartsEfforts({ efforts: [] })).toEqual(['off', 'on'])
+  })
+})
+
 describe('CodeArts provider', () => {
   const options: GenerateOptions = {
     provider: 'codearts',
@@ -259,7 +271,12 @@ describe('CodeArts provider', () => {
     maxTokens: 200_000,
   }
 
-  function make(auth: Record<string, unknown>, fetchImpl: typeof fetch, window = new CodeArtsSessionWindow()): CodeArtsProvider {
+  function make(
+    auth: Record<string, unknown>,
+    fetchImpl: typeof fetch,
+    window = new CodeArtsSessionWindow(),
+    openRouter: OpenRouterIndex = EMPTY_OPENROUTER_INDEX,
+  ): CodeArtsProvider {
     return new CodeArtsProvider({
       auth: auth as never,
       store: { saveCodearts: vi.fn(), codearts: async () => undefined } as never,
@@ -267,6 +284,7 @@ describe('CodeArts provider', () => {
       timeoutMs: () => 1_000,
       textOnly: () => new Set(),
       forceVision: () => new Set(),
+      openRouter: { models: async () => openRouter, invalidate: () => {} },
       fetchImpl,
       window,
     })
@@ -453,6 +471,33 @@ describe('CodeArts provider', () => {
     expect(models[3]!.contextWindow).toBe(524_288)
     // Everything else answers `InferHub.001001020.406` when handed an image.
     expect(models.filter(model => model.vision === true).map(model => model.id)).toEqual(['kimi-k2.6-vl'])
+  })
+
+  it('narrows the graded levels to what OpenRouter says the model accepts', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('gateway/config')) {
+        return json({ result: { models: [{ model_id: 'deepseek-v4.1-flash-1017', model_name: 'DeepSeek-V4.1-Flash' }] } })
+      }
+      return json({ builtinModels: [] })
+    })
+    const provider = make({
+      status: async () => ({ signedIn: true }),
+      credential: async () => ({ accessKeyId: 'AK', secretAccessKey: 'SK', securityToken: 'ST' }),
+      refresh: async () => ({ accessKeyId: 'AK', secretAccessKey: 'SK', securityToken: 'ST' }),
+      logout: async () => undefined,
+    }, fetchMock as unknown as typeof fetch, new CodeArtsSessionWindow(), buildOpenRouterIndex([
+      {
+        id: 'deepseek/deepseek-v4.1-flash',
+        name: 'DeepSeek V4.1 Flash',
+        inputModalities: ['text'],
+        efforts: ['none', 'minimal', 'low', 'medium', 'high'],
+        mandatory: false,
+      },
+    ]))
+
+    const models = await provider.models(true)
+    expect(models[0]!.id).toBe('deepseek-v4.1-flash')
+    expect(models[0]!.reasoningEfforts).toEqual(['off', 'on', 'low', 'medium', 'high'])
   })
 
   it('retries without maas_type when the first frame reports no benefit pack', async () => {

@@ -21,6 +21,7 @@ import type { AuthStatus } from './auth.ts';
 import type { ProviderModel } from './catalog.ts';
 import { CodeArtsSessionWindow } from './codearts-window.ts';
 import type { LoginStatus } from './login-page.ts';
+import type { OpenRouterLookup } from './openrouter.ts';
 import type { CheckinStatus, QuotaPack, QuotaSnapshot } from './types.ts';
 import type { ReadImage } from './wire.ts';
 /**
@@ -35,8 +36,22 @@ import type { ReadImage } from './wire.ts';
  * keeps using the one switch that definitely works, `thinking: disabled`;
  * `on` is the old default and sends neither field.
  */
-export declare const CODEARTS_EFFORTS: readonly string[];
 export declare const CODEARTS_DEFAULT_EFFORT = "on";
+/**
+ * The levels one model offers: `off` / `on` always, then the graded levels the
+ * gateway validates and OpenRouter says the model accepts.
+ *
+ * The router's list is intersected with {@link CODEARTS_EFFORT_LEVELS} rather
+ * than copied, so an editor-only level (`minimal`) never reaches a model that
+ * answers 4xx for it. A model the router does not list, and a router with no
+ * snapshot yet, keep every graded level: hiding controls the upstream does
+ * accept is worse than offering one that has no measured effect.
+ */
+export declare function codeartsEfforts(live?: {
+    efforts?: readonly string[];
+}): string[];
+/** Every level a CodeArts model can get: the fallback when the router is silent. */
+export declare const CODEARTS_EFFORTS: readonly string[];
 export interface CodeArtsProviderOptions {
     auth: CodeArtsAuth;
     store: AccountStore;
@@ -47,6 +62,8 @@ export interface CodeArtsProviderOptions {
     fetchImpl?: typeof fetch;
     logger?: (message: string) => void;
     loginTimeoutMs?: number;
+    /** Injectable OpenRouter lookup for tests; defaults to the live catalog. */
+    openRouter?: OpenRouterLookup;
     /** Chat budget; defaults to the process-wide window (survives hot reloads). */
     window?: CodeArtsSessionWindow;
 }
@@ -86,6 +103,7 @@ export declare class CodeArtsProvider {
     private readonly noBenefit;
     private noBenefitLoaded;
     private readonly window;
+    private readonly openRouter;
     private readonly sessionId;
     constructor(options: CodeArtsProviderOptions);
     private get fetcher();

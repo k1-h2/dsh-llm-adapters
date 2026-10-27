@@ -116,14 +116,15 @@ export type { TraeRegionProfile } from './trae-endpoints.ts'
 export { TraeWebLogin, machineIdOf } from './trae-login.ts'
 export type { TraeLoginAccount, TraeWebLoginOptions } from './trae-login.ts'
 export {
-  CodeArtsProvider, CODEARTS_DEFAULT_EFFORT, CODEARTS_EFFORTS, clampMaxTokens, normalizeCodeArtsModelId,
-  parseCodeArtsPackage, parseCodeArtsRoster, pickActiveCredit, priceFactorOfLabel,
+  CodeArtsProvider, CODEARTS_DEFAULT_EFFORT, CODEARTS_EFFORTS, clampMaxTokens, codeartsEfforts,
+  normalizeCodeArtsModelId, parseCodeArtsPackage, parseCodeArtsRoster, pickActiveCredit, priceFactorOfLabel,
 } from './codearts.ts'
 export type {
   CodeArtsActivity, CodeArtsModelRow, CodeArtsPackageInfo, CodeArtsProviderOptions,
 } from './codearts.ts'
 export {
-  CODEARTS_BENEFIT_FALLBACK, CODEARTS_CHAT_URL, CODEARTS_CONTEXT_WINDOWS, CODEARTS_FALLBACK_CONTEXT_WINDOW,
+  CODEARTS_BENEFIT_FALLBACK, CODEARTS_CHAT_URL, CODEARTS_CONTEXT_WINDOWS, CODEARTS_EFFORT_LEVELS,
+  CODEARTS_FALLBACK_CONTEXT_WINDOW,
   CODEARTS_MAX_OUTPUT_TOKENS, CODEARTS_SNAP_BASE, CODEARTS_VISION_MODELS, codeartsContextWindow,
 } from './codearts-endpoints.ts'
 export { headersForFetch, signRequestHuawei } from './codearts-sign.ts'
@@ -238,6 +239,7 @@ export function apply(ctx: Context, config: ParsedConfig): void {
     timeoutMs: live.catalogFetchTimeoutMs,
     textOnly: () => new Set(live.codeartsTextOnlyModelIds()),
     forceVision: () => new Set(live.codeartsVisionModelIds()),
+    openRouter,
     logger: message => ctx.logger?.warn(message),
   })
 
