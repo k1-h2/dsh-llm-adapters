@@ -179,8 +179,10 @@ metadata”）。远端目录在多个分组里用不同大小写/显示名重�
 `parseTraeRemoteModels` 按小写 id 合并，`mergeTraeModels` 再用 `usedIds` 拦住只在 wire 里
 重复出现的 config，`LocalAdapter.listModels` 最后按 id 去重兜底——这一层对所有供应商生效。
 
-额度按区域走不同接口：国内版 `web_user_ent_usage`（已用 / 总额 + 资源包，按最早到期排序），
-国际版 `ide_user_pay_status`（套餐 / 试用）。签到只有国内版有：`checkin_credits/status` 读状态，
+额度按区域走不同接口：国内版 `web_user_ent_usage` v2（已用 / 总额 + 资源包，按最早到期排序），
+国际版 `web_user_ent_usage` v1（套餐、`basic_usage_limit` / `basic_usage_amount` 美元用量与
+`end_time` 重置时间）。国际版的 `ide_user_pay_status` 只有套餐名、没有任何金额，官网的
+“Dollar Usage”面板读的也是 v1 这份 roster。签到只有国内版有：`checkin_credits/status` 读状态，
 `checkin_credits/claim` 领取；`checked_in` 是账号维度，`did_checked_in` 是设备维度，两者分开
 显示。
 
