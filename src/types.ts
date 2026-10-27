@@ -28,9 +28,13 @@ export interface QuotaSnapshot {
   ratio?: number
   /** Trae CN: per-package breakdown, soonest expiry first. */
   packs?: readonly QuotaPack[]
-  /** Trae international: subscription label (`Pro`, `Free`, `试用`…). */
+  /** Trae international: subscription label (`Pro`, `Free plan`, `试用`…). */
   plan?: string
   trialEndsAt?: number
+  /** Trae international bills in dollars, not credits. */
+  unit?: 'usd'
+  /** When the current quota period resets. */
+  resetAt?: number
   at: number
 }
 

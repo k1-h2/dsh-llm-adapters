@@ -865,16 +865,47 @@ export function parseTraeUsage(payload: unknown): QuotaSnapshot {
   }
 }
 
-/** International subscription document → the card's quota shape. */
-export function parseTraePlan(payload: unknown): QuotaSnapshot {
+/**
+ * International entitlement document → the card's quota shape.
+ *
+ * The website's "Dollar Usage" panel reads `web_user_ent_usage`, not
+ * `ide_user_pay_status`: the latter carries the plan name but no amounts. On a
+ * dollar-billing account `basic_usage_limit` is the monthly allowance (1.00 on
+ * the free plan) and `basic_usage_amount` is the spend, so those numbers are
+ * dollars and must not be printed as credits.
+ */
+export function parseTraeGlobalUsage(payload: unknown): QuotaSnapshot {
   const root = record(payload) ?? {}
   const trial = record(root.trial_status)
-  const inTrial = root.in_trial === true || trial?.is_in_trial === true
-  const plan = text(root.user_pay_identity_str)
-    ?? (inTrial ? '试用' : root.has_package === true ? '订阅' : '免费')
+  const inTrial = trial?.is_in_trial === true
+  const entries = (Array.isArray(root.user_entitlement_pack_list) ? root.user_entitlement_pack_list : [])
+    .map(record)
+    .filter((entry): entry is Record<string, unknown> => entry !== undefined && entry.is_hide !== true)
+  // Top-up packs can sit beside the subscription; the plan row is the one with
+  // a subscription quota, and it is the one the usage panel describes.
+  const primary = entries.find(entry => {
+    const base = record(entry.entitlement_base_info)
+    return record(record(base?.product_extra)?.subscription_extra) !== undefined
+  }) ?? entries[0]
+  const base = record(primary?.entitlement_base_info) ?? {}
+  const subscription = record(record(base.product_extra)?.subscription_extra)
+  const quota = record(subscription?.quota) ?? record(base.quota) ?? {}
+  const usage = record(primary?.usage) ?? {}
+  const dollar = root.is_dollar_usage_billing === true
+  const total = dollar ? num(quota.basic_usage_limit) : num(quota.credits_limit)
+  const used = dollar ? num(usage.basic_usage_amount) : num(usage.credits_amount)
+  const resetAtRaw = epochMs(num(base.end_time))
+  // `end_time` is the period's last second (23:59:59); the quota actually resets
+  // on the next second, which is the time the website prints (08:00, not 07:59).
+  const resetAt = resetAtRaw === undefined ? undefined : resetAtRaw + 1_000
   const trialEnd = epochMs(num(trial?.trial_end_time) ?? num(root.trial_end_time))
+  const plan = text(primary?.display_desc) ?? (inTrial ? '试用' : '免费')
   return {
     plan,
+    ...dollar ? { unit: 'usd' as const } : {},
+    ...total === undefined ? {} : { total },
+    ...used === undefined ? {} : { used },
+    ...resetAt === undefined ? {} : { resetAt },
     ...trialEnd === undefined ? {} : { trialEndsAt: trialEnd },
     at: Date.now(),
   }
@@ -1107,7 +1138,7 @@ export class TraeProvider {
         const identity = await this.options.auth.identity()
         const path = profile.checkin
           ? '/trae/api/v2/pay/web_user_ent_usage'
-          : '/trae/api/v1/pay/ide_user_pay_status'
+          : '/trae/api/v1/pay/web_user_ent_usage'
         const response = await this.fetchImpl(`${profile.payBase}${path}`, {
           method: 'POST',
           headers: {
@@ -1115,7 +1146,7 @@ export class TraeProvider {
             'x-device-id': identity.deviceId,
             'x-machine-id': identity.machineId,
           },
-          body: JSON.stringify(profile.checkin ? { require_usage: true } : {}),
+          body: JSON.stringify({ require_usage: true }),
           signal: AbortSignal.timeout(this.options.timeoutMs()),
         })
         if (!response.ok) {
@@ -1123,7 +1154,7 @@ export class TraeProvider {
           throw new ProviderHttpError(await responseError(response), response.status)
         }
         const payload = await response.json()
-        const value = profile.checkin ? parseTraeUsage(payload) : parseTraePlan(payload)
+        const value = profile.checkin ? parseTraeUsage(payload) : parseTraeGlobalUsage(payload)
         this.quotaCache = { at: Date.now(), region, value }
         return value
       } finally {

@@ -105,7 +105,7 @@ export {
 } from './raccoon.ts'
 export {
   TraeProvider, TRAE_CHAT_FUNCTIONS, TRAE_DIRECTORY_FUNCTIONS, checkinDeviceId, mergeTraeModels,
-  normalizeEffort, openTraeStream, parseTraeCheckin, parseTraePlan, parseTraeRemoteModels,
+  normalizeEffort, openTraeStream, parseTraeCheckin, parseTraeGlobalUsage, parseTraeRemoteModels,
   parseTraeUsage, parseTraeWireModels, traeMessages, traeTools,
 } from './trae.ts'
 export type {

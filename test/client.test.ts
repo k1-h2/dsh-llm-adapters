@@ -21,6 +21,7 @@ interface ClientExports {
     priceText: (t: (key: string) => string, factor: number) => string
     ownerLabel: (t: (key: string) => string, owner: string) => string
     dateLabel: (value: number) => string
+    amountText: (quota: Record<string, unknown> | undefined, value: number | undefined) => string
     writeCache: (brand: string, kind: string, value: unknown) => void
     AccountCard: (props: Record<string, unknown>) => unknown
   }
@@ -317,5 +318,41 @@ describe('client bundle', () => {
       if (element.type === 'a') links.push(element)
     })
     expect(links.some(link => (link.props as { href?: string }).href === 'https://xiaohuanxiong.com/work/home')).toBe(true)
+  })
+
+  it('formats dollar quotas without credits and shows the reset date', () => {
+    const tree = loadClient(TREE_REACT)
+    const { writeCache, AccountCard, zh, amountText } = tree.__test
+    expect(amountText({ unit: 'usd' }, 0)).toBe('$0.00')
+    expect(amountText({ unit: 'usd' }, 1.25)).toBe('$1.25')
+    expect(amountText({}, 300)).toBe('300')
+    writeCache('trae:global', 'status', {
+      signedIn: true,
+      loginAt: Date.now(),
+      account: { name: 'user52845450213' },
+      quota: {
+        plan: 'Free plan',
+        unit: 'usd',
+        total: 1,
+        used: 0,
+        resetAt: Date.parse('2026-11-01T08:00:00+08:00'),
+        trialEndsAt: Date.parse('2026-10-29T07:45:00+08:00'),
+        at: Date.now(),
+      },
+    })
+    const rendered = AccountCard({
+      t: (key: string) => (zh as Record<string, string>)[key] ?? key,
+      brand: { id: 'trae' },
+      region: 'global',
+      onRegionChange: () => undefined,
+      reloadSignal: 0,
+      onStatus: () => undefined,
+      onAfterRefresh: () => undefined,
+    })
+    const text = textOf(rendered).join(' ')
+    expect(text).toContain('Free plan')
+    expect(text).toContain('$0.00 / $1.00')
+    expect(text).toContain('重置时间')
+    expect(text).not.toContain('$0.00 / $1.00 积分')
   })
 })

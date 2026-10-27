@@ -10,7 +10,7 @@ import { ALL_REASONING_EFFORTS } from '../src/catalog.ts'
 import { EMPTY_OPENROUTER_INDEX, buildOpenRouterIndex } from '../src/openrouter.ts'
 import {
   TraeProvider, checkinDeviceId, mergeTraeModels, normalizeEffort, openTraeStream, parseTraeCheckin,
-  parseTraePlan, parseTraeRemoteModels, parseTraeUsage, parseTraeWireModels, traeMessages, traeTools,
+  parseTraeGlobalUsage, parseTraeRemoteModels, parseTraeUsage, parseTraeWireModels, traeMessages, traeTools,
 } from '../src/trae.ts'
 import { ProviderHttpError } from '../src/wire.ts'
 
@@ -513,12 +513,64 @@ describe('Trae quota and check-in parsing', () => {
     expect(quota.packs?.[1]).toMatchObject({ total: 1500, used: 300, expiresAt: 1_800_000_000_000 })
   })
 
-  it('reads the international subscription document', () => {
-    expect(parseTraePlan({ user_pay_identity_str: 'Pro', has_package: true }))
-      .toMatchObject({ plan: 'Pro' })
-    expect(parseTraePlan({ in_trial: true, trial_status: { trial_end_time: 1_800_000_000 } }))
-      .toMatchObject({ plan: '试用', trialEndsAt: 1_800_000_000_000 })
-    expect(parseTraePlan({ has_package: false })).toMatchObject({ plan: '免费' })
+  it('reads the international dollar usage and its reset date', () => {
+    const payload = {
+      is_dollar_usage_billing: true,
+      trial_status: { is_in_trial: false, trial_end_time: 1_793_231_149 },
+      user_entitlement_pack_list: [{
+        display_desc: 'Free plan',
+        entitlement_base_info: {
+          end_time: 1_793_491_199,
+          product_extra: { subscription_extra: { quota: { basic_usage_limit: 1, credits_limit: 0 } } },
+          quota: { basic_usage_limit: 1, credits_limit: 0 },
+        },
+        usage: { basic_usage_amount: 0, credits_amount: 0 },
+      }],
+    }
+    expect(parseTraeGlobalUsage(payload)).toMatchObject({
+      plan: 'Free plan',
+      unit: 'usd',
+      total: 1,
+      used: 0,
+      // The site's "Reset at 2026/11/01 08:00" (end_time is the last second).
+      resetAt: 1_793_491_200_000,
+      trialEndsAt: 1_793_231_149_000,
+    })
+  })
+
+  it('reads a paid dollar allowance and ignores hidden packs', () => {
+    const payload = {
+      is_dollar_usage_billing: true,
+      user_entitlement_pack_list: [
+        { display_desc: 'Hidden', is_hide: true, entitlement_base_info: { end_time: 1 } },
+        {
+          display_desc: 'Pro plan',
+          entitlement_base_info: {
+            end_time: 1_800_000_000,
+            product_extra: { subscription_extra: { quota: { basic_usage_limit: 20 } } },
+          },
+          usage: { basic_usage_amount: 3.5 },
+        },
+      ],
+    }
+    expect(parseTraeGlobalUsage(payload)).toMatchObject({
+      plan: 'Pro plan',
+      unit: 'usd',
+      total: 20,
+      used: 3.5,
+      resetAt: 1_800_000_001_000,
+    })
+  })
+
+  it('keeps credits when the international account is not dollar billed', () => {
+    expect(parseTraeGlobalUsage({
+      is_dollar_usage_billing: false,
+      user_entitlement_pack_list: [{
+        display_desc: 'Pro plan',
+        entitlement_base_info: { end_time: 1_800_000_000, quota: { credits_limit: 5000 } },
+        usage: { credits_amount: 1200 },
+      }],
+    })).toMatchObject({ plan: 'Pro plan', total: 5000, used: 1200 })
   })
 
   it('keeps the account and device flags apart', () => {
@@ -864,12 +916,30 @@ describe('TraeProvider', () => {
   })
 
   it('has no check-in on the international deployment', async () => {
+    const seen: string[] = []
     const fetchMock = vi.fn(async (url: string) => {
-      if (url.endsWith('/ide_user_pay_status')) return json({ user_pay_identity_str: 'Pro' })
+      seen.push(url)
+      if (url.endsWith('/web_user_ent_usage')) {
+        return json({
+          is_dollar_usage_billing: true,
+          user_entitlement_pack_list: [{
+            display_desc: 'Pro plan',
+            entitlement_base_info: {
+              end_time: 1_800_000_000,
+              product_extra: { subscription_extra: { quota: { basic_usage_limit: 20 } } },
+            },
+            usage: { basic_usage_amount: 1.25 },
+          }],
+        })
+      }
       throw new Error(`unexpected ${url}`)
     })
     const { provider } = make('global', fetchMock as unknown as typeof fetch)
-    expect(await provider.quota(true)).toMatchObject({ plan: 'Pro' })
+    expect(await provider.quota(true)).toMatchObject({
+      plan: 'Pro plan', unit: 'usd', total: 20, used: 1.25,
+    })
+    // The international edition uses the v1 roster; v2 is mainland-only.
+    expect(seen[0]).toBe('https://growsg-normal.trae.ai/trae/api/v1/pay/web_user_ent_usage')
     expect(await provider.checkinStatus()).toEqual({ available: false, claimed: false, deviceClaimed: false })
     await expect(provider.claimCheckin()).rejects.toThrow('没有签到活动')
   })
@@ -898,8 +968,21 @@ describe('TraeProvider', () => {
           }],
         })
       }
-      if (url.endsWith('/web_user_ent_usage')) return json({ data: { usage_summary: { total_amount: 1 } } })
-      if (url.endsWith('/ide_user_pay_status')) return json({ user_pay_identity_str: 'Pro' })
+      if (url.endsWith('/web_user_ent_usage')) {
+        return json(region === 'cn'
+          ? { data: { usage_summary: { total_amount: 1 } } }
+          : {
+              is_dollar_usage_billing: true,
+              user_entitlement_pack_list: [{
+                display_desc: 'Free plan',
+                entitlement_base_info: {
+                  end_time: 1_800_000_000,
+                  product_extra: { subscription_extra: { quota: { basic_usage_limit: 1 } } },
+                },
+                usage: { basic_usage_amount: 0 },
+              }],
+            })
+      }
       if (url.endsWith('/checkin_credits/status')) return json({ enable: true, checked_in: false })
       throw new Error(`unexpected ${url}`)
     })
@@ -926,7 +1009,7 @@ describe('TraeProvider', () => {
     region = 'global'
     // The other deployment has its own directory, quota and (no) check-in.
     expect((await provider.models()).map(model => model.id)).toEqual(['global-model'])
-    expect(await provider.quota()).toMatchObject({ plan: 'Pro' })
+    expect(await provider.quota()).toMatchObject({ plan: 'Free plan', unit: 'usd', total: 1, used: 0 })
     expect(await provider.checkinStatus()).toMatchObject({ available: false })
   })
 

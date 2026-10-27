@@ -155,6 +155,7 @@ window.__ModuleLoader__.load({
       packDetail: '详细信息',
       packCollapse: '收起',
       usedOf: '已用',
+      usageReset: '重置时间',
       browserHintTrae: '点下面的按钮会打开一个独立的浏览器窗口（不会动你自己的浏览器配置）：在其中登录 Trae，登录成功后窗口会自动关闭。国际版若提示 account is at risk，请点 Log in 用你平时能登录的同一个账号（Google/GitHub）进入，不要用新邮箱重新注册；独立配置首次登录会被 Trae 当成新设备。',
       browserPollingTrae: '浏览器已打开：请在窗口里登录 Trae，成功后会自动接回，这个窗口随后会关闭。',
       browserTitleTrae: '浏览器登录',
@@ -317,6 +318,7 @@ window.__ModuleLoader__.load({
       packDetail: 'Details',
       packCollapse: 'Collapse',
       usedOf: 'used',
+      usageReset: 'Resets',
       browserHintTrae: 'The button opens a dedicated browser window (your own browser profile is untouched): sign in to Trae there and the window closes itself. If the international edition says “account is at risk”, use Log in with the same Google/GitHub account that works in your normal browser — do not create another email account; a fresh profile looks like a new device to Trae.',
       browserPollingTrae: 'The browser is open: sign in to Trae in that window; the login is adopted automatically and the window then closes.',
       browserTitleTrae: 'Browser sign-in',
@@ -563,6 +565,12 @@ window.__ModuleLoader__.load({
       return value.toLocaleString('zh-CN', { maximumFractionDigits: 2 })
     }
 
+    /** Trae's international plan reports dollars; every other quota is credits. */
+    function amountText(quota, value) {
+      if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
+      return quota?.unit === 'usd' ? `$${value.toFixed(2)}` : creditsOf(value)
+    }
+
     /**
      * A usage bar needs both halves: what was spent and what the account was
      * granted. Loomy and Raccoon only report what is left, so they keep the
@@ -783,9 +791,10 @@ window.__ModuleLoader__.load({
           const spent = typeof quota.used === 'number' && Number.isFinite(quota.used) ? quota.used : undefined
           const granted = typeof quota.total === 'number' && Number.isFinite(quota.total) ? quota.total : undefined
           const percent = meterPercentOf(quota)
+          const unitSuffix = quota.unit === 'usd' ? '' : ` ${t('points')}`
           const usedText = spent === undefined
             ? undefined
-            : `${creditsOf(spent)}${granted === undefined ? '' : ` / ${creditsOf(granted)}`} ${t('points')}`
+            : `${amountText(quota, spent)}${granted === undefined ? '' : ` / ${amountText(quota, granted)}`}${unitSuffix}`
           return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '5px' } },
             plan === undefined && granted === undefined && usedText === undefined && packs.length === 0
               ? h('div', { style: css.note }, t('quotaUnavailable'))
@@ -803,7 +812,7 @@ window.__ModuleLoader__.load({
                 ? null
                 : h('div', { style: css.line },
                     h('span', { style: css.label }, t('quota')),
-                    h('span', { style: css.value }, `${creditsOf(granted)} ${t('points')}`),
+                    h('span', { style: css.value }, `${amountText(quota, granted)}${unitSuffix}`),
                   )
               : h('div', { style: css.meterBox },
                   h('div', { style: css.meterText },
@@ -824,6 +833,10 @@ window.__ModuleLoader__.load({
                   quota.ratio === undefined ? null : h('span', { style: css.label }, `${Math.round(quota.ratio)}%`),
                 )
               : null,
+            quota.resetAt === undefined ? null : h('div', { style: css.line },
+              h('span', { style: css.label }, t('usageReset')),
+              h('span', { style: css.value }, dateLabel(quota.resetAt)),
+            ),
             packs.length === 0 ? null : (() => {
               // Collapsed (the default) is one summary row: how many packs, the
               // combined total and the nearest expiry. Expanding lists every
@@ -1700,6 +1713,7 @@ window.__ModuleLoader__.load({
     exports.name = 'dsh-llm-adapters'
     exports.__test = {
       BRANDS, FIELDS, REGIONS, OPENROUTER_INTERVALS, CHECKIN_INTERVALS, regionOf, zh, en, css, windowLabel, creditsOf,
+      amountText,
       meterPercentOf, percentLabel, ownerLabel, priceText, dateLabel, readCache, writeCache, AccountCard,
       SettingsPage, BundleSettings,
     }
