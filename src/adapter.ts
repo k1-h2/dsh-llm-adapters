@@ -16,6 +16,7 @@ import type { BrandId, TraeRegion } from './brand.ts'
 import type { LoginStatus } from './login-page.ts'
 import type { ProviderModel } from './catalog.ts'
 import { effortLabel } from './catalog.ts'
+import { modelKey } from './model-name.ts'
 import { CodeArtsProvider } from './codearts.ts'
 import { LoomyProvider } from './loomy.ts'
 import { RaccoonProvider } from './raccoon.ts'
@@ -178,11 +179,39 @@ export abstract class LocalAdapter extends LlmAdapter {
   }
 
   isModelDisabled(id: string): boolean {
-    return this.options.disabledModels().includes(id)
+    const folded = modelKey(id)
+    return this.options.disabledModels().some(entry => entry === id || modelKey(entry) === folded)
   }
 
   contextWindowFor(id: string): number | undefined {
-    return this.options.modelContextWindows()[id]
+    const table = this.options.modelContextWindows()
+    const direct = table[id] ?? table[id.trim().toLowerCase()]
+    if (direct !== undefined) return direct
+    // The settings page stores the id the catalogue published, while a hand-typed
+    // selection or a renamed row comes back with different punctuation, and every
+    // miss read as "no override" — the model then ran on the fallback window.
+    const folded = modelKey(id)
+    if (folded.length === 0) return undefined
+    for (const key of Object.keys(table)) {
+      if (modelKey(key) === folded) return table[key]
+    }
+    return undefined
+  }
+
+  /**
+   * The catalogue row one harness-side id means.
+   *
+   * Exact id first. Then the folded comparison, because the picker may hand back
+   * the display name (`DeepSeek-V4.1-Flash`) or a re-spelling the upstream changed
+   * between rosters; a miss here silently dropped both the window and the
+   * reasoning levels, so a model that costs 1M tokens ran as if it had 200K.
+   */
+  protected findModel(models: readonly ProviderModel[], id: string): ProviderModel | undefined {
+    const exact = models.find(entry => entry.id === id)
+    if (exact !== undefined) return exact
+    const folded = modelKey(id)
+    if (folded.length === 0) return undefined
+    return models.find(entry => modelKey(entry.id) === folded || modelKey(entry.name) === folded)
   }
 
   override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {
@@ -205,7 +234,7 @@ export abstract class LocalAdapter extends LlmAdapter {
 
   override async resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
     const target = resolveModelId(model, this.options.modelAliases())
-    const live = (await this.client.models()).find(entry => entry.id === target)
+    const live = this.findModel(await this.client.models(), target)
     if (live !== undefined) this.knownVision.set(target, live.vision)
     // A missed catalog read must not turn a vision model into a text-only one:
     // DSH strips the pixels before this adapter runs when the declared
@@ -251,7 +280,7 @@ export abstract class LocalAdapter extends LlmAdapter {
       throw new Error(status.error ?? '尚未登录。请在设置页点「打开扫码登录」。')
     }
     const model = resolveModelId(options.model, this.options.modelAliases())
-    const live = (await this.client.models()).find(entry => entry.id === model)
+    const live = this.findModel(await this.client.models(), model)
     const maxTokens = options.maxTokens
       ?? live?.maxTokens
       ?? this.options.defaultMaxTokens()

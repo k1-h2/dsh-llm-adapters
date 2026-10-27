@@ -89,6 +89,15 @@ export declare abstract class LocalAdapter extends LlmAdapter {
     usageInfo(fresh?: boolean): Promise<ProviderStatus>;
     isModelDisabled(id: string): boolean;
     contextWindowFor(id: string): number | undefined;
+    /**
+     * The catalogue row one harness-side id means.
+     *
+     * Exact id first. Then the folded comparison, because the picker may hand back
+     * the display name (`DeepSeek-V4.1-Flash`) or a re-spelling the upstream changed
+     * between rosters; a miss here silently dropped both the window and the
+     * reasoning levels, so a model that costs 1M tokens ran as if it had 200K.
+     */
+    protected findModel(models: readonly ProviderModel[], id: string): ProviderModel | undefined;
     listModels(provider: string): Promise<readonly LlmModelInfo[]>;
     resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo>;
     prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<PreparedAdapterCall>;

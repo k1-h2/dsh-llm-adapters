@@ -27,6 +27,7 @@ import {
   CODEARTS_CHAT_URL,
   CODEARTS_CLAIMED_STATUSES,
   CODEARTS_DAILY_LOGIN_TYPE,
+  CODEARTS_EFFORT_LEVELS,
   CODEARTS_EXTRA_HEADERS,
   CODEARTS_GATEWAY_CONFIG_URL,
   CODEARTS_MAX_OUTPUT_TOKENS,
@@ -45,6 +46,9 @@ import { headersForFetch, signRequestHuawei } from './codearts-sign.ts'
 import { CodeArtsSessionWindow, sharedSessionWindow } from './codearts-window.ts'
 import type { CodeArtsCredential } from './codearts-oauth.ts'
 import type { LoginStatus } from './login-page.ts'
+import { parseModelName } from './model-name.ts'
+import { OpenRouterCatalog } from './openrouter.ts'
+import type { OpenRouterLookup } from './openrouter.ts'
 import type { CheckinStatus, QuotaPack, QuotaSnapshot } from './types.ts'
 import { ProviderHttpError, buildMessages, buildTools, consumeOpenAiStream } from './wire.ts'
 import type { ReadImage } from './wire.ts'
@@ -61,8 +65,28 @@ import type { ReadImage } from './wire.ts'
  * keeps using the one switch that definitely works, `thinking: disabled`;
  * `on` is the old default and sends neither field.
  */
-export const CODEARTS_EFFORTS: readonly string[] = ['off', 'on', 'low', 'medium', 'high', 'xhigh', 'max']
 export const CODEARTS_DEFAULT_EFFORT = 'on'
+
+/**
+ * The levels one model offers: `off` / `on` always, then the graded levels the
+ * gateway validates and OpenRouter says the model accepts.
+ *
+ * The router's list is intersected with {@link CODEARTS_EFFORT_LEVELS} rather
+ * than copied, so an editor-only level (`minimal`) never reaches a model that
+ * answers 4xx for it. A model the router does not list, and a router with no
+ * snapshot yet, keep every graded level: hiding controls the upstream does
+ * accept is worse than offering one that has no measured effect.
+ */
+export function codeartsEfforts(live?: { efforts?: readonly string[] }): string[] {
+  const declared = live?.efforts
+  const graded = declared === undefined
+    ? [...CODEARTS_EFFORT_LEVELS]
+    : CODEARTS_EFFORT_LEVELS.filter(level => declared.includes(level))
+  return ['off', 'on', ...graded]
+}
+
+/** Every level a CodeArts model can get: the fallback when the router is silent. */
+export const CODEARTS_EFFORTS: readonly string[] = codeartsEfforts()
 
 export interface CodeArtsProviderOptions {
   auth: CodeArtsAuth
@@ -74,6 +98,8 @@ export interface CodeArtsProviderOptions {
   fetchImpl?: typeof fetch
   logger?: (message: string) => void
   loginTimeoutMs?: number
+  /** Injectable OpenRouter lookup for tests; defaults to the live catalog. */
+  openRouter?: OpenRouterLookup
   /** Chat budget; defaults to the process-wide window (survives hot reloads). */
   window?: CodeArtsSessionWindow
 }
@@ -291,10 +317,12 @@ export class CodeArtsProvider {
   private readonly noBenefit = new Set<string>()
   private noBenefitLoaded = false
   private readonly window: CodeArtsSessionWindow
+  private readonly openRouter: OpenRouterLookup
   private readonly sessionId = randomUUID()
 
   constructor(private readonly options: CodeArtsProviderOptions) {
     this.window = options.window ?? sharedSessionWindow()
+    this.openRouter = options.openRouter ?? new OpenRouterCatalog(options.fetchImpl ?? fetch)
     this.catalog = new ModelCatalog(() => this.loadModels(), options.ttlMs)
     this.login = new CodeArtsLogin({
       ...options.loginTimeoutMs === undefined ? {} : { timeoutMs: options.loginTimeoutMs },
@@ -377,6 +405,9 @@ export class CodeArtsProvider {
 
     const textOnly = this.options.textOnly()
     const forceVision = this.options.forceVision()
+    // The shared router snapshot: CodeArts publishes no reasoning levels at all,
+    // so the graded list comes from OpenRouter, matched by product name.
+    const index = await this.openRouter.models().catch(() => undefined)
     const rows: ProviderModel[] = []
     const seen = new Set<string>()
     for (const row of [...gatewayRows, ...builtinRows]) {
@@ -392,7 +423,7 @@ export class CodeArtsProvider {
         maxTokens: CODEARTS_MAX_OUTPUT_TOKENS,
         vision,
         reasoning: true,
-        reasoningEfforts: CODEARTS_EFFORTS,
+        reasoningEfforts: codeartsEfforts(index?.match(parseModelName(row.name).name, row.id)),
         defaultReasoningEffort: CODEARTS_DEFAULT_EFFORT,
         ...factor === undefined ? {} : { priceFactor: factor },
       })

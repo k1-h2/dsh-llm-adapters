@@ -221,12 +221,13 @@ GLM-5.x、openpangu——带图会回 `InferHub.001001020.406 The request model 
 
 **CodeArts 能选更细的思考强度吗？**
 
-能选了：卡片保留原来的 `On` / `Off`，并增加 `Low` / `Medium` / `High` / `Xhigh` / `Max`。
-网关确实接受 `reasoning_effort`，也会**按模型**校验取值（`deepseek-v4.1-flash` 收
-`none|low|medium|high|xhigh|max`，`glm-5.3` 直接拒绝 `none`），所以 `Off` 仍走真正生效的
-`thinking: { type: 'disabled' }`，`On` 两个字段都不发，其余档位原样转发。实测这些档位对思考长度
-影响很小（同一道证明题 `deepseek-v4.1-flash`：`none` 388 / `low` 480 / `max` 515 / 不传 595），
-但上游接受就不会报错。
+能。卡片保留原来的 `On` / `Off`，再按模型列出网关确实接受的档位：档位表和其它三家一样取自
+OpenRouter 实时目录，`deepseek-v4.1-flash` 给 `Low` / `High` / `Max`，`GLM-5.2` 给
+`High` / `xhigh`，OpenRouter 不认识的模型（自家 pangu、两支 VL）保持全开。匹配不到不会把控制
+清空，但 `none`、`minimal` 这类网关会拒的写法永远不进菜单。网关**按模型**校验取值（`glm-5.3` 直接
+拒绝 `none`），所以 `Off` 仍走真正生效的 `thinking: { type: 'disabled' }`，`On` 两个字段都不发，
+其余档位原样转发。实测这些档位对思考长度影响很小（同一道证明题 `deepseek-v4.1-flash`：`none` 388 /
+`low` 480 / `max` 515 / 不传 595），但上游接受就不会报错。
 
 **CodeArts 报 `InferHub.002002009.404 model is not registered`？**
 
