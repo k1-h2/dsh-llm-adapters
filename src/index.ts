@@ -305,6 +305,28 @@ export function apply(ctx: Context, config: ParsedConfig): void {
   syncTimer.unref?.()
   ctx.effect(() => () => clearInterval(syncTimer), 'llm-adapters: openrouter sync')
 
+  // Raccoon has no claim endpoint; its daily points appear on the first web
+  // visit. Poll the bills on a live interval and try the website call only when
+  // today's grant is missing. 0 turns the monitor off; the manual web link the
+  // card always shows is unaffected.
+  let lastRaccoonCheckin = Date.now()
+  const checkinMonitor = (): void => {
+    if (!live.raccoonEnabled()) return
+    const minutes = live.raccoonCheckinMinutes()
+    if (minutes <= 0) return
+    if (Date.now() - lastRaccoonCheckin < minutes * 60_000) return
+    lastRaccoonCheckin = Date.now()
+    void (async () => {
+      if (!(await raccoonProvider.signedIn())) return
+      await raccoonProvider.ensureDailyCheckin()
+    })().catch(error => {
+      ctx.logger?.warn(`llm-adapters: 小浣熊签到监测失败：${error instanceof Error ? error.message : String(error)}`)
+    })
+  }
+  const checkinTimer = setInterval(checkinMonitor, 60_000)
+  checkinTimer.unref?.()
+  ctx.effect(() => () => clearInterval(checkinTimer), 'llm-adapters: raccoon check-in monitor')
+
   ctx.inject(['attachments'], (scope) => {
     attachments = scope.attachments
     scope.effect(() => () => { attachments = undefined }, 'llm-adapters.attachments')

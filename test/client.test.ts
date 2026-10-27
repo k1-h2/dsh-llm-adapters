@@ -13,6 +13,7 @@ interface ClientExports {
     en: Record<string, unknown>
     css: Record<string, Record<string, unknown>>
     OPENROUTER_INTERVALS: { value: number, labelKey: string }[]
+    CHECKIN_INTERVALS: { value: number, labelKey: string }[]
     windowLabel: (value: number) => string
     creditsOf: (value: number) => string
     meterPercentOf: (quota: Record<string, unknown> | undefined) => number | undefined
@@ -155,6 +156,15 @@ describe('client bundle', () => {
     expect(en.openRouterSyncFailed).toBe('Sync failed')
   })
 
+  it('offers a switchable Raccoon check-in monitor interval', () => {
+    const { zh, en, CHECKIN_INTERVALS } = exports.__test
+    expect(CHECKIN_INTERVALS.map(option => option.value)).toEqual([0, 15, 30, 60, 120])
+    expect(zh.checkinMonitorOff).toContain('关闭')
+    expect(zh.checkinEvery30).toContain('30')
+    expect(en.checkinMonitorOff).toBe('Monitor off')
+    expect(en.checkinEvery30).toContain('30')
+  })
+
   it('keeps the primary button dark with white text on both themes', () => {
     expect(exports.__test.css.btnPrimary).toMatchObject({ background: '#0b0b0b', color: '#fff' })
   })
@@ -269,14 +279,22 @@ describe('client bundle', () => {
     expect(links.some(link => (link.props as { href?: string }).href === 'https://xiaohuanxiong.com/work/home')).toBe(true)
   })
 
-  it('labels a received Raccoon grant as credited, not still pending', () => {
+  it('labels a received Raccoon grant as credited and keeps the manual link', () => {
     const tree = loadClient(TREE_REACT)
     const { writeCache, AccountCard, zh } = tree.__test
+    const grantedAt = Date.now() - 5 * 60_000
     writeCache('raccoon', 'status', {
       signedIn: true,
       loginAt: Date.now(),
       quota: { total: 8329, available: 8329, at: Date.now() },
-      checkin: { available: true, claimed: true, deviceClaimed: false, reward: 300 },
+      checkin: {
+        available: true,
+        claimed: true,
+        deviceClaimed: false,
+        reward: 300,
+        grantedAt,
+        url: 'https://xiaohuanxiong.com/work/home',
+      },
     })
     const rendered = AccountCard({
       t: (key: string) => (zh as Record<string, string>)[key] ?? key,
@@ -290,5 +308,14 @@ describe('client bundle', () => {
     const text = textOf(rendered).join(' ')
     expect(text).toContain('今日已签到')
     expect(text).toContain('已到账 +300 积分')
+    // The issuance time answers "was this yesterday's grant?".
+    expect(text).toContain('到账时间')
+    // Claimed or not, the web page stays one click away.
+    expect(text).toContain('打开网页签到')
+    const links: Element[] = []
+    walk(rendered, element => {
+      if (element.type === 'a') links.push(element)
+    })
+    expect(links.some(link => (link.props as { href?: string }).href === 'https://xiaohuanxiong.com/work/home')).toBe(true)
   })
 })

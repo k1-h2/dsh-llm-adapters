@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { createPublicKey, verify } from 'node:crypto'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import {
-  CodeArtsProvider, clampMaxTokens, normalizeCodeArtsModelId, parseCodeArtsPackage, parseCodeArtsRoster,
-  pickActiveCredit, priceFactorOfLabel,
+  CODEARTS_EFFORTS, CodeArtsProvider, clampMaxTokens, normalizeCodeArtsModelId, parseCodeArtsPackage,
+  parseCodeArtsRoster, pickActiveCredit, priceFactorOfLabel,
 } from '../src/codearts.ts'
 import {
   CODEARTS_FALLBACK_CONTEXT_WINDOW, codeartsContextWindow,
@@ -328,6 +328,32 @@ describe('CodeArts provider', () => {
     expect(body.tools).toBeUndefined()
   })
 
+  it('forwards a reasoning level without disturbing the two-state switch', async () => {
+    const bodies: Record<string, unknown>[] = []
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>)
+      return sse([
+        JSON.stringify({ choices: [{ delta: { content: 'hi' }, finish_reason: 'stop' }] }),
+        '[DONE]',
+      ])
+    })
+    const provider = make({
+      status: async () => ({ signedIn: true }),
+      credential: async () => ({ accessKeyId: 'AK', secretAccessKey: 'SK', securityToken: 'ST' }),
+      refresh: async () => ({ accessKeyId: 'AK', secretAccessKey: 'SK', securityToken: 'ST' }),
+      logout: async () => undefined,
+    }, fetchMock as unknown as typeof fetch)
+
+    await collect(provider.stream({ ...options, reasoningEffort: 'high' as never }, 'glm-5.3', undefined, () => undefined))
+    expect(bodies[0]).toMatchObject({ reasoning_effort: 'high' })
+    expect(bodies[0]!.thinking).toBeUndefined()
+
+    // `on` is what old saved selections hold; it still sends neither field.
+    await collect(provider.stream({ ...options, reasoningEffort: 'on' as never }, 'glm-5.3', undefined, () => undefined))
+    expect(bodies[1]!.reasoning_effort).toBeUndefined()
+    expect(bodies[1]!.thinking).toBeUndefined()
+  })
+
   it('retries without maas_type when the account has no benefit pack', async () => {
     const bodies: Record<string, unknown>[] = []
     const headers: Record<string, string>[] = []
@@ -419,7 +445,8 @@ describe('CodeArts provider', () => {
 
     const models = await provider.models(true)
     expect(models.map(model => model.id)).toEqual(['glm-5.3-flash', 'GLM-5.2', 'kimi-k2.6-vl', 'openpangu-2.0-pro'])
-    expect(models[0]).toMatchObject({ reasoningEfforts: ['off', 'on'], defaultReasoningEffort: 'on' })
+    expect(models[0]).toMatchObject({ reasoningEfforts: CODEARTS_EFFORTS, defaultReasoningEffort: 'on' })
+    expect(CODEARTS_EFFORTS).toEqual(['off', 'on', 'low', 'medium', 'high', 'xhigh', 'max'])
     expect(models[1]).toMatchObject({ contextWindow: 1_048_576, priceFactor: 0.7 })
     // The image models are hidden from the IDE's own menu but still served.
     expect(models[2]).toMatchObject({ contextWindow: 262_144, vision: true })

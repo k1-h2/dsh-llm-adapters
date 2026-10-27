@@ -132,9 +132,18 @@ window.__ModuleLoader__.load({
       checkinDevice: '本机今日已签到',
       checkinReward: '可得',
       checkinReceived: '已到账',
+      checkinGrantedAt: '到账时间',
       checkinOpenWeb: '打开网页签到',
       checkinFailed: '签到失败',
       checkinUnavailable: '当前账号没有可用的签到活动',
+      checkinMonitorTitle: '小浣熊签到监测',
+      checkinMonitorHint: '定时核对今日每日积分是否到账，未到账时按网页方式尝试触发。「打开网页签到」入口始终保留，可随时手动打开。',
+      checkinInterval: '自动监测',
+      checkinMonitorOff: '关闭自动监测',
+      checkinEvery15: '每 15 分钟',
+      checkinEvery30: '每 30 分钟',
+      checkinEvery60: '每小时',
+      checkinEvery120: '每 2 小时',
       plan: '套餐',
       planFree: '免费版',
       planTrial: '试用中',
@@ -285,9 +294,18 @@ window.__ModuleLoader__.load({
       checkinDevice: 'This device checked in today',
       checkinReward: 'reward',
       checkinReceived: 'received',
+      checkinGrantedAt: 'credited at',
       checkinOpenWeb: 'Open check-in page',
       checkinFailed: 'Check-in failed',
       checkinUnavailable: 'No check-in available for this account',
+      checkinMonitorTitle: 'Raccoon check-in monitor',
+      checkinMonitorHint: 'Periodically verifies that today’s daily points arrived, and tries the website call when they have not. The “Open check-in page” link always stays available for a manual visit.',
+      checkinInterval: 'Monitor',
+      checkinMonitorOff: 'Monitor off',
+      checkinEvery15: 'Every 15 minutes',
+      checkinEvery30: 'Every 30 minutes',
+      checkinEvery60: 'Hourly',
+      checkinEvery120: 'Every 2 hours',
       plan: 'Plan',
       planFree: 'Free',
       planTrial: 'Trial',
@@ -393,6 +411,14 @@ window.__ModuleLoader__.load({
       { value: 60, labelKey: 'openRouterEvery60' },
       { value: 360, labelKey: 'openRouterEvery360' },
       { value: 1440, labelKey: 'openRouterEvery1440' },
+    ]
+
+    const CHECKIN_INTERVALS = [
+      { value: 0, labelKey: 'checkinMonitorOff' },
+      { value: 15, labelKey: 'checkinEvery15' },
+      { value: 30, labelKey: 'checkinEvery30' },
+      { value: 60, labelKey: 'checkinEvery60' },
+      { value: 120, labelKey: 'checkinEvery120' },
     ]
 
     function regionOf(value) {
@@ -869,11 +895,15 @@ window.__ModuleLoader__.load({
           : brand.id === 'raccoon' && checkin.claimed === false
             ? checkin.message
             : undefined
+      // The timestamp is part of the claim, not decoration: without it a grant
+      // issued just after midnight reads as if it were still yesterday's.
+      const grantedAt = typeof checkin?.grantedAt === 'number' ? checkin.grantedAt : undefined
       const rewardNote = checkin === undefined || checkin.reward === undefined
         || checkin.deviceClaimed === true
         ? null
         : h('span', { style: css.note },
-            `${checkin.claimed === true ? t('checkinReceived') : t('checkinReward')} +${creditsOf(checkin.reward)} ${t('points')}`)
+            `${checkin.claimed === true ? t('checkinReceived') : t('checkinReward')} +${creditsOf(checkin.reward)} ${t('points')}`
+            + (grantedAt === undefined ? '' : ` · ${t('checkinGrantedAt')} ${dateLabel(grantedAt)}`))
       const checkinPanel = signedIn && checkin !== undefined
         && (checkin.available !== false || brand.id === 'codearts')
         ? h('div', { style: css.bar },
@@ -1465,6 +1495,7 @@ window.__ModuleLoader__.load({
       const [routerNotice, setRouterNotice] = useState(undefined)
       const ticket = useRef(0)
       const syncInterval = typeof value.openRouterSyncMinutes === 'number' ? value.openRouterSyncMinutes : 60
+      const checkinInterval = typeof value.raccoonCheckinMinutes === 'number' ? value.raccoonCheckinMinutes : 30
 
       const loadOpenRouter = useCallback(async () => {
         try {
@@ -1495,11 +1526,11 @@ window.__ModuleLoader__.load({
         }
       }, [t])
 
-      const setSyncInterval = useCallback(async next => {
+      const setMinutes = useCallback(async (key, next) => {
         setStatus(t('saving'))
         setError(undefined)
         try {
-          const accepted = await withDeadline(form.set('openRouterSyncMinutes', next), WRITE_TIMEOUT_MS, t('timeout'))
+          const accepted = await withDeadline(form.set(key, next), WRITE_TIMEOUT_MS, t('timeout'))
           if (accepted === false) throw new Error(t('pluginOptionsRejected'))
           setStatus(t('saved'))
         } catch (err) {
@@ -1507,6 +1538,9 @@ window.__ModuleLoader__.load({
           setStatus(undefined)
         }
       }, [form, t])
+
+      const setSyncInterval = useCallback(next => setMinutes('openRouterSyncMinutes', next), [setMinutes])
+      const setCheckinInterval = useCallback(next => setMinutes('raccoonCheckinMinutes', next), [setMinutes])
 
       const toggle = useCallback(async (key, next) => {
         const mine = ++ticket.current
@@ -1592,6 +1626,24 @@ window.__ModuleLoader__.load({
           routerNotice !== undefined ? h('div', { style: css.note }, routerNotice) : null,
           routerError !== undefined ? h('div', { style: css.err }, routerError) : null,
         ),
+        h('div', { style: css.section },
+          h('h3', { style: css.h3 }, t('checkinMonitorTitle')),
+          h('div', { style: css.note }, t('checkinMonitorHint')),
+          h('div', { style: css.bar },
+            h('span', { style: css.label }, t('checkinInterval')),
+            h('select', {
+              style: css.select,
+              value: String(checkinInterval),
+              disabled: busy || !writable,
+              onChange: event => { void setCheckinInterval(Number(event.target.value)) },
+            },
+              CHECKIN_INTERVALS.map(option => h('option', {
+                key: String(option.value),
+                value: String(option.value),
+              }, t(option.labelKey))),
+            ),
+          ),
+        ),
         error !== undefined ? h('div', { style: css.err }, error) : null,
         status !== undefined && error === undefined ? h('div', { style: css.note }, status) : null,
       )
@@ -1647,7 +1699,7 @@ window.__ModuleLoader__.load({
     exports.inject = inject
     exports.name = 'dsh-llm-adapters'
     exports.__test = {
-      BRANDS, FIELDS, REGIONS, OPENROUTER_INTERVALS, regionOf, zh, en, css, windowLabel, creditsOf,
+      BRANDS, FIELDS, REGIONS, OPENROUTER_INTERVALS, CHECKIN_INTERVALS, regionOf, zh, en, css, windowLabel, creditsOf,
       meterPercentOf, percentLabel, ownerLabel, priceText, dateLabel, readCache, writeCache, AccountCard,
       SettingsPage, BundleSettings,
     }

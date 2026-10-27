@@ -54,23 +54,38 @@ function send(res: ServerResponse, status: number, payload: unknown): void {
 
 const WINDOW_CHOICES = [32_000, 64_000, 128_000, 200_000, 256_000, 400_000, 500_000, 1_000_000]
 
+/** The same label the settings page prints, so two sizes never read alike. */
+function windowLabel(value: number): string {
+  if (value >= 1_000_000) {
+    return `${Number((value / 1_000_000).toFixed(value % 1_000_000 === 0 ? 0 : 1))}M`
+  }
+  if (value >= 1_000) return `${Math.round(value / 1_000)}K`
+  return String(value)
+}
+
 export async function buildRows(adapter: LocalAdapter): Promise<ModelRow[]> {
   const models = await adapter.describeCatalog()
   return models.map(model => {
     const override = adapter.contextWindowFor(model.id)
-    const choices = new Set<number>([model.contextWindow])
-    for (const choice of WINDOW_CHOICES) {
-      if (choice < model.contextWindow) choices.add(choice)
-    }
+    // Values the model itself declares are always offered; the generic steps
+    // only fill in sizes that do not round to the same label as one of them.
+    // A 1,048,576 window therefore shows one "1M" instead of a second
+    // auto-added 1,000,000 that the menu also prints as "1M".
+    const explicit = [model.contextWindow]
     // Trae publishes a Max tier wider than the default window; it is the only
     // larger number we offer, because it is the only one the model declares.
     // A wide Max also gets the reference's 500K half-step: jumping straight
     // from a 200K default to 1M is five times the budget.
     if (model.maxContextWindow !== undefined && model.maxContextWindow > model.contextWindow) {
-      if (model.maxContextWindow >= 500_000 && 500_000 > model.contextWindow) choices.add(500_000)
-      choices.add(model.maxContextWindow)
+      if (model.maxContextWindow >= 500_000 && 500_000 > model.contextWindow) explicit.push(500_000)
+      explicit.push(model.maxContextWindow)
     }
-    if (override !== undefined) choices.add(override)
+    if (override !== undefined) explicit.push(override)
+    const labels = new Set(explicit.map(windowLabel))
+    const choices = new Set(explicit)
+    for (const choice of WINDOW_CHOICES) {
+      if (choice < model.contextWindow && !labels.has(windowLabel(choice))) choices.add(choice)
+    }
     return {
       id: model.id,
       name: model.name,

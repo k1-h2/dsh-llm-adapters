@@ -220,11 +220,12 @@ GLM-5.x、openpangu——带图会回 `InferHub.001001020.406 The request model 
 
 **CodeArts 能选更细的思考强度吗？**
 
-不能，只有开 / 关。网关确实接受 `reasoning_effort`，还会**按模型**校验取值
-（`deepseek-v4.1-flash` 收 `none|low|medium|high|xhigh|max`，`glm-5.3` 直接拒绝 `none`），但实测它
-不改变思考长度：同一道证明题，`deepseek-v4.1-flash` 的 `reasoning_tokens` 是 `none` 388 /
-`low` 480 / `max` 515 / 不传 595，`glm-5.3` 是 `max` 709 / 不传 670——噪声比档位差还大。真正生效的是
-顶层 `thinking: { type: 'disabled' }`，实测能把 `reasoning_tokens` 压到 0，所以插件只暴露这两档。
+能选了：卡片保留原来的 `On` / `Off`，并增加 `Low` / `Medium` / `High` / `Xhigh` / `Max`。
+网关确实接受 `reasoning_effort`，也会**按模型**校验取值（`deepseek-v4.1-flash` 收
+`none|low|medium|high|xhigh|max`，`glm-5.3` 直接拒绝 `none`），所以 `Off` 仍走真正生效的
+`thinking: { type: 'disabled' }`，`On` 两个字段都不发，其余档位原样转发。实测这些档位对思考长度
+影响很小（同一道证明题 `deepseek-v4.1-flash`：`none` 388 / `low` 480 / `max` 515 / 不传 595），
+但上游接受就不会报错。
 
 **CodeArts 报 `InferHub.002002009.404 model is not registered`？**
 
