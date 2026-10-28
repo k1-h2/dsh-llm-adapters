@@ -39,6 +39,19 @@ export interface TraeWebLoginOptions {
     logger?: (message: string) => void;
 }
 export declare function machineIdOf(deviceId: string): string;
+/** The port a browser wrote to `DevToolsActivePort`, live or not. */
+export declare function devToolsPortOf(profile: string): number | undefined;
+/**
+ * A live browser left over from an earlier attempt, or `undefined` after
+ * clearing the dead port file.
+ *
+ * A browser killed on Windows leaves `DevToolsActivePort` behind. Reading that
+ * stale file made the next launch connect to a dead port, wait 25 s for a page
+ * that could never appear, and then close the window it had just opened. The
+ * two cases are now told apart: a port that answers is reused, anything else is
+ * a leftover and is removed before the new browser starts.
+ */
+export declare function existingDevToolsPort(profile: string): Promise<number | undefined>;
 /**
  * One browser-backed Trae login.
  *
@@ -56,6 +69,10 @@ export declare class TraeWebLogin {
     private profile;
     private persistentProfile;
     private cdp;
+    private port;
+    /** True only for a browser this flow started; a reused one must survive. */
+    private ownsBrowser;
+    private cleanupTask;
     private timer;
     private deadline;
     private closed;
@@ -71,8 +88,19 @@ export declare class TraeWebLogin {
     private launch;
     private cookies;
     private tick;
+    /**
+     * Decide what a failed status check means.
+     *
+     * Giving up after three consecutive errors is six seconds of a redirect or a
+     * flaky network — and ending the flow used to close the very window the user
+     * was signing in on. Only a dead DevTools connection or a dead browser is
+     * fatal now; everything else retries until the deadline.
+     */
+    private recover;
     private readName;
     private settle;
     private fail;
+    /** One cleanup per flow; a new start waits for it before opening a browser. */
+    private shutdown;
     private cleanup;
 }

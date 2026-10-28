@@ -102,14 +102,18 @@ Trae 没有可以自建的二维码链路：设备指纹必须来自一次真实
    打开 `www.trae.cn` 或 `www.trae.ai`。配置目录与用户自己的浏览器隔离，但**跨登录保留**，
    让同一区域始终复用同一设备指纹；启动参数还关掉了 `AutomationControlled` 特征。
 2. 读 `DevToolsActivePort` 得到调试端口，`/json/list` 找到页面，用 WebSocket 连 CDP。
+   被强杀的浏览器会把端口文件留在配置目录里：启动前先探测该端口，能应答就复用那个窗口
+   （只新开一个标签页，结束时也只关标签页），不能应答则删掉文件再启动，且只接受本次启动
+   写入的文件，避免连到死端口后把刚打开的窗口当成失败关掉。
 3. 每 2 秒 `Network.getAllCookies` 拼 `Cookie` 头，回放给 `CheckLogin`；登录后
    `common/GetUserToken` 换 `Cloud-IDE-JWT`，`trae/GetUserInfo` 取账号信息。
 4. 设备指纹取自该会话的 `localStorage.__msuuid__`（没有时 `msid`，再没有就生成一个并留在
    页面里）；`machineId = sha256("trae-web-machine\0" + deviceId)`。这两项、JWT、网页
    cookie 与网页会话到期时间一起写入账号记录。JWT 约 8 小时，网页会话约 14 天。
-5. 5 分钟超时；成功后关闭窗口但保留配置目录。取消、失败与插件卸载同样走清理路径（Windows
-   上用 `taskkill /T /F` 杀掉进程树）。退出登录会删除该区域的配置目录，避免下次登录被
-   浏览器 cookie 自动接回。
+5. 10 分钟超时；成功后关闭窗口但保留配置目录。状态检查连续失败不会立刻结束流程（只有 CDP
+   断线或浏览器真的退出才结束），避免登录重定向中的网络抖动关掉用户正在操作的窗口。取消、
+   失败与插件卸载同样走清理路径（Windows 上用 `taskkill /T /F` 杀掉进程树）；复用的窗口
+   只关标签页。退出登录会删除该区域的配置目录，避免下次登录被浏览器 cookie 自动接回。
 
 两条目录来源合并成一份模型表（`mergeTraeModels`）：**只考虑客户端主通道**
 （`TRAE_PRIMARY_FUNCTIONS` = `solo_work_remote` / `solo_work_lite`）里的远端行，并且每一行都
