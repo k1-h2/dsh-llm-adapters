@@ -453,17 +453,20 @@ export class CodeArtsProvider {
       if (seen.has(key)) continue
       seen.add(key)
       if (row.images === true) this.nativeVision.add(key)
-      // Every model accepts an image: the two vision models read it directly,
-      // and the rest get a transcript from `relayImages` before the request.
-      // The text-only list is the only way to opt a model out.
-      const vision = !textOnly.has(row.id)
+      // `vision` is what the harness gates pixels on, so every model keeps it:
+      // the native ones read the image, the rest get a transcript from
+      // `relayImages`. `visionRelay` is only for the settings list, which marks
+      // native capability and explains the relay in one hint.
+      const acceptsImages = !textOnly.has(row.id)
+      const native = this.nativeVision.has(key)
       const factor = priceFactorOfLabel(row.rateLabel)
       rows.push({
         id: row.id,
         name: row.name,
         contextWindow: codeartsContextWindow(row.id),
         maxTokens: CODEARTS_MAX_OUTPUT_TOKENS,
-        vision,
+        vision: acceptsImages,
+        ...acceptsImages && !native ? { visionRelay: true } : {},
         reasoning: true,
         reasoningEfforts: codeartsEfforts(index?.match(parseModelName(row.name).name, row.id)),
         defaultReasoningEffort: CODEARTS_DEFAULT_EFFORT,

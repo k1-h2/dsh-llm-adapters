@@ -24,6 +24,7 @@ interface ClientExports {
     amountText: (quota: Record<string, unknown> | undefined, value: number | undefined) => string
     writeCache: (brand: string, kind: string, value: unknown) => void
     AccountCard: (props: Record<string, unknown>) => unknown
+    SettingsPage: (props: Record<string, unknown>) => unknown
   }
 }
 
@@ -84,8 +85,10 @@ function walk(node: unknown, visit: (element: Element) => void): void {
 
 function textOf(node: unknown, out: string[] = []): string[] {
   if (typeof node === 'string' || typeof node === 'number') out.push(String(node))
-  else if (node !== null && typeof node === 'object') {
-    for (const child of (node as Element).props.children ?? []) textOf(child, out)
+  else if (Array.isArray(node)) {
+    for (const child of node) textOf(child, out)
+  } else if (node !== null && typeof node === 'object') {
+    for (const child of (node as Element).props?.children ?? []) textOf(child, out)
   }
   return out
 }
@@ -202,6 +205,59 @@ describe('client bundle', () => {
     expect(exports.__test.zh.raccoonHint).toContain('每日积分')
     expect(exports.__test.en.raccoonHint).toContain('30 days')
     expect(exports.__test.en.raccoonHint).toContain('Daily points')
+  })
+
+  it('explains the CodeArts image relay below the model list', () => {
+    const { zh, en } = exports.__test as unknown as {
+      zh: Record<string, string>
+      en: Record<string, string>
+    }
+    expect(zh.codeartsVisionHint).toContain('原生')
+    expect(zh.codeartsVisionHint).toContain('转述')
+    expect(en.codeartsVisionHint).toContain('native')
+    expect(en.codeartsVisionHint).toContain('transcribes')
+  })
+
+  it('marks native vision only and hints at the relay below the list', () => {
+    const tree = loadClient(TREE_REACT)
+    const { writeCache, SettingsPage, zh } = tree.__test
+    writeCache('codearts', 'models', {
+      signedIn: true,
+      rows: [
+        {
+          id: 'glm-5.2', name: 'GLM-5.2', enabled: false, vision: true, visionRelay: true,
+          reasoning: true, contextWindows: [200_000], defaultContextWindow: 200_000,
+        },
+        {
+          id: 'kimi-k2.6-vl', name: 'Kimi-K2.6-VL', enabled: false, vision: true,
+          reasoning: false, contextWindows: [262_144], defaultContextWindow: 262_144,
+        },
+      ],
+      at: Date.now(),
+    })
+    const ctx = {
+      configForms: {
+        get: () => ({
+          getSnapshot: () => ({ value: {}, writable: true }),
+          subscribe: () => () => undefined,
+          set: async () => undefined,
+          unset: async () => undefined,
+        }),
+      },
+    }
+    const rendered = SettingsPage({
+      ctx,
+      t: (key: string) => (zh as Record<string, string>)[key] ?? key,
+      brand: { id: 'codearts', titleKey: 'codeartsTitle', introKey: 'codeartsIntro' },
+    })
+    const tags: string[] = []
+    walk(rendered, element => {
+      if (element.type === 'span' && textOf(element).join('') === '读图') tags.push('读图')
+    })
+    const text = textOf(rendered).join(' ')
+    // The relayed row carries no native tag; only the VL model does.
+    expect(tags).toHaveLength(1)
+    expect(text).toContain('「读图」只标记模型原生支持图片')
   })
 
   it('renders the credit bar and the account name on the CodeArts card', () => {

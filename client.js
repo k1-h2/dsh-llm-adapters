@@ -167,6 +167,7 @@ window.__ModuleLoader__.load({
       codeartsTitle: '华为云 CodeArts',
       codeartsIntro: '点“打开浏览器登录”在华为云完成授权，插件用授权得到的 AK/SK 签名调用 CodeArts 网关，不读本机 IDE 的任何文件。改动即时生效，无需重启。',
       codeartsHint: 'CodeArts 用签名而不是令牌调用，STS 令牌两小时有效，到期会自动用续期令牌续上；续期令牌失效后重新登录一次即可。积分计费账户每天可以签到领积分。',
+      codeartsVisionHint: '「读图」只标记模型原生支持图片。没有这个标记的模型也能收图：发送时会先由 kimi-k2.6-vl 把图片转述成文字，识别结果按图片内容缓存，同一张图只多花一次对话。',
       browserHintCodeArts: '点下面的按钮会在浏览器里打开华为云授权页：登录并同意授权后会自动回到本机，凭据由宿主接回，页面上不需要复制任何东西。',
       browserPollingCodeArts: '已打开华为云授权页：完成授权后会自动接回，这个标签页可以关闭。',
       browserTitleCodeArts: '华为云授权登录',
@@ -330,6 +331,7 @@ window.__ModuleLoader__.load({
       codeartsTitle: 'Huawei CodeArts',
       codeartsIntro: 'Use “Open browser sign-in” to authorize on Huawei Cloud; the plugin signs CodeArts gateway calls with the resulting AK/SK and never reads the local IDE. Changes apply immediately.',
       codeartsHint: 'CodeArts is called with a signature, not a token. The STS token lasts two hours and is renewed automatically; sign in again once the refresh token expires. Credit-billed accounts can check in once a day for credits.',
+      codeartsVisionHint: '“Vision” marks native image support only. Other models still accept images: kimi-k2.6-vl transcribes the picture to text first, and the transcript is cached per image, so the same picture costs one extra turn in total.',
       browserHintCodeArts: 'The button opens Huawei Cloud’s authorization page: sign in and approve, then the browser returns to this machine and the host adopts the credential. Nothing has to be copied.',
       browserPollingCodeArts: 'The Huawei Cloud page is open: finish authorizing and the login is adopted automatically; this tab can be closed.',
       browserTitleCodeArts: 'Huawei Cloud authorization',
@@ -1408,7 +1410,11 @@ window.__ModuleLoader__.load({
           h('div', { style: css.name },
             h('div', { style: css.nameText },
               model.name,
-              model.vision === true ? h('span', { key: 'v', style: { ...css.tag, marginLeft: '6px' } }, t('vision')) : null,
+              // Only native image support gets the tag; relayed capability is
+              // explained once below the list instead of on every row.
+              model.vision === true && model.visionRelay !== true
+                ? h('span', { key: 'v', style: { ...css.tag, marginLeft: '6px' } }, t('vision'))
+                : null,
               model.reasoning === true ? h('span', { key: 'r', style: { ...css.tag, marginLeft: '6px' } }, t('reasoning')) : null,
               ...(Array.isArray(model.labels) ? model.labels : []).map((label, labelIndex) =>
                 h('span', { key: `l${labelIndex}`, style: { ...css.tag, marginLeft: '6px' } }, label)),
@@ -1476,6 +1482,9 @@ window.__ModuleLoader__.load({
           : h('div', { style: css.list }, rows.length > 0
               ? rows
               : h('div', { style: { ...css.note, padding: '12px 14px' } }, '—')),
+        all.length > 0 && brand.id === 'codearts'
+          ? h('div', { style: css.note }, t('codeartsVisionHint'))
+          : null,
         notice !== undefined ? h('div', { style: css.note }, `${t('catalogNotice')}：${notice}`) : null,
         all.length > 0 ? h('div', { style: css.note }, t('windowWarn')) : null,
         error !== undefined ? h('div', { style: css.err }, error) : null,
