@@ -1270,6 +1270,7 @@ export class TraeProvider {
       ...tools === undefined ? {} : { tools },
       ...effort === undefined ? {} : { reasoning_effort: effort },
     }
+    let loginLost = false
     try {
       const response = await this.fetchImpl(`${profile.chatBase}${TRAE_SOLO_CHAT_PATH}`, {
         method: 'POST',
@@ -1278,13 +1279,26 @@ export class TraeProvider {
         signal: options.signal ?? AbortSignal.timeout(120_000),
       })
       if (!response.ok) {
-        if (response.status === 401 || response.status === 403) await this.options.auth.accessToken(true)
+        if (response.status === 401 || response.status === 403) {
+          // A rejected token is renewable: only a renewal that itself fails
+          // means the login is gone. A successful renewal keeps the cached
+          // catalogue, which still describes the same account.
+          try {
+            await this.options.auth.accessToken(true)
+          } catch (error) {
+            loginLost = true
+            throw error
+          }
+        }
         throw new ProviderHttpError(await responseError(response), response.status)
       }
       if (response.body === null) throw new ProviderHttpError('Trae 没有返回响应体', 502)
       yield* openTraeStream(response.body, model)
     } finally {
-      onInvalidate()
+      // Invalidate on a lost login only. Dropping the catalogue after every
+      // turn made the next model switch wait for a full directory read, which
+      // is exactly the freeze the cached lookup is meant to avoid.
+      if (loginLost) onInvalidate()
     }
   }
 

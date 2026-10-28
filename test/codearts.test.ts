@@ -519,6 +519,38 @@ describe('CodeArts provider', () => {
     expect(bodies[1]!.thinking).toBeUndefined()
   })
 
+  it('does not invalidate the catalogue after a normal turn', async () => {
+    const onInvalidate = vi.fn()
+    const fetchMock = vi.fn(async () => sse([
+      JSON.stringify({ choices: [{ delta: { content: 'hi' }, finish_reason: 'stop' }] }),
+      '[DONE]',
+    ]))
+    const provider = make({
+      status: async () => ({ signedIn: true }),
+      credential: async () => ({ accessKeyId: 'AK', secretAccessKey: 'SK', securityToken: 'ST' }),
+      refresh: async () => ({ accessKeyId: 'AK', secretAccessKey: 'SK', securityToken: 'ST' }),
+      logout: async () => undefined,
+    }, fetchMock as unknown as typeof fetch)
+    await collect(provider.stream(options, 'glm-5.3', undefined, onInvalidate))
+    // A normal turn must keep the cached roster; dropping it here made the next
+    // model switch wait for a full catalogue read.
+    expect(onInvalidate).not.toHaveBeenCalled()
+  })
+
+  it('invalidates when the credential cannot be renewed', async () => {
+    const onInvalidate = vi.fn()
+    const fetchMock = vi.fn(async () => json({ error: 'token expired' }, 401))
+    const provider = make({
+      status: async () => ({ signedIn: true }),
+      credential: async () => ({ accessKeyId: 'AK', secretAccessKey: 'SK', securityToken: 'ST' }),
+      refresh: async () => { throw new Error('refresh rejected') },
+      logout: async () => undefined,
+    }, fetchMock as unknown as typeof fetch)
+    await expect(collect(provider.stream(options, 'glm-5.3', undefined, onInvalidate)))
+      .rejects.toThrow('refresh rejected')
+    expect(onInvalidate).toHaveBeenCalledOnce()
+  })
+
   it('retries without maas_type when the account has no benefit pack', async () => {
     const bodies: Record<string, unknown>[] = []
     const headers: Record<string, string>[] = []
