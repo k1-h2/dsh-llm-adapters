@@ -20,7 +20,7 @@
 
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { TraeRegion } from './brand.ts'
@@ -49,8 +49,9 @@ export interface TraeWebLoginOptions {
   logger?: (message: string) => void
 }
 
-const DEFAULT_TIMEOUT_MS = 5 * 60 * 1_000
+const DEFAULT_TIMEOUT_MS = 10 * 60 * 1_000
 const POLL_INTERVAL_MS = 2_000
+const WAITING_MESSAGE = '请在浏览器中完成登录，成功后窗口会自动关闭。'
 const DEVICE_EXPRESSION = `(() => {
   try { const value = localStorage.getItem('__msuuid__'); if (value) return value } catch (error) {}
   try { const value = localStorage.getItem('msid'); if (value) return value } catch (error) {}
@@ -58,6 +59,7 @@ const DEVICE_EXPRESSION = `(() => {
 })()`
 
 interface CdpTarget {
+  id?: string
   type: string
   url: string
   webSocketDebuggerUrl?: string
@@ -65,6 +67,7 @@ interface CdpTarget {
 
 interface WebSocketLike {
   onopen: (() => void) | null
+  onclose: (() => void) | null
   onerror: ((event: unknown) => void) | null
   onmessage: ((event: { data: unknown }) => void) | null
   send(data: string): void
@@ -147,15 +150,26 @@ function browserCandidates(): string[] {
 }
 
 function findBrowser(): string | undefined {
+  const override = process.env.DSH_TRAE_BROWSER?.trim()
+  if (override !== undefined && override !== '' && existsSync(override)) return override
   return browserCandidates().find(candidate => existsSync(candidate))
 }
 
 /** A minimal DevTools protocol client over the page target's WebSocket. */
 class CdpClient {
   private nextId = 0
-  private readonly pending = new Map<number, { resolve: (value: unknown) => void, reject: (error: Error) => void }>()
+  private closedFlag = false
+  private readonly pending = new Map<number, {
+    resolve: (value: unknown) => void
+    reject: (error: Error) => void
+    timer: NodeJS.Timeout
+  }>()
 
   private constructor(private readonly socket: WebSocketLike) {
+    socket.onclose = () => {
+      this.closedFlag = true
+      this.failPending(new Error('浏览器调试连接已断开'))
+    }
     socket.onmessage = event => {
       if (typeof event.data !== 'string') return
       let message: unknown
@@ -179,6 +193,10 @@ class CdpClient {
     }
   }
 
+  get closed(): boolean {
+    return this.closedFlag
+  }
+
   static async connect(url: string): Promise<CdpClient> {
     const Constructor = (globalThis as { WebSocket?: WebSocketConstructor }).WebSocket
     if (Constructor === undefined) throw new Error('当前 Node 版本没有 WebSocket，无法连接浏览器调试端口')
@@ -191,16 +209,43 @@ class CdpClient {
   }
 
   send<T = unknown>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+    if (this.closedFlag) return Promise.reject(new Error('浏览器调试连接已断开'))
     const id = ++this.nextId
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve: value => resolve(value as T), reject })
+      // A socket can stay "open" while the browser stops answering; without a
+      // timeout the whole login poll would wait forever and never recover.
+      const timer = setTimeout(() => {
+        this.pending.delete(id)
+        reject(new Error('浏览器调试命令超时'))
+      }, 15_000)
+      timer.unref?.()
+      this.pending.set(id, {
+        resolve: value => {
+          clearTimeout(timer)
+          resolve(value as T)
+        },
+        reject: error => {
+          clearTimeout(timer)
+          reject(error)
+        },
+        timer,
+      })
       try {
         this.socket.send(JSON.stringify({ id, method, params }))
       } catch (error) {
+        clearTimeout(timer)
         this.pending.delete(id)
         reject(error instanceof Error ? error : new Error(String(error)))
       }
     })
+  }
+
+  private failPending(error: Error): void {
+    for (const waiter of this.pending.values()) {
+      clearTimeout(waiter.timer)
+      waiter.reject(error)
+    }
+    this.pending.clear()
   }
 
   async evaluate<T>(expression: string): Promise<T> {
@@ -216,6 +261,8 @@ class CdpClient {
   }
 
   close(): void {
+    this.closedFlag = true
+    this.failPending(new Error('浏览器调试连接已关闭'))
     try {
       this.socket.close()
     } catch {
@@ -224,14 +271,98 @@ class CdpClient {
   }
 }
 
-async function waitForDevToolsPort(profile: string, timeoutMs: number): Promise<number> {
+/** The port a browser wrote to `DevToolsActivePort`, live or not. */
+export function devToolsPortOf(profile: string): number | undefined {
+  try {
+    const lines = readFileSync(join(profile, 'DevToolsActivePort'), 'utf8').trim().split(/\r?\n/)
+    const port = Number(lines[0])
+    return Number.isInteger(port) && port > 0 ? port : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Whether something answers the DevTools HTTP endpoint on that port. */
+async function devToolsAlive(port: number): Promise<boolean> {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/json/version`, {
+      signal: AbortSignal.timeout(800),
+    })
+    return response.ok
+  } catch {
+    return false
+  }
+}
+
+/**
+ * A live browser left over from an earlier attempt, or `undefined` after
+ * clearing the dead port file.
+ *
+ * A browser killed on Windows leaves `DevToolsActivePort` behind. Reading that
+ * stale file made the next launch connect to a dead port, wait 25 s for a page
+ * that could never appear, and then close the window it had just opened. The
+ * two cases are now told apart: a port that answers is reused, anything else is
+ * a leftover and is removed before the new browser starts.
+ */
+export async function existingDevToolsPort(profile: string): Promise<number | undefined> {
+  const port = devToolsPortOf(profile)
+  if (port !== undefined) {
+    // The file appears just before the endpoint starts answering, so give a
+    // browser that is still starting a moment before calling it a leftover.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (await devToolsAlive(port)) return port
+      await sleep(300)
+    }
+  }
+  rmSync(join(profile, 'DevToolsActivePort'), { force: true })
+  return undefined
+}
+
+/** Open a fresh login tab in a browser that already owns the profile. */
+async function openLoginPage(
+  port: number,
+  url: string,
+  origin: string,
+  timeoutMs: number,
+  stopped?: () => boolean,
+): Promise<CdpTarget> {
+  // Chrome 111+ requires PUT; older builds (and some Edge versions) only accept
+  // GET. Whichever works, the returned target is the new tab.
+  for (const method of ['PUT', 'GET']) {
+    if (stopped?.() === true) throw new Error('登录已取消。')
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/json/new?${encodeURIComponent(url)}`, {
+        method,
+        signal: AbortSignal.timeout(5_000),
+      })
+      if (!response.ok) continue
+      const target = await response.json() as CdpTarget
+      if (target.webSocketDebuggerUrl !== undefined) return target
+    } catch {
+      /* try the other method, then any existing tab */
+    }
+  }
+  return waitForPage(port, origin, timeoutMs, stopped)
+}
+
+async function waitForDevToolsPort(
+  profile: string,
+  timeoutMs: number,
+  since: number,
+  stopped?: () => boolean,
+): Promise<number> {
   const file = join(profile, 'DevToolsActivePort')
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
+    if (stopped?.() === true) throw new Error('登录已取消。')
     try {
-      const lines = readFileSync(file, 'utf8').trim().split(/\r?\n/)
-      const port = Number(lines[0])
-      if (Number.isInteger(port) && port > 0) return port
+      // Only a file written by this launch counts: a leftover from a previous
+      // browser must never be mistaken for the port of the window just opened.
+      if (statSync(file).mtimeMs >= since - 1_000) {
+        const lines = readFileSync(file, 'utf8').trim().split(/\r?\n/)
+        const port = Number(lines[0])
+        if (Number.isInteger(port) && port > 0) return port
+      }
     } catch {
       /* not written yet */
     }
@@ -240,9 +371,15 @@ async function waitForDevToolsPort(profile: string, timeoutMs: number): Promise<
   throw new Error('浏览器没有在预期时间内打开调试端口，登录无法继续')
 }
 
-async function waitForPage(port: number, origin: string, timeoutMs: number): Promise<CdpTarget> {
+async function waitForPage(
+  port: number,
+  origin: string,
+  timeoutMs: number,
+  stopped?: () => boolean,
+): Promise<CdpTarget> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
+    if (stopped?.() === true) throw new Error('登录已取消。')
     try {
       const response = await fetch(`http://127.0.0.1:${port}/json/list`)
       if (response.ok) {
@@ -321,6 +458,10 @@ export class TraeWebLogin {
   private profile: string | undefined
   private persistentProfile = false
   private cdp: CdpClient | undefined
+  private port: number | undefined
+  /** True only for a browser this flow started; a reused one must survive. */
+  private ownsBrowser = false
+  private cleanupTask: Promise<void> | undefined
   private timer: NodeJS.Timeout | undefined
   private deadline: NodeJS.Timeout | undefined
   private closed = false
@@ -347,6 +488,12 @@ export class TraeWebLogin {
 
   async start(): Promise<LoginStatus> {
     if (this.phase === 'preparing' || this.phase === 'waiting') return this.status()
+    // A previous window may still be shutting down; starting again before that
+    // finishes would race the kill against the new browser on the same profile.
+    if (this.cleanupTask !== undefined) {
+      await this.cleanupTask.catch(() => undefined)
+      this.cleanupTask = undefined
+    }
     this.reset()
     this.phase = 'preparing'
     this.startedAt = Date.now()
@@ -355,7 +502,7 @@ export class TraeWebLogin {
       await this.launch()
       if (this.closed) return this.status()
       this.phase = 'waiting'
-      this.message = '请在浏览器中完成登录，成功后窗口会自动关闭。'
+      this.message = WAITING_MESSAGE
       this.timer = setInterval(() => { void this.tick() }, POLL_INTERVAL_MS)
       this.timer.unref?.()
       this.deadline = setTimeout(() => { this.fail('登录等待超时，请重新发起登录。') }, this.timeoutMs)
@@ -374,7 +521,7 @@ export class TraeWebLogin {
 
   async close(): Promise<void> {
     await this.cancel()
-    await this.cleanup()
+    await this.shutdown()
   }
 
   private reset(): void {
@@ -388,6 +535,8 @@ export class TraeWebLogin {
     this.polling = false
     this.failures = 0
     this.persistentProfile = false
+    this.port = undefined
+    this.ownsBrowser = false
   }
 
   private async launch(): Promise<void> {
@@ -400,6 +549,22 @@ export class TraeWebLogin {
     this.persistentProfile = this.options.profileDir !== undefined
     if (this.persistentProfile) mkdirSync(directory, { recursive: true })
     this.profile = directory
+    const loginUrl = `${profile.webOrigin}/login?redirect_url=${encodeURIComponent(`${profile.webOrigin}/`)}`
+
+    const existing = await existingDevToolsPort(directory)
+    if (existing !== undefined) {
+      // Chrome refuses a second instance on the same user-data-dir and hands the
+      // URL to the running one instead. Reuse that window: the user may be in
+      // the middle of signing in, and a browser this flow did not start must
+      // never be killed when the flow ends.
+      this.port = existing
+      this.ownsBrowser = false
+      const page = await openLoginPage(existing, loginUrl, profile.webOrigin, 25_000, () => this.closed)
+      this.cdp = await CdpClient.connect(page.webSocketDebuggerUrl!)
+      return
+    }
+
+    const launchedAt = Date.now()
     const child = spawn(executable, [
       '--remote-debugging-port=0',
       `--user-data-dir=${directory}`,
@@ -411,19 +576,33 @@ export class TraeWebLogin {
       // flags; keep the ordinary browser fingerprint for this dedicated profile.
       '--disable-blink-features=AutomationControlled',
       '--disable-features=Translate,MediaRouter',
-      `${profile.webOrigin}/login?redirect_url=${encodeURIComponent(`${profile.webOrigin}/`)}`,
+      loginUrl,
     ], { stdio: 'ignore' })
     this.browser = child
+    this.ownsBrowser = true
     child.once('error', error => {
       this.fail(`无法启动浏览器：${error.message}`)
     })
     child.once('exit', () => {
-      if (!this.closed && (this.phase === 'preparing' || this.phase === 'waiting')) {
-        this.fail('浏览器已关闭，登录未完成。')
-      }
+      if (this.closed || (this.phase !== 'preparing' && this.phase !== 'waiting')) return
+      // A handoff to an already-running instance also ends this process; only a
+      // dead DevTools port means the window really closed.
+      const timer = setTimeout(() => {
+        void (async () => {
+          if (this.closed || (this.phase !== 'preparing' && this.phase !== 'waiting')) return
+          const port = this.port ?? devToolsPortOf(directory)
+          if (port !== undefined && await devToolsAlive(port)) {
+            this.port = port
+            return
+          }
+          this.fail('浏览器已关闭，登录未完成。')
+        })()
+      }, 1_500)
+      timer.unref?.()
     })
-    const port = await waitForDevToolsPort(directory, 25_000)
-    const page = await waitForPage(port, profile.webOrigin, 25_000)
+    const port = await waitForDevToolsPort(directory, 25_000, launchedAt, () => this.closed)
+    this.port = port
+    const page = await waitForPage(port, profile.webOrigin, 25_000, () => this.closed)
     this.cdp = await CdpClient.connect(page.webSocketDebuggerUrl!)
   }
 
@@ -457,6 +636,7 @@ export class TraeWebLogin {
       const result = record(check.Result)
       if (result?.IsLogin !== true) {
         this.failures = 0
+        this.message = WAITING_MESSAGE
         return
       }
       const tokenPayload = await authPost(profile, cookie, '/cloudide/api/v3/common/GetUserToken', {})
@@ -483,10 +663,33 @@ export class TraeWebLogin {
       this.settle('done', '登录成功，浏览器窗口会自动关闭。')
     } catch (error) {
       this.failures += 1
-      if (this.failures >= 3) this.fail(error instanceof Error ? error.message : String(error))
+      const message = error instanceof Error ? error.message : String(error)
+      this.options.logger?.(`dsh-llm-adapters: Trae 登录状态检查失败（第 ${this.failures} 次）：${message}`)
+      await this.recover()
     } finally {
       this.polling = false
     }
+  }
+
+  /**
+   * Decide what a failed status check means.
+   *
+   * Giving up after three consecutive errors is six seconds of a redirect or a
+   * flaky network — and ending the flow used to close the very window the user
+   * was signing in on. Only a dead DevTools connection or a dead browser is
+   * fatal now; everything else retries until the deadline.
+   */
+  private async recover(): Promise<void> {
+    if (this.closed) return
+    if (this.cdp?.closed === true) {
+      this.fail('登录窗口已关闭，请重新发起登录。')
+      return
+    }
+    if (this.port !== undefined && await devToolsAlive(this.port)) {
+      this.message = '正在等待登录（状态检查暂时失败，自动重试中）…'
+      return
+    }
+    this.fail('浏览器已关闭，登录未完成。')
   }
 
   private async readName(
@@ -507,7 +710,7 @@ export class TraeWebLogin {
     this.phase = phase
     this.message = message
     this.finishedAt = Date.now()
-    void this.cleanup()
+    void this.shutdown()
   }
 
   private fail(message: string): void {
@@ -517,7 +720,13 @@ export class TraeWebLogin {
     this.message = message
     this.finishedAt = Date.now()
     this.options.logger?.(`dsh-llm-adapters: Trae 登录失败：${message}`)
-    void this.cleanup()
+    void this.shutdown()
+  }
+
+  /** One cleanup per flow; a new start waits for it before opening a browser. */
+  private shutdown(): Promise<void> {
+    this.cleanupTask ??= this.cleanup()
+    return this.cleanupTask
   }
 
   private async cleanup(): Promise<void> {
@@ -526,11 +735,26 @@ export class TraeWebLogin {
     if (this.deadline !== undefined) clearTimeout(this.deadline)
     this.timer = undefined
     this.deadline = undefined
-    this.cdp?.close()
+    const cdp = this.cdp
+    const owns = this.ownsBrowser
     this.cdp = undefined
+    this.ownsBrowser = false
+    this.port = undefined
+    if (cdp !== undefined) {
+      // A reused window belongs to an earlier attempt: close only the tab this
+      // flow opened, never the browser itself.
+      if (!owns && !cdp.closed) {
+        try {
+          await cdp.send('Page.close')
+        } catch {
+          /* the tab is already gone */
+        }
+      }
+      cdp.close()
+    }
     const child = this.browser
     this.browser = undefined
-    if (child !== undefined && child.exitCode === null) {
+    if (owns && child !== undefined && child.exitCode === null) {
       child.kill()
       if (process.platform === 'win32' && child.pid !== undefined) {
         try {
