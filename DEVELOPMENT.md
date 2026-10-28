@@ -237,8 +237,10 @@ IDE 自身 provider 配置的 `limit.context`（`codearts-endpoints.ts` 的静�
 工具调用；其余模型带图一律回 `InferHub.001001020.406`——包括 `deepseek-v4.1-flash`，尽管 DeepSeek
 官方 API 接受图片（data URL、外部 https、`image_url` 字符串、Anthropic `image/source`、
 `input_image`、1017 变体共 8 种写法实测全被拒，同一张图给 VL 模型立即返回）。所以目录里**每一行都
-标 `vision`**：VL 模型直接读，文本模型走下面的转述。窗口表里 VL 模型没有 `limit.context`，按模型卡
-各取 256K；网关名册没有 `supports_images` 字段，那部分仍靠 `CODEARTS_VISION_MODELS` 兜底。
+标 `vision`**——那是适配器「可以接收图片」的判据，文本模型的图片随后由转述处理。设置页只看
+`visionRelay`：为真的一行不显示「读图」标签，改在列表下方用一句提示说明转述与缓存，这样标签只表达
+模型的原生能力。窗口表里 VL 模型没有 `limit.context`，按模型卡各取 256K；网关名册没有
+`supports_images` 字段，那部分仍靠 `CODEARTS_VISION_MODELS` 兜底。
 
 ### 图片转述（`relayImages` / `describeImage`）
 

@@ -84,7 +84,7 @@ export const Config = z.object({
   raccoonTextOnlyModelIds: z.array(z.string()).default([]).description('小浣熊强制按“纯文本”声明的模型 ID，优先级最高。').volatile(),
   traeVisionModelIds: z.array(z.string()).default([]).description('Trae 强制按“能读图”声明的模型 ID。目录标注 multimodal 的模型会自动启用。').volatile(),
   traeTextOnlyModelIds: z.array(z.string()).default([]).description('Trae 强制按“纯文本”声明的模型 ID，优先级最高。').volatile(),
-  codeartsVisionModelIds: z.array(z.string()).default([]).description('CodeArts 强制按“能读图”声明的模型 ID。所有模型都接收图片：VL 模型直接读图，文本模型先由 VL 模型转述；要关掉某个模型的读图能力请用下面的“纯文本”列表。').volatile(),
+  codeartsVisionModelIds: z.array(z.string()).default([]).description('CodeArts 的“强制读图”列表。所有模型都能接收图片（文本模型先由 VL 模型转述，设置页只给原生多模态模型标“读图”）；要关掉某个模型的读图能力请用下面的“纯文本”列表。').volatile(),
   codeartsTextOnlyModelIds: z.array(z.string()).default([]).description('CodeArts 强制按“纯文本”声明的模型 ID，优先级最高。').volatile(),
 
   defaultMaxTokens: z.number().step(1).min(1).default(32_000).description('模型目录未声明输出上限时使用的输出上限。').volatile(),

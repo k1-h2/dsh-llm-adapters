@@ -231,6 +231,22 @@ describe('buildRows', () => {
       defaultContextWindow: 200_000,
     })
   })
+
+  it('separates native image support from a relayed one', async () => {
+    const relayed: ProviderModel = {
+      id: 'text-model', name: 'Text', contextWindow: 200_000,
+      vision: true, visionRelay: true, reasoning: true,
+    }
+    const native: ProviderModel = {
+      id: 'vl-model', name: 'VL', contextWindow: 200_000,
+      vision: true, reasoning: false,
+    }
+    const { adapter } = makeAdapter({ models: async () => [relayed, native] })
+    const rows = await buildRows(adapter)
+    expect(rows[0]).toMatchObject({ id: 'text-model', vision: true, visionRelay: true })
+    expect(rows[1]).toMatchObject({ id: 'vl-model', vision: true })
+    expect(rows[1]!.visionRelay).toBeUndefined()
+  })
 })
 
 interface Captured {

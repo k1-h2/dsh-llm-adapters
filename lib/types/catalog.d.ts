@@ -24,7 +24,17 @@ export interface ProviderModel {
     /** Widest window the upstream offers (Trae's Max tier), when it publishes one. */
     maxContextWindow?: number;
     maxTokens?: number;
+    /**
+     * The route can take image input. This is what the harness checks before it
+     * hands pixels to the adapter, so a relayed capability counts here too.
+     */
     vision: boolean;
+    /**
+     * Images arrive through a transcript produced by another model rather than
+     * being read natively. Settings pages show the native tag only, and use this
+     * flag for the explanatory hint.
+     */
+    visionRelay?: boolean;
     reasoning: boolean;
     reasoningEfforts?: readonly string[];
     defaultReasoningEffort?: string;

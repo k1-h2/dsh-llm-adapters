@@ -616,8 +616,12 @@ describe('CodeArts provider', () => {
     // The image models are hidden from the IDE's own menu but still served.
     expect(models[2]).toMatchObject({ contextWindow: 262_144, vision: true })
     expect(models[3]!.contextWindow).toBe(524_288)
-    // Text models reach images through the vision relay, so every row takes them.
+    // Every row accepts images (the harness gates pixels on `vision`), but only
+    // the model that reads them itself is marked native; the rest are relayed.
     expect(models.every(model => model.vision)).toBe(true)
+    expect(models.filter(model => model.visionRelay !== true).map(model => model.id))
+      .toEqual(['kimi-k2.6-vl'])
+    expect(models.find(model => model.id === 'GLM-5.2')?.visionRelay).toBe(true)
   })
 
   it('narrows the graded levels to what OpenRouter says the model accepts', async () => {

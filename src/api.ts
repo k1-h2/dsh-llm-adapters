@@ -22,7 +22,10 @@ export interface ModelRow {
   description?: string
   labels?: readonly string[]
   enabled: boolean
+  /** The route accepts images. */
   vision: boolean
+  /** Images are transcribed by another model first, not read natively. */
+  visionRelay?: boolean
   contextWindow: number
   /** Widest window the model offers; the row's `<select>` may go up to it. */
   maxContextWindow?: number
@@ -93,6 +96,7 @@ export async function buildRows(adapter: LocalAdapter): Promise<ModelRow[]> {
       ...model.labels === undefined ? {} : { labels: model.labels },
       enabled: !adapter.isModelDisabled(model.id),
       vision: model.vision,
+      ...model.visionRelay === true ? { visionRelay: true } : {},
       contextWindow: override ?? model.contextWindow,
       ...model.maxContextWindow === undefined ? {} : { maxContextWindow: model.maxContextWindow },
       contextWindows: [...choices].sort((a, b) => a - b),
