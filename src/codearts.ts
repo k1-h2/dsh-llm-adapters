@@ -917,7 +917,13 @@ export class CodeArtsProvider {
         if (error instanceof CodeArtsRetry) {
           if (error.kind === 'auth' && !authRefreshed) {
             authRefreshed = true
-            await this.options.auth.refresh(true)
+            try {
+              await this.options.auth.refresh(true)
+            } catch (refreshError) {
+              // The rejection survived a renewal: the login itself is gone.
+              onInvalidate()
+              throw refreshError
+            }
             continue
           }
           if (error.kind === 'benefit' && !benefitDropped) {

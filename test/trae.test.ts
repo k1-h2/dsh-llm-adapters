@@ -1060,4 +1060,52 @@ describe('TraeProvider', () => {
       .rejects.toBeInstanceOf(ProviderHttpError)
     expect(forced).toEqual([true])
   })
+
+  it('keeps the cached catalogue after a normal turn', async () => {
+    const onInvalidate = vi.fn()
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/api/remote/v1/models')) return json(remotePayload)
+      if (url.includes('/get_detail_param')) return json(wirePayload)
+      return new Response(
+        stream(['event: output\ndata: {"response":"ok"}', 'event: done\ndata: {"finish_reason":"stop"}']),
+        { status: 200, headers: { 'content-type': 'text/event-stream' } },
+      )
+    })
+    const { provider } = make('cn', fetchMock as unknown as typeof fetch)
+    await collect(provider.stream(options, 'gpt-5', undefined, onInvalidate))
+    // Dropping the catalogue after every turn made the next model switch wait
+    // for a full directory read; only a lost login may invalidate now.
+    expect(onInvalidate).not.toHaveBeenCalled()
+  })
+
+  it('invalidates when the login cannot be renewed', async () => {
+    const onInvalidate = vi.fn()
+    const auth = {
+      status: async () => ({ signedIn: true }),
+      accessToken: async (force = false) => {
+        if (force) throw new Error('Trae 国内版网页会话已失效，请重新登录。')
+        return 'tok'
+      },
+      identity: async () => ({ deviceId: 'dev-1', machineId: 'mach-1' }),
+      logout: async () => undefined,
+    }
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/api/remote/v1/models')) return json(remotePayload)
+      if (url.includes('/get_detail_param')) return json(wirePayload)
+      return json({ error: { message: 'unauthorized' } }, 401)
+    })
+    const provider = new TraeProvider({
+      auth: auth as never,
+      store: { saveTrae: vi.fn() } as never,
+      region: () => 'cn',
+      ttlMs: () => 1000,
+      timeoutMs: () => 1000,
+      textOnly: () => new Set(),
+      forceVision: () => new Set(),
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    })
+    await expect(collect(provider.stream(options, 'gpt-5', undefined, onInvalidate)))
+      .rejects.toThrow('网页会话已失效')
+    expect(onInvalidate).toHaveBeenCalledOnce()
+  })
 })

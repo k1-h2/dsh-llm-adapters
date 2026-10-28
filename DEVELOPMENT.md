@@ -333,6 +333,14 @@ Loomy 的 `GET /models` 自带 `reasoning_efforts` 与 `default_reasoning_effort
 规则，它也会先查 OpenRouter（命中时以实时表为准），匹配不上才用上游的档位列表；无论档位来自
 哪一边，默认档都按最强计算。它的请求体直接透传 `reasoning_effort`。
 
+### 模型目录缓存（`catalog.ts`）
+
+`ModelCatalog` 是惰性缓存：TTL（`modelCacheTtlSeconds`，默认 120 秒）只是过期标记，过期后
+不会自己刷新，要等下一次读取（切模型、打开菜单、设置页）才在后台刷新；有快照时那次读取立即
+返回旧数据，没有快照时才会等待。登录成功、退出登录、网关 401/403，以及 `fresh=1` 的读取会
+清空快照。Trae 与 CodeArts 只在登录无法续期时才通过 `onInvalidate` 清空，不再每轮对话后
+清空——否则刚聊完再切模型又要重新读一遍目录，正是缓存要避免的卡顿。
+
 ### OpenRouter 快照（`openrouter.ts`）
 
 一份快照由四个供应商共享，由 `index.ts` 创建并注入。`models()` 只读内存（缓存为空时才触发
