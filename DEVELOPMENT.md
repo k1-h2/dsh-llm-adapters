@@ -232,22 +232,29 @@ IDE 自身 provider 配置的 `limit.context`（`codearts-endpoints.ts` 的静�
 里）；表里没有的模型落到 `CODEARTS_FALLBACK_CONTEXT_WINDOW`（当前目录最小的真实窗口）——偏小只会
 提前压缩，偏大可能让上游拒绝一轮对话。
 
-读图只有两个模型：`kimi-k2.6-vl` 与 `Qwen3-VL-235B`（`builtinModels` 里 `supports_images: true`，
-类别「图片理解」）。其余模型（含 `deepseek-v4.1-flash`）带图一律回
-`InferHub.001001020.406 The request model is not multimodal`。这两个模型上游 `display_enabled:
-false`（IDE 菜单里看不到）但 `enable: true`，实测**能读图也能发工具调用**（同一请求回 8 个
-tool-call 分片），所以照样列进目录并按 `supports_images` 标成 `vision`；窗口表里没有它们的
-`limit.context`，按模型卡各取 256K。网关名册没有这个字段，那部分仍靠 `CODEARTS_VISION_MODELS` 兜底。
+图片能力分两类：`kimi-k2.6-vl` 与 `Qwen3-VL-235B`（`builtinModels` 里 `supports_images: true`，
+类别「图片理解」，上游 `display_enabled: false` 但 `enable: true`）能**直接收图**，实测还能照常发
+工具调用；其余模型带图一律回 `InferHub.001001020.406`——包括 `deepseek-v4.1-flash`，尽管 DeepSeek
+官方 API 接受图片（data URL、外部 https、`image_url` 字符串、Anthropic `image/source`、
+`input_image`、1017 变体共 8 种写法实测全被拒，同一张图给 VL 模型立即返回）。所以目录里**每一行都
+标 `vision`**：VL 模型直接读，文本模型走下面的转述。窗口表里 VL 模型没有 `limit.context`，按模型卡
+各取 256K；网关名册没有 `supports_images` 字段，那部分仍靠 `CODEARTS_VISION_MODELS` 兜底。
 
-### 为什么 DeepSeek 的图进不来（2026-10-27 实测）
+### 图片转述（`relayImages` / `describeImage`）
 
-DeepSeek 官方文档写明 `deepseek-flash`（V4.1-Flash-1017）接受图片，但 CodeArts 的目录把
-`deepseek-v4.1-flash` / `-1017` 标成 `supports_images: false`，网关按模型能力拒绝。实网 8 种写法
-逐一排除（`image_url` 对象 + data URL / 外部 https、`image_url` 字符串、Anthropic `image/source`、
-`input_image`、1017 变体），全部失败；同一张图交给 `kimi-k2.6-vl` 正常返回，证明请求体形态正确。
-⇒ 不是「换个字段就能传」，是通道级能力禁用。IDE 的处理是两段式（`analyzeImage` 交给 VL 模型），
-插件若要对文本模型开放读图，只能在适配器里先做一次 VL 转述（每张新图多一次会话，需缓存结果），
-不能把图直接发给文本模型。
+`buildMessages` 先把附件读成 data URL，之后按目标模型分流：
+
+1. 目标是 VL 模型 → 原样发送，不做中转；
+2. 目标是文本模型且消息里有图片 → `relayImages` 逐张取图，先用 `CODEARTS_VISION_MODEL`
+   （`kimi-k2.6-vl`，IDE 内核日志恒定选它）识图，把该 part 换成
+   `[图片内容（由 kimi-k2.6-vl 识别）]…` 的文本；
+3. 转述失败（网关拒绝、空回答）→ 换成 `[图片识别失败：原因]`，主请求照常发，不让失败伪装成图片内容；
+4. 转述结果按 `sha256(data URL)` 缓存到 `$DSH_HOME/llm-adapters/codearts-image-cache.json`（最多
+   64 条，`tmp → rename` 原子写）。同一张图在后续轮次、甚至重启后都直接复用，不再占会话额度。
+
+每张**新**图是一次独立的 chat 请求，和主请求共用 `CodeArtsSessionWindow` 的 3 次/分钟额度，所以
+`describeImage` 也排队、也会在 `TM.00001041` 时退名额重试。`hasImageParts` 先做一次纯内存检查，
+没有图片的请求完全不碰缓存文件。
 
 思考只有两档：`off` / `on`。网关切的是**顶层** `thinking: { type: 'disabled' }`，不是
 `reasoning_effort`；`on` 与不传等价，所以只有关闭时才发该字段。`reasoning_effort` 不是「更细的
@@ -405,6 +412,8 @@ DSH 的原生适配器会在图片旁附上 `requestImageHandleText()`：附件�
 
 - 上游只给 `[DONE]`、不给 `finish_reason` 时（Loomy 会这样截断），标记为 `max-tokens`。
 - usage 全部向上取整并保证 `reasoningTokens <= outputTokens`；DSH 的持久化校验不接受小数。
+- OpenAI 规范的流会在中间帧带 `"usage": null`（CodeArts 的 VL 模型就是这样），`usageOf` 必须同时
+  容忍 `null` 与 `undefined`——只判后者会在首帧后抛 `Cannot read properties of null`，整条流作废。
 - 小浣熊在 401 时不再重放请求：扫码登录没有刷新流程，直接提示重新扫码，避免重复回答。
 
 ## 测试与构建

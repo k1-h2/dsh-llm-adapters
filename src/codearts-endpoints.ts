@@ -114,11 +114,19 @@ export function codeartsContextWindow(modelId: string): number {
  * Models that can take an image, measured from `supports_images`.
  *
  * Every other model answers `InferHub.001001020.406 The request model is not
- * multimodal`, so the route declares image input only for these. Both are
- * `display_enabled: false` upstream but `enable: true`, and both answer tool
- * calls, so they are listed even though the IDE hides them.
+ * multimodal`, even `deepseek-v4.1-flash`, whose own API accepts images. Both
+ * are `display_enabled: false` upstream but `enable: true`, and both answer
+ * tool calls, so they are listed even though the IDE hides them.
  */
 export const CODEARTS_VISION_MODELS: readonly string[] = ['kimi-k2.6-vl', 'Qwen3-VL-235B']
+
+/**
+ * The model that transcribes images for the models the gateway serves as text.
+ *
+ * This is the IDE's own choice: its kernel log picks `kimi-k2.6-vl` on every
+ * sample (`fetchMultimodalModelId`, candidates being this and Qwen3-VL-235B).
+ */
+export const CODEARTS_VISION_MODEL = 'kimi-k2.6-vl'
 
 /**
  * Free-allowance models known to need `maas_type: benefit`.

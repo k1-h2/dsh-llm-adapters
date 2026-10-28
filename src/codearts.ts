@@ -16,6 +16,8 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { promises as fs } from 'node:fs'
+import path from 'node:path'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { AccountStore, CodeArtsAccountRecord } from './account-store.ts'
 import { CodeArtsAuth } from './auth.ts'
@@ -38,11 +40,12 @@ import {
   CODEARTS_OPS_DELIVERY_PATH,
   CODEARTS_PACKAGE_INFO_PATH,
   CODEARTS_SNAP_BASE,
+  CODEARTS_VISION_MODEL,
   CODEARTS_VISION_MODELS,
   codeartsContextWindow,
 } from './codearts-endpoints.ts'
 import { CodeArtsLogin } from './codearts-login.ts'
-import { headersForFetch, signRequestHuawei } from './codearts-sign.ts'
+import { headersForFetch, sha256Hex, signRequestHuawei } from './codearts-sign.ts'
 import { CodeArtsSessionWindow, sharedSessionWindow } from './codearts-window.ts'
 import type { CodeArtsCredential } from './codearts-oauth.ts'
 import type { LoginStatus } from './login-page.ts'
@@ -51,7 +54,7 @@ import { OpenRouterCatalog } from './openrouter.ts'
 import type { OpenRouterLookup } from './openrouter.ts'
 import type { CheckinStatus, QuotaPack, QuotaSnapshot } from './types.ts'
 import { ProviderHttpError, buildMessages, buildTools, consumeOpenAiStream } from './wire.ts'
-import type { ReadImage } from './wire.ts'
+import type { ReadImage, WireMessage } from './wire.ts'
 
 /**
  * Levels the gateway accepts, plus the two-state switch this route started with.
@@ -94,6 +97,7 @@ export interface CodeArtsProviderOptions {
   ttlMs: () => number
   timeoutMs: () => number
   textOnly: () => ReadonlySet<string>
+  /** Kept for parity with the other providers; every CodeArts model now takes images. */
   forceVision: () => ReadonlySet<string>
   fetchImpl?: typeof fetch
   logger?: (message: string) => void
@@ -241,8 +245,10 @@ export function priceFactorOfLabel(label: string | undefined): number | undefine
   return Number.isFinite(value) ? value : undefined
 }
 
-function isVisionModel(id: string): boolean {
-  return CODEARTS_VISION_MODELS.some(entry => entry.toLowerCase() === id.toLowerCase())
+function hasImageParts(messages: readonly WireMessage[]): boolean {
+  return messages.some(message => message.role === 'user'
+    && typeof message.content !== 'string'
+    && message.content.some(part => part.type === 'image_url'))
 }
 
 /** Raised inside the stream loop for conditions a retry can fix. */
@@ -307,6 +313,29 @@ function queueExhausted(): ProviderHttpError {
   )
 }
 
+/** Image transcripts live beside accounts.json, so a restart does not re-bill. */
+const IMAGE_CACHE_FILE = 'codearts-image-cache.json'
+/** Newest transcripts kept; anything older is described again if it returns. */
+const IMAGE_CACHE_LIMIT = 64
+const IMAGE_DESCRIBE_MAX_TOKENS = 4_096
+
+/**
+ * What the vision model is asked for.
+ *
+ * The transcript is the only thing the answering model will see, so the prompt
+ * asks for a faithful reading rather than a summary: text is transcribed
+ * verbatim, uncertainty is spelled out, and guessing is forbidden — the vision
+ * model fills gaps when an image is blurry, and the answering model cannot
+ * tell an invented detail from a seen one.
+ */
+const IMAGE_PROMPT = [
+  '请详细描述这张图片，供另一个看不到图片的模型使用。',
+  '1. 说明整体画面、界面或场景；',
+  '2. 逐字转录图中所有文字（看不清的用「?」标注，不要猜测）；',
+  '3. 指出关键对象、颜色与位置关系；若为截图，说明是什么界面、有哪些可交互元素。',
+  '只描述实际看到的内容，不要推测图片之外的信息。',
+].join('\n')
+
 export class CodeArtsProvider {
   private readonly catalog: ModelCatalog
   private readonly login: CodeArtsLogin
@@ -319,6 +348,16 @@ export class CodeArtsProvider {
   private readonly window: CodeArtsSessionWindow
   private readonly openRouter: OpenRouterLookup
   private readonly sessionId = randomUUID()
+  /**
+   * Models that read images themselves. Seeded from the measured list so the
+   * answer is right before the first catalogue load, then widened by whatever
+   * the roster marks `supports_images`.
+   */
+  private readonly nativeVision = new Set(CODEARTS_VISION_MODELS.map(id => id.toLowerCase()))
+  /** Image transcripts, keyed by the hash of the data URL they were read from. */
+  private imageCache: Map<string, string> | undefined
+  private imageCacheLoad: Promise<Map<string, string>> | undefined
+  private imageCacheWrite: Promise<void> = Promise.resolve()
 
   constructor(private readonly options: CodeArtsProviderOptions) {
     this.window = options.window ?? sharedSessionWindow()
@@ -404,7 +443,6 @@ export class CodeArtsProvider {
     }
 
     const textOnly = this.options.textOnly()
-    const forceVision = this.options.forceVision()
     // The shared router snapshot: CodeArts publishes no reasoning levels at all,
     // so the graded list comes from OpenRouter, matched by product name.
     const index = await this.openRouter.models().catch(() => undefined)
@@ -414,7 +452,11 @@ export class CodeArtsProvider {
       const key = row.id.toLowerCase()
       if (seen.has(key)) continue
       seen.add(key)
-      const vision = textOnly.has(row.id) ? false : forceVision.has(row.id) || row.images === true || isVisionModel(row.id)
+      if (row.images === true) this.nativeVision.add(key)
+      // Every model accepts an image: the two vision models read it directly,
+      // and the rest get a transcript from `relayImages` before the request.
+      // The text-only list is the only way to opt a model out.
+      const vision = !textOnly.has(row.id)
       const factor = priceFactorOfLabel(row.rateLabel)
       rows.push({
         id: row.id,
@@ -626,6 +668,176 @@ export class CodeArtsProvider {
     })
   }
 
+  // ------------------------------------------------------------------ images
+
+  private imageCacheFile(): string | undefined {
+    const directory = (this.options.store as { directory?: () => string }).directory?.()
+    return directory === undefined || directory === '' ? undefined : path.join(directory, IMAGE_CACHE_FILE)
+  }
+
+  private async imageTranscripts(): Promise<Map<string, string>> {
+    if (this.imageCache !== undefined) return this.imageCache
+    if (this.imageCacheLoad !== undefined) return this.imageCacheLoad
+    const loading = (async () => {
+      const cache = new Map<string, string>()
+      const file = this.imageCacheFile()
+      if (file !== undefined) {
+        try {
+          const entries = record(record(JSON.parse(await fs.readFile(file, 'utf8')))?.entries)
+          for (const [key, value] of Object.entries(entries ?? {})) {
+            if (typeof value === 'string' && value.length > 0) cache.set(key, value)
+          }
+        } catch {
+          // No cache yet, or an unreadable one: start empty and describe again.
+        }
+      }
+      this.imageCache = cache
+      return cache
+    })()
+    this.imageCacheLoad = loading
+    try {
+      return await loading
+    } finally {
+      this.imageCacheLoad = undefined
+    }
+  }
+
+  private rememberTranscript(key: string, transcript: string): void {
+    const cache = this.imageCache
+    if (cache === undefined) return
+    cache.set(key, transcript)
+    while (cache.size > IMAGE_CACHE_LIMIT) {
+      const oldest = cache.keys().next().value
+      if (oldest === undefined) break
+      cache.delete(oldest)
+    }
+    const file = this.imageCacheFile()
+    if (file === undefined) return
+    const body = JSON.stringify({ version: 1, entries: Object.fromEntries(cache) })
+    this.imageCacheWrite = this.imageCacheWrite.then(async () => {
+      try {
+        await fs.mkdir(path.dirname(file), { recursive: true })
+        const temp = `${file}.${process.pid}.${Date.now()}.tmp`
+        await fs.writeFile(temp, body, 'utf8')
+        await fs.rename(temp, file)
+      } catch {
+        // The cache is an optimisation; a failed write only costs a re-read.
+      }
+    })
+  }
+
+  /**
+   * Replace image parts with a transcript for models the gateway serves as text.
+   *
+   * `buildMessages` has already turned each attachment into a data URL, which is
+   * both what the vision model needs and a stable identity for the cache: the
+   * same picture in a later turn resolves to the same key and reuses the text,
+   * so a conversation pays for the description once.
+   */
+  private async relayImages(messages: WireMessage[], signal?: AbortSignal): Promise<void> {
+    const cache = await this.imageTranscripts()
+    for (const message of messages) {
+      if (message.role !== 'user' || typeof message.content === 'string') continue
+      const parts = message.content
+      for (let index = 0; index < parts.length; index++) {
+        const part = parts[index]!
+        if (part.type !== 'image_url') continue
+        const url = record(part.image_url)?.url
+        if (typeof url !== 'string' || url.length === 0) continue
+        const key = sha256Hex(url)
+        let transcript = cache.get(key)
+        if (transcript === undefined) {
+          try {
+            transcript = await this.describeImage(url, signal)
+            this.rememberTranscript(key, transcript)
+          } catch (error) {
+            // A turn without the picture is still worth running, and the model
+            // has to know the gap exists rather than silently guessing.
+            transcript = `[图片识别失败：${error instanceof Error ? error.message : String(error)}]`
+          }
+        }
+        parts[index] = {
+          type: 'text',
+          text: `[图片内容（由 ${CODEARTS_VISION_MODEL} 识别）]\n${transcript}`,
+        }
+      }
+    }
+  }
+
+  /** Ask the vision model to describe one image, within the same chat budget. */
+  private async describeImage(dataUrl: string, signal?: AbortSignal): Promise<string> {
+    const payload = JSON.stringify({
+      model: CODEARTS_VISION_MODEL,
+      stream: true,
+      max_tokens: IMAGE_DESCRIBE_MAX_TOKENS,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: IMAGE_PROMPT },
+          { type: 'image_url', image_url: { url: dataUrl } },
+        ],
+      }],
+    })
+    const chatId = randomUUID()
+    let authRefreshed = false
+    let queueAttempts = 0
+    for (;;) {
+      // The vision model is another chat session, so it spends the same budget.
+      const slot = await this.window.open(signal)
+      let response: Response
+      try {
+        response = await this.send(chatId, payload, CODEARTS_VISION_MODEL, false, signal)
+      } catch (error) {
+        if (error instanceof CodeArtsRetry && error.kind === 'auth' && !authRefreshed) {
+          authRefreshed = true
+          await this.options.auth.refresh(true)
+          continue
+        }
+        if (error instanceof CodeArtsRetry && error.kind === 'queue') {
+          slot.release()
+          if (queueAttempts < QUEUE_ATTEMPTS) {
+            queueAttempts++
+            await sleep(Math.max(this.window.waitMs(), QUEUE_BACKOFF_MS), signal)
+            continue
+          }
+          throw queueExhausted()
+        }
+        throw error
+      }
+      let transcript = ''
+      try {
+        for await (const chunk of consumeOpenAiStream(response, {
+          ...signal === undefined ? {} : { signal },
+          onFrame: (frame) => {
+            const code = text(frame.error_code)
+            if (code === undefined) return
+            const message = text(frame.error_msg) ?? code
+            if (QUEUE_MARKERS.some(marker => code.includes(marker))) {
+              throw new CodeArtsRetry('queue', message)
+            }
+            throw new ProviderHttpError(message, 502)
+          },
+        })) {
+          if (chunk.type === 'text-delta') transcript += chunk.text
+        }
+      } catch (error) {
+        if (error instanceof CodeArtsRetry && error.kind === 'queue') {
+          slot.release()
+          if (queueAttempts < QUEUE_ATTEMPTS) {
+            queueAttempts++
+            await sleep(Math.max(this.window.waitMs(), QUEUE_BACKOFF_MS), signal)
+            continue
+          }
+          throw queueExhausted()
+        }
+        throw error
+      }
+      const trimmed = transcript.trim()
+      if (trimmed.length === 0) throw new Error('识图模型没有返回内容')
+      return trimmed
+    }
+  }
+
   // ------------------------------------------------------------------ stream
 
   async *stream(
@@ -635,6 +847,12 @@ export class CodeArtsProvider {
     onInvalidate: () => void,
   ): AsyncGenerator<StreamChunk> {
     const messages = await buildMessages(options, readImage)
+    // The gateway refuses images on every model but the two vision ones — even
+    // `deepseek-v4.1-flash`, whose own API accepts them — so a text model gets a
+    // transcript produced by the vision model instead of the pixels.
+    if (!this.nativeVision.has(model.toLowerCase()) && hasImageParts(messages)) {
+      await this.relayImages(messages, options.signal)
+    }
     const tools = buildTools(options)
     const effort = options.reasoningEffort
     const thinkingOff = effort === 'off' || effort === 'none'
