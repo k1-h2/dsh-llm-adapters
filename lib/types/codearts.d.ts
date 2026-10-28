@@ -58,6 +58,7 @@ export interface CodeArtsProviderOptions {
     ttlMs: () => number;
     timeoutMs: () => number;
     textOnly: () => ReadonlySet<string>;
+    /** Kept for parity with the other providers; every CodeArts model now takes images. */
     forceVision: () => ReadonlySet<string>;
     fetchImpl?: typeof fetch;
     logger?: (message: string) => void;
@@ -105,6 +106,16 @@ export declare class CodeArtsProvider {
     private readonly window;
     private readonly openRouter;
     private readonly sessionId;
+    /**
+     * Models that read images themselves. Seeded from the measured list so the
+     * answer is right before the first catalogue load, then widened by whatever
+     * the roster marks `supports_images`.
+     */
+    private readonly nativeVision;
+    /** Image transcripts, keyed by the hash of the data URL they were read from. */
+    private imageCache;
+    private imageCacheLoad;
+    private imageCacheWrite;
     constructor(options: CodeArtsProviderOptions);
     private get fetcher();
     private credential;
@@ -127,6 +138,20 @@ export declare class CodeArtsProvider {
     private signedPost;
     private accountInfo;
     private activities;
+    private imageCacheFile;
+    private imageTranscripts;
+    private rememberTranscript;
+    /**
+     * Replace image parts with a transcript for models the gateway serves as text.
+     *
+     * `buildMessages` has already turned each attachment into a data URL, which is
+     * both what the vision model needs and a stable identity for the cache: the
+     * same picture in a later turn resolves to the same key and reuses the text,
+     * so a conversation pays for the description once.
+     */
+    private relayImages;
+    /** Ask the vision model to describe one image, within the same chat budget. */
+    private describeImage;
     stream(options: GenerateOptions, model: string, readImage: ReadImage | undefined, onInvalidate: () => void): AsyncGenerator<StreamChunk>;
     private send;
     status(): Promise<AuthStatus>;

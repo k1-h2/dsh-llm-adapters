@@ -204,24 +204,19 @@ SOLO 接口并不校验 `reasoning_effort`（`banana` / `999` / `MAX` 都返回 
 
 **CodeArts 的模型能读图吗？**
 
-只有 `kimi-k2.6-vl` 和 `Qwen3-VL-235B` 能。目录里 `supports_images: true` 的就这两个（类别「图片
-理解」），实测丢一张图进去能正常回答，也照常发工具调用。其余模型——包括 `deepseek-v4.1-flash`、
-GLM-5.x、openpangu——带图会回 `InferHub.001001020.406 The request model is not multimodal`，插件
-因此不给它们标读图能力，聊天框里也不会把图片附上去。这两个模型在上游是 `display_enabled: false`
-（IDE 自己的菜单里看不到），但 `enable: true`、能正常计费调用，所以插件仍然列出它们，方便需要读图
-时切过去。
+能，但文本模型走的是两段式。网关只允许 `kimi-k2.6-vl` 与 `Qwen3-VL-235B` 直接收图（目录里
+`supports_images: true` 的就是这两个，类别「图片理解」）；其余模型——包括 `deepseek-v4.1-flash`、
+GLM-5.x、openpangu——带图会回 `InferHub.001001020.406 The request model is not multimodal`。
+DeepSeek 官方 API 本身接受图片，是 CodeArts 这条通道在模型能力层关掉了它：data URL、外部 https、
+`image_url` 字符串、Anthropic `image/source`、`input_image`、1017 变体共 8 种写法实测全部被拒，而
+同一张图交给 `kimi-k2.6-vl` 立即返回内容。
 
-**DeepSeek 官方说 V4.1-Flash 能读图，为什么 CodeArts 里不行？**
-
-模型本身能。DeepSeek 文档写明 `deepseek-flash`（现由 V4.1-Flash-1017 提供，旧的
-`deepseek-v4-flash-vision-exp` 也转由它承接）接受图片，形态是 `content` 数组里的 `image_url`。
-但 CodeArts 这条通道把 `deepseek-v4.1-flash` 与 `deepseek-v4.1-flash-1017` 都标成
-`supports_images: false` / `model_category: 文本生成`，网关按**模型能力**拒绝，而不是报文格式不对。
-实网 8 种写法全部失败：data URL、外部 https、`image_url` 字符串、Anthropic `image/source`、
-`input_image`、1017 变体；同一张图交给 `kimi-k2.6-vl` 立即返回内容，说明请求体本身没问题。IDE 自己
-的做法是两段式：先用 VL 模型识图（`analyzeImage` 工具），把识别结果以文字交给主模型。插件目前没有
-做这个中转，所以文本模型不标读图。若以后要支持，代价是每张新图多一次对话（占 3 次/分钟的会话
-额度），同一张图的识别结果可以缓存复用。
+插件因此复刻了 IDE 的做法：给文本模型带图时，先用 `kimi-k2.6-vl` 把图片转述成文字，再把文字交给
+主模型；VL 模型自己仍直接读图。转述结果按图片内容哈希缓存在
+`$DSH_HOME/llm-adapters/codearts-image-cache.json`（最多 64 条，原子替换），同一张图只在第一次多花
+一次对话，之后连重启都不会重复识别。代价是每张**新**图占一次会话额度（体验版 3 次/分钟），一次
+发很多张时首轮会明显变慢。转述失败不会中断对话，主模型会收到一条「图片识别失败：原因」，不会把
+失败当成图片内容。
 
 **让模型改图时，它为什么说找不到图片？**
 

@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createPublicKey, verify } from 'node:crypto'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import {
   CODEARTS_EFFORTS, CodeArtsProvider, clampMaxTokens, codeartsEfforts, normalizeCodeArtsModelId,
@@ -258,6 +261,39 @@ describe('CodeArts reasoning levels', () => {
   })
 })
 
+/** The transcript cache is on disk; keep the tests out of the user's profile. */
+const CACHE_DIR = mkdtempSync(path.join(tmpdir(), 'codearts-image-'))
+
+function readImageOf(bytes: Uint8Array) {
+  return async () => ({ data: bytes, mediaType: 'image/png' })
+}
+
+function optionsWithImage(model: string, bytes: Uint8Array): GenerateOptions {
+  return {
+    provider: 'codearts',
+    model,
+    messages: [{
+      role: 'user',
+      id: 'u' as never,
+      source: { kind: 'user' },
+      content: [
+        { type: 'text', text: 'What is in this image?' },
+        {
+          type: 'image',
+          attachment: {
+            attachmentId: 'attachment-1',
+            mediaType: 'image/png',
+            bytes: bytes.length,
+            width: 1,
+            height: 1,
+          },
+        },
+      ] as never,
+    }],
+    maxTokens: 1024,
+  }
+}
+
 describe('CodeArts provider', () => {
   const options: GenerateOptions = {
     provider: 'codearts',
@@ -279,7 +315,11 @@ describe('CodeArts provider', () => {
   ): CodeArtsProvider {
     return new CodeArtsProvider({
       auth: auth as never,
-      store: { saveCodearts: vi.fn(), codearts: async () => undefined } as never,
+      store: {
+        saveCodearts: vi.fn(),
+        codearts: async () => undefined,
+        directory: () => CACHE_DIR,
+      } as never,
       ttlMs: () => 60_000,
       timeoutMs: () => 1_000,
       textOnly: () => new Set(),
@@ -289,6 +329,113 @@ describe('CodeArts provider', () => {
       window,
     })
   }
+
+  function signedIn(): Record<string, unknown> {
+    return {
+      status: async () => ({ signedIn: true }),
+      credential: async () => ({ accessKeyId: 'AK', secretAccessKey: 'SK', securityToken: 'ST' }),
+      refresh: async () => ({ accessKeyId: 'AK', secretAccessKey: 'SK', securityToken: 'ST' }),
+      logout: async () => undefined,
+    }
+  }
+
+  it('transcribes an image for a model the gateway serves as text', async () => {
+    const bodies: Record<string, unknown>[] = []
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>
+      bodies.push(body)
+      if (body.model === 'kimi-k2.6-vl') {
+        return sse([
+          JSON.stringify({ choices: [{ delta: { content: '一张纯色图片，中间有一段文字。' } }] }),
+          JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] }),
+          '[DONE]',
+        ])
+      }
+      return sse([JSON.stringify({ choices: [{ delta: { content: 'ok' } }] }), '[DONE]'])
+    })
+    const provider = make(signedIn(), fetchMock as unknown as typeof fetch)
+    const bytes = new Uint8Array([1, 2, 3, 4])
+
+    const chunks = await collect(provider.stream(
+      optionsWithImage('glm-5.3', bytes), 'glm-5.3', readImageOf(bytes), () => undefined,
+    ))
+
+    expect(bodies).toHaveLength(2)
+    // The first request is the vision model reading the picture itself.
+    expect(bodies[0]!.model).toBe('kimi-k2.6-vl')
+    expect(JSON.stringify(bodies[0]!.messages)).toContain('image_url')
+    // The second is the answering model, which only sees the transcript.
+    expect(bodies[1]!.model).toBe('glm-5.3')
+    const relayed = JSON.stringify(bodies[1]!.messages)
+    expect(relayed).not.toContain('image_url')
+    expect(relayed).toContain('一张纯色图片')
+    expect(relayed).toContain('kimi-k2.6-vl')
+    expect(chunks.some(chunk => chunk.type === 'text-delta')).toBe(true)
+  })
+
+  it('reuses a transcript instead of spending another session on the same image', async () => {
+    let visionCalls = 0
+    let mainCalls = 0
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>
+      if (body.model === 'kimi-k2.6-vl') {
+        visionCalls++
+        return sse([JSON.stringify({ choices: [{ delta: { content: '缓存用的描述' } }] }), '[DONE]'])
+      }
+      mainCalls++
+      return sse([JSON.stringify({ choices: [{ delta: { content: 'ok' } }] }), '[DONE]'])
+    })
+    const provider = make(signedIn(), fetchMock as unknown as typeof fetch)
+    const bytes = new Uint8Array([5, 6, 7, 8])
+
+    await collect(provider.stream(optionsWithImage('glm-5.3', bytes), 'glm-5.3', readImageOf(bytes), () => undefined))
+    await collect(provider.stream(optionsWithImage('glm-5.3', bytes), 'glm-5.3', readImageOf(bytes), () => undefined))
+
+    expect(visionCalls).toBe(1)
+    expect(mainCalls).toBe(2)
+  })
+
+  it('lets the vision models read the image themselves', async () => {
+    const bodies: Record<string, unknown>[] = []
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>)
+      return sse([JSON.stringify({ choices: [{ delta: { content: '黑色' } }] }), '[DONE]'])
+    })
+    const provider = make(signedIn(), fetchMock as unknown as typeof fetch)
+    const bytes = new Uint8Array([9, 10])
+
+    await collect(provider.stream(
+      optionsWithImage('kimi-k2.6-vl', bytes), 'kimi-k2.6-vl', readImageOf(bytes), () => undefined,
+    ))
+
+    expect(bodies).toHaveLength(1)
+    expect(bodies[0]!.model).toBe('kimi-k2.6-vl')
+    expect(JSON.stringify(bodies[0]!.messages)).toContain('image_url')
+  })
+
+  it('tells the model when an image could not be transcribed', async () => {
+    const bodies: Record<string, unknown>[] = []
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>
+      bodies.push(body)
+      if (body.model === 'kimi-k2.6-vl') {
+        return sse([JSON.stringify({ error_code: 'InferHub.001001020.406', error_msg: 'boom' })])
+      }
+      return sse([JSON.stringify({ choices: [{ delta: { content: 'ok' } }] }), '[DONE]'])
+    })
+    const provider = make(signedIn(), fetchMock as unknown as typeof fetch)
+    const bytes = new Uint8Array([11, 12])
+
+    const chunks = await collect(provider.stream(
+      optionsWithImage('glm-5.3', bytes), 'glm-5.3', readImageOf(bytes), () => undefined,
+    ))
+
+    expect(bodies).toHaveLength(2)
+    const relayed = JSON.stringify(bodies[1]!.messages)
+    expect(relayed).toContain('图片识别失败')
+    expect(relayed).toContain('boom')
+    expect(chunks.some(chunk => chunk.type === 'text-delta')).toBe(true)
+  })
 
   it('reports the allowance and the spend so the card can draw a bar', async () => {
     const provider = make({
@@ -469,8 +616,8 @@ describe('CodeArts provider', () => {
     // The image models are hidden from the IDE's own menu but still served.
     expect(models[2]).toMatchObject({ contextWindow: 262_144, vision: true })
     expect(models[3]!.contextWindow).toBe(524_288)
-    // Everything else answers `InferHub.001001020.406` when handed an image.
-    expect(models.filter(model => model.vision === true).map(model => model.id)).toEqual(['kimi-k2.6-vl'])
+    // Text models reach images through the vision relay, so every row takes them.
+    expect(models.every(model => model.vision)).toBe(true)
   })
 
   it('narrows the graded levels to what OpenRouter says the model accepts', async () => {

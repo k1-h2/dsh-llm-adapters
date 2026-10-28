@@ -220,6 +220,29 @@ describe('openAiStream', () => {
     expect(chunks.at(-1)).toEqual({ type: 'finish', reason: { kind: 'stop' } })
   })
 
+  it('tolerates the null usage frames OpenAI-style gateways send', async () => {
+    const body = [
+      'data: {"choices":[{"delta":{"content":"Hi"}}],"usage":null}',
+      '',
+      'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2}}',
+      '',
+      'data: [DONE]',
+      '',
+    ].join('\n')
+    const chunks = await collect(openAiStream({
+      url: 'https://example.test/chat',
+      headers: {},
+      body: {},
+      fetchImpl: vi.fn(async () => sseResponse(body)) as unknown as typeof fetch,
+    }))
+    expect(chunks.find(chunk => chunk.type === 'text-delta')).toEqual({
+      type: 'text-delta', index: 0, text: 'Hi',
+    })
+    expect(chunks.find(chunk => chunk.type === 'usage')).toMatchObject({
+      usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+    })
+  })
+
   it('assembles fragmented tool calls and reports tool-calls', async () => {
     const body = [
       'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":"{\\"pa"}}]}}]}',

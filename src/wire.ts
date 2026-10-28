@@ -275,8 +275,10 @@ interface CompletionUsage {
 
 const int = (value: unknown): number => typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.ceil(value) : 0
 
-function usageOf(usage: CompletionUsage | undefined): StreamChunk | undefined {
-  if (usage === undefined) return undefined
+function usageOf(usage: CompletionUsage | null | undefined): StreamChunk | undefined {
+  // OpenAI-style streams send `"usage": null` on every frame that precedes the
+  // final one; reading fields off it throws and kills the whole stream.
+  if (usage === undefined || usage === null) return undefined
   const prompt = int(usage.prompt_tokens)
   const completion = int(usage.completion_tokens)
   const cached = int(usage.prompt_tokens_details?.cached_tokens)
@@ -306,7 +308,7 @@ export function finishReason(raw: string | null | undefined): 'stop' | 'tool-cal
 
 interface DeltaFrame {
   choices?: { delta?: Record<string, unknown>, finish_reason?: string | null }[]
-  usage?: CompletionUsage
+  usage?: CompletionUsage | null
   error?: unknown
 }
 
@@ -519,7 +521,7 @@ export async function* consumeOpenAiStream(
 async function* nonStreaming(response: Response, signal?: AbortSignal): AsyncGenerator<StreamChunk> {
   const payload = await response.json() as {
     choices?: { message?: Record<string, unknown>, finish_reason?: string }[]
-    usage?: CompletionUsage
+    usage?: CompletionUsage | null
   }
   if (signal?.aborted === true) throw new DOMException('aborted', 'AbortError')
   const message = payload.choices?.[0]?.message ?? {}
