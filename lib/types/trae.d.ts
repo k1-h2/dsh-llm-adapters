@@ -113,8 +113,21 @@ export interface TraeProviderOptions {
  * UUID -> `9074`, 16-digit number -> `code: 0`. The number is derived from the
  * web session's device id, so it still comes from this login and not from a
  * desktop install, and it stays stable for that session.
+ *
+ * The desktop client's ids look like `2715142696215459`: 16 digits starting
+ * with 1–8. The 9-prefixed value derived for the current login was answered
+ * with `9074`, so the derived range stays inside the client's range.
  */
 export declare function checkinDeviceId(deviceId: string): string;
+/**
+ * The body every check-in POST carries.
+ *
+ * Matches the desktop client's own call: `req_source` is the numeric `1` for
+ * the IDE (the client sends `2` for Trae Work). The plugin used to send `{}`;
+ * status tolerated that, but claim answered `9074` (`当前参与用户太多`) for the
+ * same account and device, so requests now carry the client's field.
+ */
+export declare const TRAE_CHECKIN_REQ_SOURCE = 1;
 /**
  * The persistent browser profile used for one region.
  *

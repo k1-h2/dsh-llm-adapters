@@ -874,17 +874,24 @@ describe('TraeProvider', () => {
     const first = checkinDeviceId('635ed490-f950-40f7-9178-8c72ae1cf1cc')
     const again = checkinDeviceId('635ed490-f950-40f7-9178-8c72ae1cf1cc')
     const other = checkinDeviceId('11111111-2222-3333-4444-555555555555')
-    expect(first).toMatch(/^[1-9]\d{15}$/)
+    // The desktop client's ids start with 1–8 (e.g. 2715142696215459); a
+    // 9-prefixed id is answered with 9074 while the same account claims with a
+    // 1–8 one, so the derived value must stay below 9e15.
+    expect(first).toMatch(/^[1-8]\d{15}$/)
     expect(first).toBe(again)
     expect(other).not.toBe(first)
     expect(first).not.toContain('-')
   })
 
-  it('sends the decimal check-in id instead of the web UUID', async () => {
-    const seen: { url: string, deviceId?: string }[] = []
+  it('sends the decimal check-in id and the client req_source', async () => {
+    const seen: { url: string, deviceId?: string, body?: Record<string, unknown> }[] = []
     const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
       const headers = init.headers as Record<string, string>
-      seen.push({ url, deviceId: headers['x-device-id'] })
+      seen.push({
+        url,
+        deviceId: headers['x-device-id'],
+        body: JSON.parse(String(init.body)) as Record<string, unknown>,
+      })
       if (url.endsWith('/checkin_credits/status')) return json({ enable: true, checked_in: false })
       if (url.endsWith('/checkin_credits/claim')) return json({ code: 0 })
       throw new Error(`unexpected ${url}`)
@@ -895,8 +902,11 @@ describe('TraeProvider', () => {
     expect(seen).toHaveLength(2)
     for (const call of seen) {
       expect(call.deviceId).toBe(checkinDeviceId('dev-1'))
-      expect(call.deviceId).toMatch(/^[1-9]\d{15}$/)
+      expect(call.deviceId).toMatch(/^[1-8]\d{15}$/)
       expect(call.deviceId).not.toBe('dev-1')
+      // The desktop client posts { req_source: 1 } for the IDE. An empty body
+      // makes claim answer 9074 even while status still succeeds.
+      expect(call.body).toEqual({ req_source: 1 })
     }
   })
 

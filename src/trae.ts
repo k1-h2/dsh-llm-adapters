@@ -212,13 +212,27 @@ function epochMs(value: unknown): number | undefined {
  * UUID -> `9074`, 16-digit number -> `code: 0`. The number is derived from the
  * web session's device id, so it still comes from this login and not from a
  * desktop install, and it stays stable for that session.
+ *
+ * The desktop client's ids look like `2715142696215459`: 16 digits starting
+ * with 1–8. The 9-prefixed value derived for the current login was answered
+ * with `9074`, so the derived range stays inside the client's range.
  */
 export function checkinDeviceId(deviceId: string): string {
   const hex = createHash('sha256').update(`trae-checkin\0${deviceId}`).digest('hex')
-  // 1e15..1e16-1 keeps exactly 16 digits and never starts with 0.
-  const value = BigInt(`0x${hex.slice(0, 16)}`) % 9_000_000_000_000_000n + 1_000_000_000_000_000n
+  // [1e15, 9e15): exactly 16 digits, first digit 1–8.
+  const value = BigInt(`0x${hex.slice(0, 16)}`) % 8_000_000_000_000_000n + 1_000_000_000_000_000n
   return value.toString()
 }
+
+/**
+ * The body every check-in POST carries.
+ *
+ * Matches the desktop client's own call: `req_source` is the numeric `1` for
+ * the IDE (the client sends `2` for Trae Work). The plugin used to send `{}`;
+ * status tolerated that, but claim answered `9074` (`当前参与用户太多`) for the
+ * same account and device, so requests now carry the client's field.
+ */
+export const TRAE_CHECKIN_REQ_SOURCE = 1
 
 /**
  * The persistent browser profile used for one region.
@@ -1181,7 +1195,7 @@ export class TraeProvider {
         'x-device-id': checkinDeviceId(identity.deviceId),
         'x-machine-id': identity.machineId,
       },
-      body: '{}',
+      body: JSON.stringify({ req_source: TRAE_CHECKIN_REQ_SOURCE }),
       signal: AbortSignal.timeout(this.options.timeoutMs()),
     })
     if (!response.ok) throw new ProviderHttpError(await responseError(response), response.status)
@@ -1202,7 +1216,7 @@ export class TraeProvider {
         'x-device-id': checkinDeviceId(identity.deviceId),
         'x-machine-id': identity.machineId,
       },
-      body: '{}',
+      body: JSON.stringify({ req_source: TRAE_CHECKIN_REQ_SOURCE }),
       signal: AbortSignal.timeout(this.options.timeoutMs()),
     })
     if (!response.ok) throw new ProviderHttpError(await responseError(response), response.status)
