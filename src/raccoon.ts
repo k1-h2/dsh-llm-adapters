@@ -19,6 +19,7 @@ import {
 import type { ProviderModel } from './catalog.ts'
 import { fetchJson } from './http.ts'
 import { OpenRouterCatalog } from './openrouter.ts'
+import { readOpenRouter } from './openrouter.ts'
 import type { OpenRouterLookup } from './openrouter.ts'
 import type { CheckinStatus, QuotaSnapshot } from './types.ts'
 import { ProviderHttpError, buildBody, buildMessages, buildTools, openAiStream } from './wire.ts'
@@ -250,7 +251,7 @@ export class RaccoonProvider {
 
   private async fetchModels(): Promise<ProviderModel[]> {
     const [openRouter, payload] = await Promise.all([
-      this.openRouter.models(),
+      readOpenRouter(this.openRouter),
       this.authorizedJson<unknown>('/llm/v2/model_catalog'),
     ])
     if (payload !== null && typeof payload === 'object') {
@@ -272,6 +273,11 @@ export class RaccoonProvider {
     // The OpenRouter snapshot is shared, persisted and refreshed on a schedule;
     // a catalog refresh must not discard it while the network is unavailable.
     return this.catalog.models(fresh)
+  }
+
+  /** The last successful catalogue, without waiting for a refresh. */
+  peekModels(): readonly ProviderModel[] | undefined {
+    return this.catalog.peek()
   }
 
   catalogError(): string | undefined {

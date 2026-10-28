@@ -1534,7 +1534,10 @@ window.__ModuleLoader__.load({
         setRouterError(undefined)
         setRouterNotice(undefined)
         try {
-          const payload = await api('/openrouter/sync', { method: 'POST', timeout: 45_000 })
+          // The host may try twice with its own 30 s window; this deadline has
+          // to outlast that, or the page reports a timeout while a retry is
+          // still running and the user sees a failure that never happened.
+          const payload = await api('/openrouter/sync', { method: 'POST', timeout: 75_000 })
           setOpenRouter(payload)
           if (payload?.ok === true) {
             setRouterNotice(`${t('openRouterSyncDone')} · ${payload.models} ${t('openRouterModels')}`)

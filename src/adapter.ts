@@ -47,6 +47,8 @@ export interface ProviderClient {
   status(): Promise<AuthStatus>
   signedIn(): Promise<boolean>
   models(fresh?: boolean): Promise<readonly ProviderModel[]>
+  /** The cached catalog, when one has been read; never starts a request. */
+  peekModels?(): readonly ProviderModel[] | undefined
   quota(fresh?: boolean): Promise<QuotaSnapshot>
   catalogError(): string | undefined
   stream(
@@ -214,10 +216,28 @@ export abstract class LocalAdapter extends LlmAdapter {
     return models.find(entry => modelKey(entry.id) === folded || modelKey(entry.name) === folded)
   }
 
+  /**
+   * The catalog without waiting for a refresh.
+   *
+   * DSH resolves a model on every switch and again when the thinking level
+   * changes; awaiting a catalog read there made the picker freeze for as long
+   * as the upstream took whenever the TTL had just expired. A cached list is
+   * returned immediately and refreshed in the background. Only a first run,
+   * where there is nothing to show, waits.
+   */
+  private async cachedModels(): Promise<readonly ProviderModel[]> {
+    const cached = this.client.peekModels?.()
+    if (cached !== undefined && cached.length > 0) {
+      void this.client.models().catch(() => undefined)
+      return cached
+    }
+    return this.client.models()
+  }
+
   override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {
     if (!(await this.client.signedIn())) return []
     const disabled = new Set(this.options.disabledModels())
-    const models = await this.client.models()
+    const models = await this.cachedModels()
     for (const model of models) this.knownVision.set(model.id, model.vision)
     // DSH rejects a provider whose rows repeat an id, so a catalog bug must not
     // take the whole route down: the first row for an id wins.
@@ -234,7 +254,7 @@ export abstract class LocalAdapter extends LlmAdapter {
 
   override async resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
     const target = resolveModelId(model, this.options.modelAliases())
-    const live = this.findModel(await this.client.models(), target)
+    const live = this.findModel(await this.cachedModels(), target)
     if (live !== undefined) this.knownVision.set(target, live.vision)
     // A missed catalog read must not turn a vision model into a text-only one:
     // DSH strips the pixels before this adapter runs when the declared
@@ -280,7 +300,7 @@ export abstract class LocalAdapter extends LlmAdapter {
       throw new Error(status.error ?? '尚未登录。请在设置页点「打开扫码登录」。')
     }
     const model = resolveModelId(options.model, this.options.modelAliases())
-    const live = this.findModel(await this.client.models(), model)
+    const live = this.findModel(await this.cachedModels(), model)
     const maxTokens = options.maxTokens
       ?? live?.maxTokens
       ?? this.options.defaultMaxTokens()

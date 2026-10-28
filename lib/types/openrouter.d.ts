@@ -33,8 +33,19 @@ export interface OpenRouterIndex {
 }
 export interface OpenRouterLookup {
     models(fresh?: boolean): Promise<OpenRouterIndex>;
+    /** The snapshot already in memory; never starts a request. */
+    peek?(): OpenRouterIndex | undefined;
     invalidate(): void;
 }
+/**
+ * The router index for one catalogue read.
+ *
+ * A real snapshot answers from memory: awaiting a sync here would put the whole
+ * model list behind an ~800 KB download, and a failed one behind two timeouts.
+ * Readers without a snapshot fall back to the shared "every level" rule.
+ * Test doubles that do not implement `peek` keep awaiting their own lookup.
+ */
+export declare function readOpenRouter(lookup: OpenRouterLookup): Promise<OpenRouterIndex | undefined>;
 /** What the settings page may read without triggering a network request. */
 export interface OpenRouterStatus {
     models: number;
@@ -71,6 +82,14 @@ export declare class OpenRouterCatalog implements OpenRouterLookup {
     private loadFromDisk;
     /** Replace the cache file only after the new document is complete (tmp + rename). */
     private persist;
+    /**
+     * Read the live catalog, retrying once on a transient failure.
+     *
+     * A single timeout used to be reported as a permanent failure. The endpoint
+     * is a large document served through a CDN, so a cold connection, a 429 or a
+     * 5xx is worth one more attempt; the previous snapshot stays published the
+     * whole time either way.
+     */
     private fetchAndReplace;
     /**
      * Fetch and replace the snapshot. Concurrent callers share one request, and
@@ -78,6 +97,8 @@ export declare class OpenRouterCatalog implements OpenRouterLookup {
      */
     sync(): Promise<OpenRouterSyncResult>;
     models(fresh?: boolean): Promise<OpenRouterIndex>;
+    /** The current snapshot; `undefined` until one sync has succeeded. */
+    peek(): OpenRouterIndex | undefined;
     /** A read-only reading for the settings card; never starts a request. */
     status(): OpenRouterStatus;
     /** Drop the in-memory copy; the next read refetches (the file stays). */

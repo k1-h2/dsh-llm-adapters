@@ -104,16 +104,17 @@ function effortRank(effort: string): number {
 }
 
 /**
- * The default level: second strongest of the supported list.
+ * The default level: the strongest one the model supports.
  *
- * Starting one step below the top gives a useful reasoning budget whenever the
- * user switches models, without silently paying for the most expensive tier —
- * and without starting at `none`, which makes a reasoning model look broken.
+ * The user's explicit choice: whenever a model offers `max` (or the highest
+ * level it declares), switching to it must start there rather than one step
+ * below. `off`/`on` carry no rank and sort first, so a two-state list still
+ * picks its "on" entry.
  */
 export function defaultEffortOf(efforts: readonly string[]): string | undefined {
   if (efforts.length === 0) return undefined
   const ranked = [...efforts].sort((a, b) => effortRank(a) - effortRank(b))
-  return ranked[Math.max(0, ranked.length - 2)]
+  return ranked[ranked.length - 1]
 }
 
 function effortsOf(value: unknown): string[] {
@@ -381,6 +382,18 @@ export class ModelCatalog {
     private readonly load: () => Promise<ProviderModel[]>,
     private readonly ttlMs: () => number,
   ) {}
+
+  /**
+   * The current list without ever touching the network.
+   *
+   * The model picker resolves a model on every switch; waiting for a refresh
+   * there made the menu hang whenever the TTL had just expired. Callers that
+   * must answer immediately read this and let `models()` refresh in the
+   * background.
+   */
+  peek(): readonly ProviderModel[] | undefined {
+    return this.snapshot?.models
+  }
 
   async models(fresh = false): Promise<readonly ProviderModel[]> {
     if (!fresh && this.snapshot !== undefined && Date.now() - this.snapshot.at < this.ttlMs()) {

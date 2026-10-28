@@ -39,6 +39,8 @@ export interface ProviderClient {
     status(): Promise<AuthStatus>;
     signedIn(): Promise<boolean>;
     models(fresh?: boolean): Promise<readonly ProviderModel[]>;
+    /** The cached catalog, when one has been read; never starts a request. */
+    peekModels?(): readonly ProviderModel[] | undefined;
     quota(fresh?: boolean): Promise<QuotaSnapshot>;
     catalogError(): string | undefined;
     stream(options: GenerateOptions, model: string, readImage: ReadImage | undefined, onInvalidate: () => void): AsyncGenerator<StreamChunk>;
@@ -98,6 +100,16 @@ export declare abstract class LocalAdapter extends LlmAdapter {
      * reasoning levels, so a model that costs 1M tokens ran as if it had 200K.
      */
     protected findModel(models: readonly ProviderModel[], id: string): ProviderModel | undefined;
+    /**
+     * The catalog without waiting for a refresh.
+     *
+     * DSH resolves a model on every switch and again when the thinking level
+     * changes; awaiting a catalog read there made the picker freeze for as long
+     * as the upstream took whenever the TTL had just expired. A cached list is
+     * returned immediately and refreshed in the background. Only a first run,
+     * where there is nothing to show, waits.
+     */
+    private cachedModels;
     listModels(provider: string): Promise<readonly LlmModelInfo[]>;
     resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo>;
     prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<PreparedAdapterCall>;

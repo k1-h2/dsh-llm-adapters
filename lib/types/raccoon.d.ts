@@ -62,6 +62,8 @@ export declare class RaccoonProvider {
     private authorizedJson;
     private fetchModels;
     models(fresh?: boolean): Promise<readonly ProviderModel[]>;
+    /** The last successful catalogue, without waiting for a refresh. */
+    peekModels(): readonly ProviderModel[] | undefined;
     catalogError(): string | undefined;
     invalidateModels(): void;
     quota(fresh?: boolean): Promise<QuotaSnapshot>;

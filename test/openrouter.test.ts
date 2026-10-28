@@ -232,11 +232,26 @@ describe('OpenRouterCatalog', () => {
   })
 
   it('invalidate forces the next read to refetch', async () => {
-    const fetchImpl = vi.fn(async () => json({ data: [] }))
+    const fetchImpl = vi.fn(async () => json({ data: [{ id: 'z-ai/glm-5.3', name: 'Z.ai: GLM 5.3' }] }))
     const catalog = new OpenRouterCatalog(fetchImpl as unknown as typeof fetch)
     await catalog.models()
     catalog.invalidate()
     await catalog.models()
     expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+
+  it('retries a transient failure once', async () => {
+    const fetchImpl = vi.fn(async () => new Response('busy', { status: 429 }))
+    const catalog = new OpenRouterCatalog(fetchImpl as unknown as typeof fetch)
+    const result = await catalog.sync()
+    expect(result).toMatchObject({ ok: false, error: 'OpenRouter HTTP 429' })
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not retry a client error', async () => {
+    const fetchImpl = vi.fn(async () => new Response('gone', { status: 404 }))
+    const catalog = new OpenRouterCatalog(fetchImpl as unknown as typeof fetch)
+    expect(await catalog.sync()).toMatchObject({ ok: false, error: 'OpenRouter HTTP 404' })
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
 })

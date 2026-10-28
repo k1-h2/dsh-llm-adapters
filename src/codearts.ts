@@ -22,7 +22,7 @@ import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { AccountStore, CodeArtsAccountRecord } from './account-store.ts'
 import { CodeArtsAuth } from './auth.ts'
 import type { AuthStatus } from './auth.ts'
-import { ModelCatalog } from './catalog.ts'
+import { ModelCatalog, defaultEffortOf } from './catalog.ts'
 import type { ProviderModel } from './catalog.ts'
 import {
   CODEARTS_BENEFIT_FALLBACK,
@@ -51,6 +51,7 @@ import type { CodeArtsCredential } from './codearts-oauth.ts'
 import type { LoginStatus } from './login-page.ts'
 import { parseModelName } from './model-name.ts'
 import { OpenRouterCatalog } from './openrouter.ts'
+import { readOpenRouter } from './openrouter.ts'
 import type { OpenRouterLookup } from './openrouter.ts'
 import type { CheckinStatus, QuotaPack, QuotaSnapshot } from './types.ts'
 import { ProviderHttpError, buildMessages, buildTools, consumeOpenAiStream } from './wire.ts'
@@ -69,6 +70,16 @@ import type { ReadImage, WireMessage } from './wire.ts'
  * `on` is the old default and sends neither field.
  */
 export const CODEARTS_DEFAULT_EFFORT = 'on'
+
+/**
+ * The level a model starts on: the strongest one it offers.
+ *
+ * Every provider starts on its top level; `off` / `on` carry no rank, so a
+ * model the router only allows the two-state switch on still resolves to `on`.
+ */
+export function codeartsDefaultEffort(efforts: readonly string[]): string {
+  return defaultEffortOf(efforts) ?? CODEARTS_DEFAULT_EFFORT
+}
 
 /**
  * The levels one model offers: `off` / `on` always, then the graded levels the
@@ -393,6 +404,11 @@ export class CodeArtsProvider {
     return this.catalog.models(fresh)
   }
 
+  /** The last successful roster, without waiting for a refresh. */
+  peekModels(): readonly ProviderModel[] | undefined {
+    return this.catalog.peek()
+  }
+
   catalogError(): string | undefined {
     return this.catalog.error()
   }
@@ -445,7 +461,7 @@ export class CodeArtsProvider {
     const textOnly = this.options.textOnly()
     // The shared router snapshot: CodeArts publishes no reasoning levels at all,
     // so the graded list comes from OpenRouter, matched by product name.
-    const index = await this.openRouter.models().catch(() => undefined)
+    const index = await readOpenRouter(this.openRouter)
     const rows: ProviderModel[] = []
     const seen = new Set<string>()
     for (const row of [...gatewayRows, ...builtinRows]) {
@@ -460,6 +476,7 @@ export class CodeArtsProvider {
       const acceptsImages = !textOnly.has(row.id)
       const native = this.nativeVision.has(key)
       const factor = priceFactorOfLabel(row.rateLabel)
+      const efforts = codeartsEfforts(index?.match(parseModelName(row.name).name, row.id))
       rows.push({
         id: row.id,
         name: row.name,
@@ -468,8 +485,8 @@ export class CodeArtsProvider {
         vision: acceptsImages,
         ...acceptsImages && !native ? { visionRelay: true } : {},
         reasoning: true,
-        reasoningEfforts: codeartsEfforts(index?.match(parseModelName(row.name).name, row.id)),
-        defaultReasoningEffort: CODEARTS_DEFAULT_EFFORT,
+        reasoningEfforts: efforts,
+        defaultReasoningEffort: codeartsDefaultEffort(efforts),
         ...factor === undefined ? {} : { priceFactor: factor },
       })
     }

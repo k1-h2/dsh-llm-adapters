@@ -610,7 +610,7 @@ describe('CodeArts provider', () => {
 
     const models = await provider.models(true)
     expect(models.map(model => model.id)).toEqual(['glm-5.3-flash', 'GLM-5.2', 'kimi-k2.6-vl', 'openpangu-2.0-pro'])
-    expect(models[0]).toMatchObject({ reasoningEfforts: CODEARTS_EFFORTS, defaultReasoningEffort: 'on' })
+    expect(models[0]).toMatchObject({ reasoningEfforts: CODEARTS_EFFORTS, defaultReasoningEffort: 'max' })
     expect(CODEARTS_EFFORTS).toEqual(['off', 'on', 'low', 'medium', 'high', 'xhigh', 'max'])
     expect(models[1]).toMatchObject({ contextWindow: 1_048_576, priceFactor: 0.7 })
     // The image models are hidden from the IDE's own menu but still served.

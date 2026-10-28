@@ -52,11 +52,12 @@ export declare const DEFAULT_CONTEXT_WINDOW = 200000;
 /** Display label for one effort id: `None`, `Low`, `High`, `Max`; `xhigh` stays as vendors spell it. */
 export declare function effortLabel(effort: string): string;
 /**
- * The default level: second strongest of the supported list.
+ * The default level: the strongest one the model supports.
  *
- * Starting one step below the top gives a useful reasoning budget whenever the
- * user switches models, without silently paying for the most expensive tier —
- * and without starting at `none`, which makes a reasoning model look broken.
+ * The user's explicit choice: whenever a model offers `max` (or the highest
+ * level it declares), switching to it must start there rather than one step
+ * below. `off`/`on` carry no rank and sort first, so a two-state list still
+ * picks its "on" entry.
  */
 export declare function defaultEffortOf(efforts: readonly string[]): string | undefined;
 export interface ResolvedCapabilities {
@@ -125,6 +126,15 @@ export declare class ModelCatalog {
     private lastError;
     private inflight;
     constructor(load: () => Promise<ProviderModel[]>, ttlMs: () => number);
+    /**
+     * The current list without ever touching the network.
+     *
+     * The model picker resolves a model on every switch; waiting for a refresh
+     * there made the menu hang whenever the TTL had just expired. Callers that
+     * must answer immediately read this and let `models()` refresh in the
+     * background.
+     */
+    peek(): readonly ProviderModel[] | undefined;
     models(fresh?: boolean): Promise<readonly ProviderModel[]>;
     error(): string | undefined;
     invalidate(): void;

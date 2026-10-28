@@ -213,6 +213,8 @@ export declare class TraeProvider {
     }>;
     signedIn(): Promise<boolean>;
     models(fresh?: boolean): Promise<readonly ProviderModel[]>;
+    /** The last successful catalogue, without waiting for a refresh. */
+    peekModels(): readonly ProviderModel[] | undefined;
     catalogError(): string | undefined;
     invalidateModels(): void;
     invalidateQuota(): void;

@@ -37,6 +37,7 @@ import { responseError } from './http.ts'
 import type { LoginStatus } from './login-page.ts'
 import { parseModelName } from './model-name.ts'
 import { OpenRouterCatalog } from './openrouter.ts'
+import { readOpenRouter } from './openrouter.ts'
 import type { OpenRouterIndex, OpenRouterLookup } from './openrouter.ts'
 import type { TraeRegionProfile } from './trae-endpoints.ts'
 import {
@@ -998,6 +999,12 @@ export class TraeProvider {
     return this.catalogInstance.models(fresh)
   }
 
+  /** The last successful catalogue, without waiting for a refresh. */
+  peekModels(): readonly ProviderModel[] | undefined {
+    this.ensureRegion()
+    return this.catalogInstance.peek()
+  }
+
   catalogError(): string | undefined {
     return this.catalogInstance.error()
   }
@@ -1110,7 +1117,7 @@ export class TraeProvider {
     const token = await this.options.auth.accessToken()
     const identity = await this.options.auth.identity()
     const profile = this.profile()
-    const openRouter = this.openRouter.models().catch(() => undefined)
+    const openRouter = readOpenRouter(this.openRouter)
     let remote: TraeRemoteModel[] = []
     let remoteError: unknown
     try {

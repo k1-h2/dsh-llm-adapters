@@ -96,6 +96,20 @@ describe('LocalAdapter', () => {
     })
   })
 
+  it('resolves from the cached catalog instead of waiting for a refresh', async () => {
+    // DSH re-resolves a model on every switch and level change. Waiting on a
+    // catalog refresh there froze the picker whenever the TTL had just expired.
+    const modelsSpy = vi.fn(() => new Promise<readonly ProviderModel[]>(() => {}))
+    const { adapter } = makeAdapter({ peekModels: () => models, models: modelsSpy })
+    const info = await Promise.race([
+      adapter.resolveModel('loomy', 'spark-x'),
+      new Promise(resolve => { setTimeout(() => resolve('timeout'), 100) }),
+    ])
+    expect(info).toMatchObject({ id: 'spark-x', name: 'Spark X' })
+    // The refresh still starts, just behind the answer.
+    expect(modelsSpy).toHaveBeenCalled()
+  })
+
   it('matches a re-spelled id to the catalogue row it names', async () => {
     // DSH hands back whatever the picker stored, and a display name or a changed
     // hyphen used to miss the row entirely: the model then ran on the 200K

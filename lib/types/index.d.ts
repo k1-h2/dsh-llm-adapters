@@ -55,7 +55,7 @@ export { ModelCatalog, defaultEffortOf, effortLabel, parseLoomyCatalog, parseRac
 export type { ProviderModel, ResolvedCapabilities } from './catalog.ts';
 export { parseModelName, modelKey } from './model-name.ts';
 export type { ParsedModelName } from './model-name.ts';
-export { OpenRouterCatalog, buildOpenRouterIndex, parseOpenRouterModels, EMPTY_OPENROUTER_INDEX, } from './openrouter.ts';
+export { OpenRouterCatalog, buildOpenRouterIndex, parseOpenRouterModels, readOpenRouter, EMPTY_OPENROUTER_INDEX, } from './openrouter.ts';
 export type { OpenRouterIndex, OpenRouterLookup, OpenRouterModel, OpenRouterStatus, OpenRouterSyncResult, } from './openrouter.ts';
 export { LoomyProvider, LOOMY_BASE, LOOMY_VERSION, loomyGatewaySessionValid } from './loomy.ts';
 export { RaccoonProvider, RACCOON_BASE, RACCOON_CLIENT_VERSION, raccoonAccessTokenValid, raccoonRefreshCandidate, } from './raccoon.ts';
