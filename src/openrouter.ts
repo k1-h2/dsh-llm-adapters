@@ -19,7 +19,10 @@ import { dirname } from 'node:path'
 import { modelKey } from './model-name.ts'
 
 const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models'
-const REQUEST_TIMEOUT_MS = 20_000
+/** The catalog is ~800 KB; a slow link needs more than the usual 20 s. */
+const REQUEST_TIMEOUT_MS = 30_000
+const OPENROUTER_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 const CACHE_VERSION = 1
 
 export interface OpenRouterModel {
@@ -44,7 +47,22 @@ export interface OpenRouterIndex {
 
 export interface OpenRouterLookup {
   models(fresh?: boolean): Promise<OpenRouterIndex>
+  /** The snapshot already in memory; never starts a request. */
+  peek?(): OpenRouterIndex | undefined
   invalidate(): void
+}
+
+/**
+ * The router index for one catalogue read.
+ *
+ * A real snapshot answers from memory: awaiting a sync here would put the whole
+ * model list behind an ~800 KB download, and a failed one behind two timeouts.
+ * Readers without a snapshot fall back to the shared "every level" rule.
+ * Test doubles that do not implement `peek` keep awaiting their own lookup.
+ */
+export async function readOpenRouter(lookup: OpenRouterLookup): Promise<OpenRouterIndex | undefined> {
+  if (lookup.peek !== undefined) return lookup.peek() ?? EMPTY_OPENROUTER_INDEX
+  return lookup.models().catch(() => undefined)
 }
 
 /** What the settings page may read without triggering a network request. */
@@ -283,33 +301,56 @@ export class OpenRouterCatalog implements OpenRouterLookup {
     }
   }
 
+  /**
+   * Read the live catalog, retrying once on a transient failure.
+   *
+   * A single timeout used to be reported as a permanent failure. The endpoint
+   * is a large document served through a CDN, so a cold connection, a 429 or a
+   * 5xx is worth one more attempt; the previous snapshot stays published the
+   * whole time either way.
+   */
   private async fetchAndReplace(): Promise<OpenRouterSyncResult> {
-    try {
-      const response = await this.fetchImpl(OPENROUTER_MODELS_URL, {
-        headers: { accept: 'application/json' },
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      })
-      if (!response.ok) throw new Error(`OpenRouter HTTP ${response.status}`)
-      const models = parseOpenRouterModels(await response.json())
-      if (models.length === 0) throw new Error('OpenRouter 没有返回任何模型')
-      const index = buildOpenRouterIndex(models)
-      const at = Date.now()
-      // Publish only after the whole document parsed: readers see either the
-      // previous snapshot or the new one, never a half-built index.
-      this.snapshot = { index, at }
-      this.lastError = undefined
-      this.persist(models, at)
-      return { ok: true, models: models.length, at, syncing: false }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      this.lastError = message
-      return {
-        ok: false,
-        models: this.snapshot?.index.models.length ?? 0,
-        ...this.snapshot === undefined ? {} : { at: this.snapshot.at },
-        error: message,
-        syncing: false,
+    let lastError = ''
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) await new Promise(resolve => { setTimeout(resolve, 1_500) })
+      let retryable = attempt === 0
+      try {
+        const response = await this.fetchImpl(OPENROUTER_MODELS_URL, {
+          headers: {
+            accept: 'application/json',
+            // A bare Node user-agent is the kind of client a CDN may throttle.
+            'user-agent': OPENROUTER_USER_AGENT,
+            'x-title': 'dsh-llm-adapters',
+          },
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        })
+        if (!response.ok) {
+          // A 4xx (other than 429) is the same on the next attempt.
+          retryable = retryable && (response.status === 429 || response.status >= 500)
+          throw new Error(`OpenRouter HTTP ${response.status}`)
+        }
+        const models = parseOpenRouterModels(await response.json())
+        if (models.length === 0) throw new Error('OpenRouter 没有返回任何模型')
+        const index = buildOpenRouterIndex(models)
+        const at = Date.now()
+        // Publish only after the whole document parsed: readers see either the
+        // previous snapshot or the new one, never a half-built index.
+        this.snapshot = { index, at }
+        this.lastError = undefined
+        this.persist(models, at)
+        return { ok: true, models: models.length, at, syncing: false }
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error)
+        if (!retryable) break
       }
+    }
+    this.lastError = lastError
+    return {
+      ok: false,
+      models: this.snapshot?.index.models.length ?? 0,
+      ...this.snapshot === undefined ? {} : { at: this.snapshot.at },
+      error: lastError,
+      syncing: false,
     }
   }
 
@@ -326,6 +367,11 @@ export class OpenRouterCatalog implements OpenRouterLookup {
   async models(fresh = false): Promise<OpenRouterIndex> {
     if (fresh || this.snapshot === undefined) await this.sync()
     return this.snapshot?.index ?? EMPTY_OPENROUTER_INDEX
+  }
+
+  /** The current snapshot; `undefined` until one sync has succeeded. */
+  peek(): OpenRouterIndex | undefined {
+    return this.snapshot?.index
   }
 
   /** A read-only reading for the settings card; never starts a request. */

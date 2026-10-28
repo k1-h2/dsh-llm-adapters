@@ -38,6 +38,13 @@ import type { ReadImage } from './wire.ts';
  */
 export declare const CODEARTS_DEFAULT_EFFORT = "on";
 /**
+ * The level a model starts on: the strongest one it offers.
+ *
+ * Every provider starts on its top level; `off` / `on` carry no rank, so a
+ * model the router only allows the two-state switch on still resolves to `on`.
+ */
+export declare function codeartsDefaultEffort(efforts: readonly string[]): string;
+/**
  * The levels one model offers: `off` / `on` always, then the graded levels the
  * gateway validates and OpenRouter says the model accepts.
  *
@@ -120,6 +127,8 @@ export declare class CodeArtsProvider {
     private get fetcher();
     private credential;
     models(fresh?: boolean): Promise<readonly ProviderModel[]>;
+    /** The last successful roster, without waiting for a refresh. */
+    peekModels(): readonly ProviderModel[] | undefined;
     catalogError(): string | undefined;
     invalidateModels(): void;
     /** Signed GET returning the parsed body, or `undefined` on any failure. */

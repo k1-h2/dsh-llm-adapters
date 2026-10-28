@@ -166,7 +166,7 @@ describe('Trae catalog', () => {
       priceFactor: 0.8,
       reasoning: true,
       reasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
-      defaultReasoningEffort: 'high',
+      defaultReasoningEffort: 'xhigh',
     })
     expect(meta.get('gpt-5')).toEqual({
       configName: 'gpt-5-2026',
@@ -179,8 +179,8 @@ describe('Trae catalog', () => {
       vision: true,
       priceFactor: 1.2,
       reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-      // Second strongest, not the strongest.
-      defaultReasoningEffort: 'xhigh',
+      // The strongest level the model publishes.
+      defaultReasoningEffort: 'max',
     })
     // Matched by display name, so the callable config name is the dated one
     // Trae actually lists — not the directory id, which may not be accepted.
@@ -355,7 +355,7 @@ describe('Trae catalog', () => {
     expect(models[0]).toMatchObject({
       vision: true,
       reasoningEfforts: ['low', 'high', 'xhigh'],
-      defaultReasoningEffort: 'high',
+      defaultReasoningEffort: 'xhigh',
     })
     // Only advertised levels get a wire spelling.
     expect(meta.get('deepseek-v4.1-flash')?.wireEfforts).toEqual({
@@ -753,13 +753,13 @@ describe('TraeProvider', () => {
     expect(models.find(model => model.id === 'gpt-5')).toMatchObject({
       vision: false,
       reasoningEfforts: ['max', 'high', 'low'],
-      defaultReasoningEffort: 'high',
+      defaultReasoningEffort: 'max',
     })
   })
 
   it('exposes every level when neither source names one', () => {
     // The shared rule: no OpenRouter match and an empty directory declaration
-    // falls back to all levels, with the second-strongest as the default.
+    // falls back to all levels, with the strongest as the default.
     const { models } = mergeTraeModels(
       [{ id: 'x-model', name: 'X Model', multimodal: false, efforts: [], primary: true }],
       [{
@@ -774,7 +774,7 @@ describe('TraeProvider', () => {
     expect(models[0]).toMatchObject({
       vision: false,
       reasoningEfforts: ALL_REASONING_EFFORTS,
-      defaultReasoningEffort: 'xhigh',
+      defaultReasoningEffort: 'max',
     })
   })
 

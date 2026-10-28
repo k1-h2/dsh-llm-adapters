@@ -317,18 +317,21 @@ IDE 自身 provider 配置的 `limit.context`（`codearts-endpoints.ts` 的静�
 3. **能力来源**（`resolveCapabilities`）：OpenRouter 有 `supported_efforts` /
    `input_modalities` 就用它；否则回退上游的 `reasoning_efforts`、`input_modalities`、
    `capabilities.vision` 或 `tags`；两边都没有时开放全部档位与 text/image 两种模态。
-4. **默认档**取列表里**倒数第二强**的一档（强度顺序 `none < minimal < low < medium <
-   high < xhigh < max`），由 `defaultEffortOf` 统一计算：不沿用 OpenRouter 的 `max`（太贵），
-   也不沿用上游常见默认值 `low` 或 `none`（切模型时看起来像没思考）。只有一个档位时就取它。
+4. **默认档**取列表里**最强**的一档（强度顺序 `none < minimal < low < medium <
+   high < xhigh < max`），由 `defaultEffortOf` 统一计算：有 `max` 就用 `max`；两态列表
+   （`off` / `on`）没有强度排名，取最后一项 `on`。只有一个档位时就取它。
 5. **档位名只做大写化**：`none` → `None`、`low` → `Low`、`max` → `Max`，`xhigh` 保持原样；
    不做中文翻译。
 6. **同步即更新**：OpenRouter 表由插件页的「OpenRouter 模型同步」按配置的间隔自动同步，也可
    手动触发；刷新模型列表**不会**清空它。同步成功后内存快照与磁盘文件一起原子替换，失败则两者
-   都保留上一次成功的数据。
+   都保留上一次成功的数据。请求带浏览器 UA 与 `X-Title`，单次 30 秒，429/5xx/网络错误重试一次，
+   连续失败后退避 5 分钟再试，避免每 30 秒一次把账号打到限流。
+   目录解析不再等待 OpenRouter（`readOpenRouter` 只读内存快照）：没有快照时按「两边都没说」处理，
+   目录读取不会被一次 800 KB 下载拖住。
 
 Loomy 的 `GET /models` 自带 `reasoning_efforts` 与 `default_reasoning_effort`，但为了统一
 规则，它也会先查 OpenRouter（命中时以实时表为准），匹配不上才用上游的档位列表；无论档位来自
-哪一边，默认档都按倒数第二强计算。它的请求体直接透传 `reasoning_effort`。
+哪一边，默认档都按最强计算。它的请求体直接透传 `reasoning_effort`。
 
 ### OpenRouter 快照（`openrouter.ts`）
 

@@ -94,7 +94,7 @@ export type { ProviderModel, ResolvedCapabilities } from './catalog.ts'
 export { parseModelName, modelKey } from './model-name.ts'
 export type { ParsedModelName } from './model-name.ts'
 export {
-  OpenRouterCatalog, buildOpenRouterIndex, parseOpenRouterModels, EMPTY_OPENROUTER_INDEX,
+  OpenRouterCatalog, buildOpenRouterIndex, parseOpenRouterModels, readOpenRouter, EMPTY_OPENROUTER_INDEX,
 } from './openrouter.ts'
 export type {
   OpenRouterIndex, OpenRouterLookup, OpenRouterModel, OpenRouterStatus, OpenRouterSyncResult,
@@ -293,18 +293,31 @@ export function apply(ctx: Context, config: ParsedConfig): void {
   // Sync ticks cheaply: the configured interval is read live, so changing it in
   // the settings page takes effect without a restart. A sync in flight is
   // shared, and a failed one leaves the persisted snapshot untouched.
+  //
+  // A failure also backs off: the tick runs every 30 s, and retrying a broken
+  // upstream that often is how the account itself gets rate-limited.
+  let nextSyncAttempt = 0
   const syncOpenRouter = (): void => {
     const minutes = live.openRouterSyncMinutes()
     if (minutes <= 0) return
+    if (Date.now() < nextSyncAttempt) return
     const status = openRouter.status()
     if (status.syncing) return
     if (status.at !== undefined && Date.now() - status.at < minutes * 60_000) return
     void openRouter.sync().then(result => {
-      if (!result.ok) ctx.logger?.warn(`llm-adapters: OpenRouter 同步失败：${result.error ?? '未知错误'}`)
+      if (result.ok) {
+        nextSyncAttempt = 0
+        return
+      }
+      nextSyncAttempt = Date.now() + 5 * 60_000
+      ctx.logger?.warn(`llm-adapters: OpenRouter 同步失败：${result.error ?? '未知错误'}`)
     })
   }
   const syncTimer = setInterval(syncOpenRouter, 30_000)
   syncTimer.unref?.()
+  // The first tick is delayed by the interval; start one sync now so a fresh
+  // install does not spend its first minute without any router metadata.
+  syncOpenRouter()
   ctx.effect(() => () => clearInterval(syncTimer), 'llm-adapters: openrouter sync')
 
   // Raccoon has no claim endpoint; its daily points appear on the first web

@@ -20,6 +20,7 @@ import { parseLoomyCatalog, ModelCatalog } from './catalog.ts'
 import type { ProviderModel } from './catalog.ts'
 import { fetchJson } from './http.ts'
 import { OpenRouterCatalog } from './openrouter.ts'
+import { readOpenRouter } from './openrouter.ts'
 import type { OpenRouterLookup } from './openrouter.ts'
 import type { QuotaSnapshot } from './types.ts'
 import { ProviderHttpError, buildBody, buildMessages, buildTools, openAiStream } from './wire.ts'
@@ -202,7 +203,7 @@ export class LoomyProvider {
   private async fetchModels(): Promise<ProviderModel[]> {
     const session = await this.session()
     const [openRouter, payload] = await Promise.all([
-      this.openRouter.models(),
+      readOpenRouter(this.openRouter),
       fetchJson<unknown>(`${LOOMY_BASE}/models`, {
         headers: {
           ...tracingHeaders(session, { model: '', provider: '', messages: [] }, 'system'),
@@ -225,6 +226,11 @@ export class LoomyProvider {
     // The OpenRouter snapshot has its own scheduler and on-disk copy; a model
     // refresh here must not throw it away (that would empty the menu offline).
     return this.catalog.models(fresh)
+  }
+
+  /** The last successful catalogue, without waiting for a refresh. */
+  peekModels(): readonly ProviderModel[] | undefined {
+    return this.catalog.peek()
   }
 
   catalogError(): string | undefined {
