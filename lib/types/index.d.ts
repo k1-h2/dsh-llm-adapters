@@ -59,7 +59,7 @@ export { OpenRouterCatalog, buildOpenRouterIndex, parseOpenRouterModels, readOpe
 export type { OpenRouterIndex, OpenRouterLookup, OpenRouterModel, OpenRouterStatus, OpenRouterSyncResult, } from './openrouter.ts';
 export { LoomyProvider, LOOMY_BASE, LOOMY_VERSION, loomyGatewaySessionValid } from './loomy.ts';
 export { RaccoonProvider, RACCOON_BASE, RACCOON_CLIENT_VERSION, raccoonAccessTokenValid, raccoonRefreshCandidate, } from './raccoon.ts';
-export { TraeProvider, TRAE_CHAT_FUNCTIONS, TRAE_DIRECTORY_FUNCTIONS, checkinDeviceId, mergeTraeModels, normalizeEffort, openTraeStream, parseTraeCheckin, parseTraeGlobalUsage, parseTraeRemoteModels, parseTraeUsage, parseTraeWireModels, traeMessages, traeTools, } from './trae.ts';
+export { TraeProvider, TRAE_CHAT_FUNCTIONS, TRAE_DIRECTORY_FUNCTIONS, mergeTraeModels, normalizeEffort, openTraeStream, parseTraeGlobalUsage, parseTraeRemoteModels, parseTraeUsage, parseTraeWireModels, traeMessages, traeTools, } from './trae.ts';
 export type { TraeCatalog, TraeModelMeta, TraeProviderOptions, TraeRemoteModel, TraeWireModel, } from './trae.ts';
 export { TRAE_APP_ID, TRAE_REGION_PROFILES, TRAE_SOLO_CHAT_PATH, TRAE_WEB_USER_AGENT } from './trae-endpoints.ts';
 export type { TraeRegionProfile } from './trae-endpoints.ts';
