@@ -27,8 +27,14 @@ export interface TraeRegionProfile {
   payBase: string
   timezone: string
   language: string
-  /** Daily check-in exists on the mainland deployment only. */
-  checkin: boolean
+  /**
+   * The deployment publishes its entitlement usage on the v2 route.
+   *
+   * Mainland answers `web_user_ent_usage` v2 (usage summary plus packs); the
+   * international site's own "Dollar Usage" panel reads v1, whose pack carries
+   * the dollar allowance instead.
+   */
+  usageV2: boolean
 }
 
 export const TRAE_REGION_PROFILES: Record<TraeRegion, TraeRegionProfile> = {
@@ -42,7 +48,7 @@ export const TRAE_REGION_PROFILES: Record<TraeRegion, TraeRegionProfile> = {
     payBase: 'https://api.trae.cn',
     timezone: 'Asia/Shanghai',
     language: 'zh-cn',
-    checkin: true,
+    usageV2: true,
   },
   global: {
     id: 'global',
@@ -54,7 +60,7 @@ export const TRAE_REGION_PROFILES: Record<TraeRegion, TraeRegionProfile> = {
     payBase: 'https://growsg-normal.trae.ai',
     timezone: 'Asia/Singapore',
     language: 'en',
-    checkin: false,
+    usageV2: false,
   },
 }
 

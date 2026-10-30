@@ -108,7 +108,7 @@ describe('client bundle', () => {
     expect(exports.__test.FIELDS.codearts.windows).toBe('codeartsModelContextWindows')
   })
 
-  it('keeps Trae as one card with a region switch and a check-in button', () => {
+  it('keeps Trae as one card with a region switch', () => {
     const { zh, en, REGIONS, regionOf } = exports.__test as unknown as {
       zh: Record<string, string>
       en: Record<string, string>
@@ -122,10 +122,6 @@ describe('client bundle', () => {
     expect(zh.regionCn).toContain('trae.cn')
     expect(zh.regionGlobal).toContain('trae.ai')
     expect(en.regionCn).toContain('trae.cn')
-    expect(zh.checkinClaim).toBe('签到领积分')
-    expect(zh.checkinClaimed).toBe('今日已签到')
-    // The device flag and the account flag must never share a label.
-    expect(zh.checkinDevice).not.toBe(zh.checkinClaimed)
     expect(zh.browserOpenTrae).toBe('打开浏览器登录')
     expect(zh.packUsage).toBe('已用 / 总额')
     // Collapsed is the default: one summary row plus a details toggle.
@@ -134,6 +130,14 @@ describe('client bundle', () => {
     expect(zh.packCollapse).toBe('收起')
     expect(zh.packExpand).toBeUndefined()
     expect(en.packUsage).toBe('used / total')
+  })
+
+  it('keeps the account and device check-in labels apart', () => {
+    const { zh } = exports.__test
+    expect(zh.checkinClaim).toBe('签到领积分')
+    expect(zh.checkinClaimed).toBe('今日已签到')
+    // The device flag and the account flag must never share a label.
+    expect(zh.checkinDevice).not.toBe(zh.checkinClaimed)
   })
 
   it('has the same top-level copy keys in Chinese and English', () => {

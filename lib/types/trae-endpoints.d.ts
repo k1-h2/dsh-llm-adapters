@@ -25,8 +25,14 @@ export interface TraeRegionProfile {
     payBase: string;
     timezone: string;
     language: string;
-    /** Daily check-in exists on the mainland deployment only. */
-    checkin: boolean;
+    /**
+     * The deployment publishes its entitlement usage on the v2 route.
+     *
+     * Mainland answers `web_user_ent_usage` v2 (usage summary plus packs); the
+     * international site's own "Dollar Usage" panel reads v1, whose pack carries
+     * the dollar allowance instead.
+     */
+    usageV2: boolean;
 }
 export declare const TRAE_REGION_PROFILES: Record<TraeRegion, TraeRegionProfile>;
 /** The app id Trae's own clients send; not account-specific. */

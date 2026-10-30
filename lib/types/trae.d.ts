@@ -1,5 +1,5 @@
 /**
- * Trae provider: model directory, SOLO chat, quota and daily check-in.
+ * Trae provider: model directory, SOLO chat and quota.
  *
  * Trae's website login yields the same `Cloud-IDE-JWT` its own clients use, so
  * the plugin talks to the same gateways they do. Two catalog sources are merged:
@@ -29,7 +29,7 @@ import { ModelCatalog } from './catalog.ts';
 import type { ProviderModel } from './catalog.ts';
 import type { LoginStatus } from './login-page.ts';
 import type { OpenRouterIndex, OpenRouterLookup } from './openrouter.ts';
-import type { CheckinStatus, QuotaSnapshot } from './types.ts';
+import type { QuotaSnapshot } from './types.ts';
 import type { ReadImage, WireMessage } from './wire.ts';
 /** Chat functions, in the order Trae itself prefers them. */
 export declare const TRAE_CHAT_FUNCTIONS: readonly string[];
@@ -105,30 +105,6 @@ export interface TraeProviderOptions {
     openRouter?: OpenRouterLookup;
 }
 /**
- * The device id Trae's check-in API expects.
- *
- * The endpoint only accepts a 16-digit decimal device id; a UUID (what the web
- * session's `__msuuid__` looks like) is rejected with `9074` even though every
- * other Trae call accepts it. Live matrix (same account, same minute):
- * UUID -> `9074`, 16-digit number -> `code: 0`. The number is derived from the
- * web session's device id, so it still comes from this login and not from a
- * desktop install, and it stays stable for that session.
- *
- * The desktop client's ids look like `2715142696215459`: 16 digits starting
- * with 1–8. The 9-prefixed value derived for the current login was answered
- * with `9074`, so the derived range stays inside the client's range.
- */
-export declare function checkinDeviceId(deviceId: string): string;
-/**
- * The body every check-in POST carries.
- *
- * Matches the desktop client's own call: `req_source` is the numeric `1` for
- * the IDE (the client sends `2` for Trae Work). The plugin used to send `{}`;
- * status tolerated that, but claim answered `9074` (`当前参与用户太多`) for the
- * same account and device, so requests now carry the client's field.
- */
-export declare const TRAE_CHECKIN_REQ_SOURCE = 1;
-/**
  * The persistent browser profile used for one region.
  *
  * Reusing it keeps Trae's device fingerprint stable across sign-ins, so a
@@ -178,7 +154,6 @@ export declare function parseTraeUsage(payload: unknown): QuotaSnapshot;
  * dollars and must not be printed as credits.
  */
 export declare function parseTraeGlobalUsage(payload: unknown): QuotaSnapshot;
-export declare function parseTraeCheckin(payload: unknown): CheckinStatus;
 export declare class TraeProvider {
     private readonly options;
     private catalogInstance;
@@ -224,9 +199,6 @@ export declare class TraeProvider {
     private fetchWire;
     private fetchCatalog;
     quota(fresh?: boolean): Promise<QuotaSnapshot>;
-    checkinStatus(): Promise<CheckinStatus>;
-    /** Claim today's reward. The only state-changing call in this provider. */
-    claimCheckin(): Promise<CheckinStatus>;
     stream(options: GenerateOptions, model: string, readImage: ReadImage | undefined, onInvalidate: () => void): AsyncGenerator<StreamChunk>;
     startBrowserLogin(region?: TraeRegion): Promise<LoginStatus>;
     browserLoginStatus(): LoginStatus;

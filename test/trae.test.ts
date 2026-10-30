@@ -9,7 +9,7 @@ import { normalizeTraeRegion } from '../src/brand.ts'
 import { ALL_REASONING_EFFORTS } from '../src/catalog.ts'
 import { EMPTY_OPENROUTER_INDEX, buildOpenRouterIndex } from '../src/openrouter.ts'
 import {
-  TraeProvider, checkinDeviceId, mergeTraeModels, normalizeEffort, openTraeStream, parseTraeCheckin,
+  TraeProvider, mergeTraeModels, normalizeEffort, openTraeStream,
   parseTraeGlobalUsage, parseTraeRemoteModels, parseTraeUsage, parseTraeWireModels, traeMessages, traeTools,
 } from '../src/trae.ts'
 import { ProviderHttpError } from '../src/wire.ts'
@@ -572,13 +572,6 @@ describe('Trae quota and check-in parsing', () => {
       }],
     })).toMatchObject({ plan: 'Pro plan', total: 5000, used: 1200 })
   })
-
-  it('keeps the account and device flags apart', () => {
-    expect(parseTraeCheckin({ enable: true, checked_in: false, did_checked_in: true, credits: 10, extra_credits: 5 }))
-      .toEqual({ available: true, claimed: false, deviceClaimed: true, reward: 10 })
-    expect(parseTraeCheckin({ enable: false, checked_in: true }))
-      .toMatchObject({ available: false, claimed: true, deviceClaimed: false })
-  })
 })
 
 describe('TraeAuth', () => {
@@ -848,84 +841,21 @@ describe('TraeProvider', () => {
     expect(models.find(model => model.id === 'gpt-5')?.vision).toBe(true)
   })
 
-  it('reads the mainland quota and the check-in state', async () => {
+  it('reads the mainland quota', async () => {
     const seen: string[] = []
     const fetchMock = vi.fn(async (url: string) => {
       seen.push(url)
       if (url.endsWith('/web_user_ent_usage')) {
         return json({ data: { usage_summary: { total_amount: 10, consumed_amount: 2, consumption_ratio: 20 } } })
       }
-      if (url.endsWith('/checkin_credits/status')) {
-        return json({ enable: true, checked_in: false, did_checked_in: false, credits: 20 })
-      }
       throw new Error(`unexpected ${url}`)
     })
     const { provider } = make('cn', fetchMock as unknown as typeof fetch)
     expect(await provider.quota(true)).toMatchObject({ total: 10, used: 2, ratio: 20 })
-    expect(await provider.checkinStatus()).toEqual({
-      available: true, claimed: false, deviceClaimed: false, reward: 20,
-    })
     expect(seen[0]).toBe('https://api.trae.cn/trae/api/v2/pay/web_user_ent_usage')
   })
 
-  it('derives a stable 16-digit decimal id for check-in', () => {
-    // The claim endpoint rejects the web session's UUID with 9074; only a
-    // 16-digit decimal id is accepted, so it is derived from that UUID.
-    const first = checkinDeviceId('635ed490-f950-40f7-9178-8c72ae1cf1cc')
-    const again = checkinDeviceId('635ed490-f950-40f7-9178-8c72ae1cf1cc')
-    const other = checkinDeviceId('11111111-2222-3333-4444-555555555555')
-    // The desktop client's ids start with 1–8 (e.g. 2715142696215459); a
-    // 9-prefixed id is answered with 9074 while the same account claims with a
-    // 1–8 one, so the derived value must stay below 9e15.
-    expect(first).toMatch(/^[1-8]\d{15}$/)
-    expect(first).toBe(again)
-    expect(other).not.toBe(first)
-    expect(first).not.toContain('-')
-  })
-
-  it('sends the decimal check-in id and the client req_source', async () => {
-    const seen: { url: string, deviceId?: string, body?: Record<string, unknown> }[] = []
-    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
-      const headers = init.headers as Record<string, string>
-      seen.push({
-        url,
-        deviceId: headers['x-device-id'],
-        body: JSON.parse(String(init.body)) as Record<string, unknown>,
-      })
-      if (url.endsWith('/checkin_credits/status')) return json({ enable: true, checked_in: false })
-      if (url.endsWith('/checkin_credits/claim')) return json({ code: 0 })
-      throw new Error(`unexpected ${url}`)
-    })
-    const { provider } = make('cn', fetchMock as unknown as typeof fetch)
-    await provider.checkinStatus()
-    await provider.claimCheckin()
-    expect(seen).toHaveLength(2)
-    for (const call of seen) {
-      expect(call.deviceId).toBe(checkinDeviceId('dev-1'))
-      expect(call.deviceId).toMatch(/^[1-8]\d{15}$/)
-      expect(call.deviceId).not.toBe('dev-1')
-      // The desktop client posts { req_source: 1 } for the IDE. An empty body
-      // makes claim answer 9074 even while status still succeeds.
-      expect(call.body).toEqual({ req_source: 1 })
-    }
-  })
-
-  it('claims once, then reports the device as already claimed', async () => {
-    let call = 0
-    const fetchMock = vi.fn(async (url: string) => {
-      if (url.endsWith('/checkin_credits/claim')) {
-        call++
-        return json(call === 1 ? { code: 0 } : { code: 9095, message: 'already' })
-      }
-      throw new Error(`unexpected ${url}`)
-    })
-    const { provider } = make('cn', fetchMock as unknown as typeof fetch)
-    expect(await provider.claimCheckin()).toEqual({ available: true, claimed: true, deviceClaimed: false })
-    expect(await provider.claimCheckin()).toMatchObject({ claimed: false, deviceClaimed: true })
-    expect(call).toBe(2)
-  })
-
-  it('has no check-in on the international deployment', async () => {
+  it('reads the international dollar quota from the v1 roster', async () => {
     const seen: string[] = []
     const fetchMock = vi.fn(async (url: string) => {
       seen.push(url)
@@ -950,8 +880,6 @@ describe('TraeProvider', () => {
     })
     // The international edition uses the v1 roster; v2 is mainland-only.
     expect(seen[0]).toBe('https://growsg-normal.trae.ai/trae/api/v1/pay/web_user_ent_usage')
-    expect(await provider.checkinStatus()).toEqual({ available: false, claimed: false, deviceClaimed: false })
-    await expect(provider.claimCheckin()).rejects.toThrow('没有签到活动')
   })
 
   it('drops the catalog and the quota when the region changes', async () => {
@@ -993,7 +921,6 @@ describe('TraeProvider', () => {
               }],
             })
       }
-      if (url.endsWith('/checkin_credits/status')) return json({ enable: true, checked_in: false })
       throw new Error(`unexpected ${url}`)
     })
     const provider = new TraeProvider({
@@ -1014,13 +941,11 @@ describe('TraeProvider', () => {
 
     expect((await provider.models()).map(model => model.id)).toEqual(['cn-model'])
     expect(await provider.quota()).toMatchObject({ total: 1 })
-    expect(await provider.checkinStatus()).toMatchObject({ available: true })
 
     region = 'global'
-    // The other deployment has its own directory, quota and (no) check-in.
+    // The other deployment has its own directory and quota shape.
     expect((await provider.models()).map(model => model.id)).toEqual(['global-model'])
     expect(await provider.quota()).toMatchObject({ plan: 'Free plan', unit: 'usd', total: 1, used: 0 })
-    expect(await provider.checkinStatus()).toMatchObject({ available: false })
   })
 
   it('reports a clear error for a model outside the catalog', async () => {

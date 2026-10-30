@@ -1,5 +1,5 @@
 /**
- * Trae provider: model directory, SOLO chat, quota and daily check-in.
+ * Trae provider: model directory, SOLO chat and quota.
  *
  * Trae's website login yields the same `Cloud-IDE-JWT` its own clients use, so
  * the plugin talks to the same gateways they do. Two catalog sources are merged:
@@ -22,7 +22,7 @@
  * @module dsh-llm-adapters/trae
  */
 
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { rmSync } from 'node:fs'
 import { join } from 'node:path'
 import type { GenerateOptions, StreamChunk, ToolCallId } from '@deepseek-ai/dsh-llm'
@@ -46,7 +46,7 @@ import {
 } from './trae-endpoints.ts'
 import { TraeWebLogin } from './trae-login.ts'
 import type { TraeLoginAccount } from './trae-login.ts'
-import type { CheckinStatus, QuotaPack, QuotaSnapshot } from './types.ts'
+import type { QuotaPack, QuotaSnapshot } from './types.ts'
 import { ProviderHttpError, buildMessages } from './wire.ts'
 import type { ReadImage, WireMessage } from './wire.ts'
 
@@ -203,37 +203,6 @@ function epochMs(value: unknown): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return undefined
   return value < 1e12 ? Math.round(value * 1_000) : Math.round(value)
 }
-
-/**
- * The device id Trae's check-in API expects.
- *
- * The endpoint only accepts a 16-digit decimal device id; a UUID (what the web
- * session's `__msuuid__` looks like) is rejected with `9074` even though every
- * other Trae call accepts it. Live matrix (same account, same minute):
- * UUID -> `9074`, 16-digit number -> `code: 0`. The number is derived from the
- * web session's device id, so it still comes from this login and not from a
- * desktop install, and it stays stable for that session.
- *
- * The desktop client's ids look like `2715142696215459`: 16 digits starting
- * with 1–8. The 9-prefixed value derived for the current login was answered
- * with `9074`, so the derived range stays inside the client's range.
- */
-export function checkinDeviceId(deviceId: string): string {
-  const hex = createHash('sha256').update(`trae-checkin\0${deviceId}`).digest('hex')
-  // [1e15, 9e15): exactly 16 digits, first digit 1–8.
-  const value = BigInt(`0x${hex.slice(0, 16)}`) % 8_000_000_000_000_000n + 1_000_000_000_000_000n
-  return value.toString()
-}
-
-/**
- * The body every check-in POST carries.
- *
- * Matches the desktop client's own call: `req_source` is the numeric `1` for
- * the IDE (the client sends `2` for Trae Work). The plugin used to send `{}`;
- * status tolerated that, but claim answered `9074` (`当前参与用户太多`) for the
- * same account and device, so requests now carry the client's field.
- */
-export const TRAE_CHECKIN_REQ_SOURCE = 1
 
 /**
  * The persistent browser profile used for one region.
@@ -926,20 +895,6 @@ export function parseTraeGlobalUsage(payload: unknown): QuotaSnapshot {
   }
 }
 
-export function parseTraeCheckin(payload: unknown): CheckinStatus {
-  const root = record(payload) ?? {}
-  // `extra_credits` is a campaign bonus the site does not add to the daily
-  // reward; summing it made the card promise 200 when the check-in pays 100.
-  const reward = num(root.credits) ?? 0
-  return {
-    available: root.enable !== false,
-    claimed: root.checked_in === true,
-    deviceClaimed: root.did_checked_in === true,
-    ...reward === 0 ? {} : { reward },
-    ...text(root.message) === undefined ? {} : { message: text(root.message)! },
-  }
-}
-
 export class TraeProvider {
   private catalogInstance: ModelCatalog
   private catalogRegion: TraeRegion
@@ -1157,7 +1112,7 @@ export class TraeProvider {
         const profile = this.profile()
         const token = await this.options.auth.accessToken()
         const identity = await this.options.auth.identity()
-        const path = profile.checkin
+        const path = profile.usageV2
           ? '/trae/api/v2/pay/web_user_ent_usage'
           : '/trae/api/v1/pay/web_user_ent_usage'
         const response = await this.fetchImpl(`${profile.payBase}${path}`, {
@@ -1175,7 +1130,7 @@ export class TraeProvider {
           throw new ProviderHttpError(await responseError(response), response.status)
         }
         const payload = await response.json()
-        const value = profile.checkin ? parseTraeUsage(payload) : parseTraeGlobalUsage(payload)
+        const value = profile.usageV2 ? parseTraeUsage(payload) : parseTraeGlobalUsage(payload)
         this.quotaCache = { at: Date.now(), region, value }
         return value
       } finally {
@@ -1185,58 +1140,6 @@ export class TraeProvider {
     })()
     this.quotaInflightRegion = region
     return this.quotaInflight
-  }
-
-  async checkinStatus(): Promise<CheckinStatus> {
-    this.ensureRegion()
-    const profile = this.profile()
-    if (!profile.checkin) return { available: false, claimed: false, deviceClaimed: false }
-    const token = await this.options.auth.accessToken()
-    const identity = await this.options.auth.identity()
-    const response = await this.fetchImpl(`${profile.apiBase}/trae/api/v2/ug/checkin_credits/status`, {
-      method: 'POST',
-      headers: {
-        ...this.headers(token, profile),
-        // Check-in is the one endpoint that insists on a 16-digit decimal id;
-        // the web session's UUID would be answered with 9074.
-        'x-device-id': checkinDeviceId(identity.deviceId),
-        'x-machine-id': identity.machineId,
-      },
-      body: JSON.stringify({ req_source: TRAE_CHECKIN_REQ_SOURCE }),
-      signal: AbortSignal.timeout(this.options.timeoutMs()),
-    })
-    if (!response.ok) throw new ProviderHttpError(await responseError(response), response.status)
-    return parseTraeCheckin(await response.json())
-  }
-
-  /** Claim today's reward. The only state-changing call in this provider. */
-  async claimCheckin(): Promise<CheckinStatus> {
-    this.ensureRegion()
-    const profile = this.profile()
-    if (!profile.checkin) throw new Error('Trae 国际版没有签到活动')
-    const token = await this.options.auth.accessToken()
-    const identity = await this.options.auth.identity()
-    const response = await this.fetchImpl(`${profile.apiBase}/trae/api/v2/ug/checkin_credits/claim`, {
-      method: 'POST',
-      headers: {
-        ...this.headers(token, profile),
-        'x-device-id': checkinDeviceId(identity.deviceId),
-        'x-machine-id': identity.machineId,
-      },
-      body: JSON.stringify({ req_source: TRAE_CHECKIN_REQ_SOURCE }),
-      signal: AbortSignal.timeout(this.options.timeoutMs()),
-    })
-    if (!response.ok) throw new ProviderHttpError(await responseError(response), response.status)
-    const payload = record(await response.json()) ?? {}
-    const code = typeof payload.code === 'number' ? payload.code : 0
-    if (code === 0) {
-      this.invalidateQuota()
-      return { available: true, claimed: true, deviceClaimed: false }
-    }
-    if (code === 9095) {
-      return { available: true, claimed: false, deviceClaimed: true, message: '本机今日已签到' }
-    }
-    throw new Error(text(payload.message) ?? `签到失败（code ${code}）`)
   }
 
   async *stream(

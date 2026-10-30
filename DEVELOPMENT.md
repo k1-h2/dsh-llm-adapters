@@ -20,7 +20,7 @@ src/
   account-profile.ts 小浣熊账号展示字段
   loomy.ts           Loomy 目录 / 积分 / 流式调用
   raccoon.ts         小浣熊目录 / 余额 / 流式调用
-  trae.ts            Trae 目录合并 / SOLO 流式调用 / 额度 / 签到
+  trae.ts            Trae 目录合并 / SOLO 流式调用 / 额度
   codearts-login.ts  CodeArts 浏览器授权：本地回调、PKCE/DPoP、ticket 回退
   codearts-oauth.ts  STS 令牌换取与续期（PKCE + DPoP，零依赖 JWS）
   codearts-sign.ts   华为 SDK-HMAC-SHA256 请求签名
@@ -186,19 +186,10 @@ metadata”）。远端目录在多个分组里用不同大小写/显示名重�
 额度按区域走不同接口：国内版 `web_user_ent_usage` v2（已用 / 总额 + 资源包，按最早到期排序），
 国际版 `web_user_ent_usage` v1（套餐、`basic_usage_limit` / `basic_usage_amount` 美元用量与
 `end_time` 重置时间）。国际版的 `ide_user_pay_status` 只有套餐名、没有任何金额，官网的
-“Dollar Usage”面板读的也是 v1 这份 roster。签到只有国内版有：`checkin_credits/status` 读状态，
-`checkin_credits/claim` 领取；`checked_in` 是账号维度，`did_checked_in` 是设备维度，两者分开
-显示。
+“Dollar Usage”面板读的也是 v1 这份 roster。两条路线的选择由区域档案的 `usageV2` 决定。
 
-签到接口只接受 **16 位纯数字**设备号：网页登录的 UUID 会固定返回 `9074`（提示“当前参与用户
-太多”，实际是设备号格式不符，实测同账号同分钟 UUID → 9074、16 位数字 → `code: 0`）。
-`checkinDeviceId()` 从网页设备号派生稳定的 16 位数字，仅用于 status / claim；聊天、额度仍用
-原设备号。派生范围是 `[1e15, 9e15)`：客户端自己注册的设备号形如 `2715142696215459`，首位
-1–8；插件派生出的 9 开头号码实测被 9074 拒绝。
-
-请求体必须和桌面客户端一致：`{"req_source":1}`（IDE；Trae Work 为 `2`，见客户端
-`_requestCheckinCredits`）。插件曾发空对象：status 仍返回 200，但 claim 会回 9074。
-缺 `x-device-id` 返回 `9004`，重复领取返回 `9095`。
+Trae 的每日签到入口已移除：签到只在客户端里生效，网页登录派生的设备号在 `claim` 上会被上游
+回 `9074`，留着按钮只会一直失败。
 
 ### 小浣熊的每日积分（`raccoon.ts`）
 

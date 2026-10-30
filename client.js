@@ -118,7 +118,7 @@ window.__ModuleLoader__.load({
       traeNav: 'Trae',
       traeTitle: 'Trae',
       traeIntro: '先选国内版或国际版，再点“打开浏览器登录”在 Trae 官网登录。设备指纹由这次网页登录生成，不需要安装桌面客户端。改动即时生效，无需重启。',
-      traeHint: 'Trae 的网页令牌只有约 8 小时，插件会用登录时拿到的网页会话自动续期；网页会话失效后才需重新登录。国内版每天可签到领积分，国际版没有签到活动。',
+      traeHint: 'Trae 的网页令牌只有约 8 小时，插件会用登录时拿到的网页会话自动续期；网页会话失效后才需重新登录。',
       traeLoginMissing: 'Trae 尚未登录。请点“打开浏览器登录”。',
       regionLabel: '区域',
       regionCn: '国内版 · trae.cn',
@@ -282,7 +282,7 @@ window.__ModuleLoader__.load({
       traeNav: 'Trae',
       traeTitle: 'Trae',
       traeIntro: 'Pick the mainland or international edition, then use “Open browser sign-in” to sign in on Trae’s website. The device fingerprint comes from that web session, so no desktop client is needed. Changes apply immediately.',
-      traeHint: 'Trae’s web token lasts about 8 hours; the plugin renews it with the website session captured at sign-in, so you only sign in again when that session dies. The mainland edition offers daily check-in credits; the international edition has none.',
+      traeHint: 'Trae’s web token lasts about 8 hours; the plugin renews it with the website session captured at sign-in, so you only sign in again when that session dies.',
       traeLoginMissing: 'Trae is not signed in. Use “Open browser sign-in”.',
       regionLabel: 'Region',
       regionCn: 'Mainland · trae.cn',
@@ -887,10 +887,10 @@ window.__ModuleLoader__.load({
         )
       })()
 
-      // Trae CN grants one reward per account per day, but its device flag can
+      // CodeArts grants one reward per account per day, but its device flag can
       // also block the claim; the two reasons are shown apart so "本机已签"
       // never reads as "this account already claimed".
-      const checkin = brand.id === 'trae' || brand.id === 'codearts' || brand.id === 'raccoon'
+      const checkin = brand.id === 'codearts' || brand.id === 'raccoon'
         ? status?.checkin
         : undefined
       const checkinBlocked = checkin === undefined
@@ -901,8 +901,7 @@ window.__ModuleLoader__.load({
         ? t('checkinClaimed')
         : checkin?.deviceClaimed === true ? t('checkinDevice') : t('checkinClaim')
       // A failed activity read is shown rather than hidden: hiding it is what
-      // makes "no check-in" and "check-in broken" look the same. Trae keeps the
-      // old behaviour, because its international edition has no activity at all.
+      // makes "no check-in" and "check-in broken" look the same.
       const checkinNote = checkin === undefined
         ? undefined
         : checkin.available === false
