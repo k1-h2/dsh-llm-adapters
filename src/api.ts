@@ -184,8 +184,20 @@ async function handleAccount(req: IncomingMessage, res: ServerResponse, adapters
     return
   }
 
-  // Trae and CodeArts have a daily reward; the other adapters reject the action,
-  // so the page can keep one button that simply reports the refusal.
+  // Trae's second sign-in method: the desktop client must already be logged in.
+  // The response is an ordinary account reading, so it never carries the token.
+  if (action === 'client-login') {
+    try {
+      send(res, 200, await adapter.importClientLogin())
+    } catch (error) {
+      send(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return
+  }
+
+  // Trae (client login only) and CodeArts have a daily reward; the other
+  // adapters reject the action, so the page can keep one button that simply
+  // reports the refusal.
   if (action === 'checkin') {
     try {
       send(res, 200, { brand, checkin: await adapter.claimCheckin() })
@@ -195,7 +207,7 @@ async function handleAccount(req: IncomingMessage, res: ServerResponse, adapters
     return
   }
 
-  send(res, 400, { error: 'action 只接受 browser、browser-cancel、checkin 或 logout' })
+  send(res, 400, { error: 'action 只接受 browser、browser-cancel、client-login、checkin 或 logout' })
 }
 
 export async function handleApi(

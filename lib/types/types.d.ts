@@ -53,6 +53,22 @@ export interface CheckinStatus {
     /** A page the user can open when the provider has no claimable API. */
     url?: string;
 }
+/**
+ * The local Trae client's state, as shown on the settings page.
+ *
+ * Never carries the token: only whether the client was found, whether a usable
+ * login was read, and the non-secret account fields.
+ */
+export interface ClientLoginStatus {
+    /** A Trae client data directory exists on this machine. */
+    available: boolean;
+    /** The stored login is present, unexpired and usable. */
+    signedIn: boolean;
+    name?: string;
+    userId?: string;
+    expiresAt?: number;
+    error?: string;
+}
 export interface ProviderStatus extends AuthStatus {
     brand: BrandId;
     /** Trae only: the region this reading belongs to. */
@@ -60,7 +76,9 @@ export interface ProviderStatus extends AuthStatus {
     /** Present only after a successful quota read. */
     quota?: QuotaSnapshot;
     quotaError?: string;
-    /** Trae CN only. */
+    /** Trae only: the second sign-in method, when the desktop client exists. */
+    clientLogin?: ClientLoginStatus;
+    /** Trae CN only, and only for a login imported from the client. */
     checkin?: CheckinStatus;
 }
 export type { LocalAccount };

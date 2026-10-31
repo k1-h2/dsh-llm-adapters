@@ -35,6 +35,8 @@ export interface TraeRegionProfile {
    * the dollar allowance instead.
    */
   usageV2: boolean
+  /** Daily check-in exists only on the mainland deployment. */
+  checkin: boolean
 }
 
 export const TRAE_REGION_PROFILES: Record<TraeRegion, TraeRegionProfile> = {
@@ -49,6 +51,7 @@ export const TRAE_REGION_PROFILES: Record<TraeRegion, TraeRegionProfile> = {
     timezone: 'Asia/Shanghai',
     language: 'zh-cn',
     usageV2: true,
+    checkin: true,
   },
   global: {
     id: 'global',
@@ -61,6 +64,7 @@ export const TRAE_REGION_PROFILES: Record<TraeRegion, TraeRegionProfile> = {
     timezone: 'Asia/Singapore',
     language: 'en',
     usageV2: false,
+    checkin: false,
   },
 }
 

@@ -16,7 +16,7 @@ import { LoomyProvider } from './loomy.ts';
 import { RaccoonProvider } from './raccoon.ts';
 import { TraeProvider } from './trae.ts';
 import type { AuthStatus } from './auth.ts';
-import type { CheckinStatus, ProviderStatus, QuotaSnapshot } from './types.ts';
+import type { CheckinStatus, ClientLoginStatus, ProviderStatus, QuotaSnapshot } from './types.ts';
 import type { ReadImage } from './wire.ts';
 export interface AdapterOptions {
     brand: BrandId;
@@ -33,7 +33,7 @@ export interface AdapterOptions {
  *
  * Declared as an interface rather than a union so a new provider only has to
  * implement the behaviour, not edit the adapter's type list. The optional
- * check-in methods exist only on Trae.
+ * client-login and check-in methods exist only on Trae.
  */
 export interface ProviderClient {
     status(): Promise<AuthStatus>;
@@ -51,6 +51,10 @@ export interface ProviderClient {
     invalidateModels(): void;
     invalidateQuota(): void;
     close(): void;
+    /** Trae only: the local desktop client's current sign-in state. */
+    localClientLogin?(): Promise<ClientLoginStatus>;
+    /** Trae only: copy that state into the plugin's own account store. */
+    importClientLogin?(): Promise<void>;
     checkinStatus?(): Promise<CheckinStatus>;
     claimCheckin?(): Promise<CheckinStatus>;
 }
@@ -85,6 +89,8 @@ export declare abstract class LocalAdapter extends LlmAdapter {
     cancelBrowserLogin(): Promise<void>;
     /** Claim today's reward; providers without one reject it. */
     claimCheckin(): Promise<CheckinStatus>;
+    /** Import a local client login and return the refreshed account reading. */
+    importClientLogin(): Promise<ProviderStatus>;
     invalidateCatalog(): void;
     invalidateUsage(): void;
     /** Login state plus quota, shaped for the settings page. */

@@ -16,11 +16,12 @@ src/
   loomy-login.ts     Loomy 微信扫码：uuid、长轮询、讯飞账号 HMAC 接口
   raccoon-login.ts   小浣熊扫码：服务端签发二维码、轮询、业务会话确认
   trae-login.ts      Trae 网页登录：独立浏览器配置、CDP 读 cookie 与设备指纹
+  trae-client.ts     Trae 桌面客户端登录态：只读 storage.json、本机解密、设备指纹
   trae-endpoints.ts  两个区域的站点 / 网关 / 计费基址
   account-profile.ts 小浣熊账号展示字段
   loomy.ts           Loomy 目录 / 积分 / 流式调用
   raccoon.ts         小浣熊目录 / 余额 / 流式调用
-  trae.ts            Trae 目录合并 / SOLO 流式调用 / 额度
+  trae.ts            Trae 目录合并 / SOLO 流式调用 / 额度 / 客户端签到
   codearts-login.ts  CodeArts 浏览器授权：本地回调、PKCE/DPoP、ticket 回退
   codearts-oauth.ts  STS 令牌换取与续期（PKCE + DPoP，零依赖 JWS）
   codearts-sign.ts   华为 SDK-HMAC-SHA256 请求签名
@@ -188,8 +189,20 @@ metadata”）。远端目录在多个分组里用不同大小写/显示名重�
 `end_time` 重置时间）。国际版的 `ide_user_pay_status` 只有套餐名、没有任何金额，官网的
 “Dollar Usage”面板读的也是 v1 这份 roster。两条路线的选择由区域档案的 `usageV2` 决定。
 
-Trae 的每日签到入口已移除：签到只在客户端里生效，网页登录派生的设备号在 `claim` 上会被上游
-回 `9074`，留着按钮只会一直失败。
+### Trae 客户端登录与签到（`trae-client.ts`）
+
+Trae 的每日签到只在“复用本机客户端登录态”时开放。网页登录派生的设备号在 `claim` 上会被上游
+回 `9074`，因此网页登录不显示签到入口。`trae-client.ts` 只读客户端
+`User/globalStorage/storage.json` 里的 `iCubeAuthInfo://icube.cloudide`：密文头部是 6 字节
+magic + 32 字节密钥材料，AES-128-CBC 的 key/IV 由两级 SHA-512 与固定 salt 派生，明文是
+SHA-512 摘要 + JSON。插件从解密结果取 `Cloud-IDE-JWT`，从
+`iCubeAuthInfo://icube-dc:<16 位设备号>` 取设备号，从 `telemetry.machineId` 取机器码；
+只读、不回写，客户端退出或令牌过期后重新复用。`checkinStatus` / `claimCheckin` 只在该来源下
+调用 `/trae/api/v2/ug/checkin_credits/{status,claim}`，body 为 `{ req_source: 1 }`，并直接
+使用客户端设备号（不做派生）。数据目录按区域默认取 `%APPDATA%\Trae CN` / `%APPDATA%\Trae`
+（macOS 为 `Application Support`，Linux 为 XDG 配置目录）；`DSH_TRAE_CLIENT_DIR`、
+`DSH_TRAE_CN_CLIENT_DIR` 与 `DSH_TRAE_GLOBAL_CLIENT_DIR` 可覆盖它，测试与便携安装都走这组
+环境变量。
 
 ### 小浣熊的每日积分（`raccoon.ts`）
 
@@ -385,12 +398,15 @@ Raccoon 的思考控制有两条通道，都要发：`extra_body.thinking.type =
 | 路由 | 用途 |
 | --- | --- |
 | `GET /api/llm-adapters/models?brand=` | 实时目录 + 开关 / 窗口，`fresh=1` 清缓存 |
-| `GET /api/llm-adapters/status?brand=` | 登录状态、到期时间、额度 |
+| `GET /api/llm-adapters/status?brand=` | 登录状态、登录来源、本机客户端检测、到期时间、额度 |
 | `GET /api/llm-adapters/account/browser?brand=` | 登录进度（本地登录页 URL、Trae 的浏览器状态或 CodeArts 的授权页地址） |
-| `POST /api/llm-adapters/account` | `browser` / `browser-cancel` / `checkin` / `logout` |
+| `POST /api/llm-adapters/account` | `browser` / `browser-cancel` / `client-login` / `checkin` / `logout` |
 
-`checkin` 由 Trae（国内版）与 CodeArts 实现，其余供应商会明确拒绝；`browser` 对 CodeArts 返回
-华为云授权页地址，页面在新标签页打开它，之后仍由宿主轮询 `/account/browser` 接回。
+`checkin` 由 Trae（仅国内版且客户端登录态）与 CodeArts 实现，其余供应商会明确拒绝；`browser`
+对 CodeArts 返回华为云授权页地址，页面在新标签页打开它，之后仍由宿主轮询 `/account/browser`
+接回。`client-login` 只对 Trae 生效：服务端读取本机客户端登录态后返回普通账户读数，响应里
+没有令牌。`GET /status` 的 `clientLogin` 字段只暴露客户端是否安装、是否已登录与账号名，
+同样不含令牌。
 
 写操作在 body 里带 `brand`，URL 不承载写目标。`browser` 还可以带 `region`（`cn` / `global`），
 只有 Trae 使用它。配置写入仍走宿主 `configForms` 的修订栅栏，不经过插件自己的写接口。设置页
@@ -433,8 +449,9 @@ npm run build
 没有 `lib/index.js` 的包会在启用时报 `ERR_MODULE_NOT_FOUND`。改完 `src/` 必须重新构建并提交产物。
 
 `vitest` 覆盖目录解析、登录页状态机、Loomy 长轮询与扫码绑定、小浣熊扫码轮询、Trae 两份目录
-的合并与档位映射、CodeArts 的签名 / PKCE-DPoP / 双目录 / 倍率时段 / 额度 / 签到、SSE 与工具
-调用、凭据存储与并发、过期判定、设置 API。登录相关的测试全部注入假 `fetch`，不访问真实上游，
+的合并与档位映射、Trae 客户端登录态的解密 / 设备号 / 过期与区域判定、Trae 客户端签到、
+CodeArts 的签名 / PKCE-DPoP / 双目录 / 倍率时段 / 额度 / 签到、SSE 与工具调用、凭据存储与并发、
+过期判定、设置 API。登录相关的测试全部注入假 `fetch`，不访问真实上游，
 也不启动浏览器。需要真机验证时，手动点一次「打开扫码登录」或「打开浏览器登录」，确认接回、
 模型列表与一次对话。
 

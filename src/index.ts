@@ -104,8 +104,8 @@ export {
   RaccoonProvider, RACCOON_BASE, RACCOON_CLIENT_VERSION, raccoonAccessTokenValid, raccoonRefreshCandidate,
 } from './raccoon.ts'
 export {
-  TraeProvider, TRAE_CHAT_FUNCTIONS, TRAE_DIRECTORY_FUNCTIONS, mergeTraeModels,
-  normalizeEffort, openTraeStream, parseTraeGlobalUsage, parseTraeRemoteModels,
+  TraeProvider, TRAE_CHAT_FUNCTIONS, TRAE_CHECKIN_REQ_SOURCE, TRAE_DIRECTORY_FUNCTIONS, mergeTraeModels,
+  normalizeEffort, openTraeStream, parseTraeCheckin, parseTraeGlobalUsage, parseTraeRemoteModels,
   parseTraeUsage, parseTraeWireModels, traeMessages, traeTools,
 } from './trae.ts'
 export type {
@@ -113,6 +113,8 @@ export type {
 } from './trae.ts'
 export { TRAE_APP_ID, TRAE_REGION_PROFILES, TRAE_SOLO_CHAT_PATH, TRAE_WEB_USER_AGENT } from './trae-endpoints.ts'
 export type { TraeRegionProfile } from './trae-endpoints.ts'
+export { parseTraeClientStorage, readTraeClientLogin, traeClientDataDirs } from './trae-client.ts'
+export type { TraeClientDetection, TraeClientLoginState, TraeClientReadOptions } from './trae-client.ts'
 export { TraeWebLogin, machineIdOf } from './trae-login.ts'
 export type { TraeLoginAccount, TraeWebLoginOptions } from './trae-login.ts'
 export {
@@ -143,7 +145,7 @@ export type { WireMessage } from './wire.ts'
 export { API_PREFIX, buildRows } from './api.ts'
 export { liveConfig, resolveConfig } from './config.ts'
 export type { Config as ConfigShape, LiveConfig, ParsedConfig, ResolvedConfig } from './config.ts'
-export type { CheckinStatus, ProviderStatus, QuotaPack, QuotaSnapshot } from './types.ts'
+export type { CheckinStatus, ClientLoginStatus, ProviderStatus, QuotaPack, QuotaSnapshot } from './types.ts'
 
 export const name = 'llm-adapters'
 export const inject = ['llm']

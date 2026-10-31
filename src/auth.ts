@@ -1,10 +1,11 @@
 /**
  * Credential state for every provider.
  *
- * Sign-in happens in the provider's own web page, so credentials exist in
- * exactly one place: the plugin's own account store. No desktop client file is
- * discovered, read, or written, and no token leaves this module in errors or
- * display fields.
+ * Sign-in happens in the provider's own web page. Trae additionally offers an
+ * explicit, read-only import of the local desktop client's login state; nothing
+ * is ever written back to that client. Either way credentials end up in exactly
+ * one place, the plugin's own account store, and no token leaves this module in
+ * errors or display fields.
  *
  * @module dsh-llm-adapters/auth
  */
@@ -34,6 +35,8 @@ export interface AuthStatus {
   possiblyExpired?: boolean
   account?: LocalAccount
   error?: string
+  /** Trae only: where the token came from. */
+  loginSource?: 'web' | 'client'
 }
 
 /** Expiry margin for Raccoon's JWT, so a call does not start on a dead token. */
@@ -261,12 +264,13 @@ function mergeSetCookies(current: string, headers: readonly string[]): string {
 }
 
 /**
- * Trae's web login, one per region.
+ * Trae's login, one per region.
  *
- * The `Cloud-IDE-JWT` the website issues lives about eight hours, but the
- * website session behind it lives about fourteen days. The cookies captured at
- * sign-in are replayed against `GetUserToken` to renew the short token silently;
- * only when the session itself dies does the user have to sign in again.
+ * A web login stores the `Cloud-IDE-JWT` from the website plus the cookies
+ * behind it, so the short token can be renewed silently until the website
+ * session dies. A client login stores the token the desktop client already
+ * uses; that token has no website session, and the client itself refreshes it.
+ * Only the client source carries the device id the check-in route accepts.
  */
 export class TraeAuth {
   private readonly inflight = new Map<TraeRegion, Promise<string>>()
@@ -286,20 +290,41 @@ export class TraeAuth {
     const region = this.region()
     const stored = await this.store.trae(region)
     if (stored === undefined) {
-      return { signedIn: false, error: `${traeLabel(region)}尚未登录。请在设置页点「打开浏览器登录」。` }
+      return {
+        signedIn: false,
+        error: `${traeLabel(region)}尚未登录。可以点「打开浏览器登录」，或复用本机已登录的 Trae 客户端。`,
+      }
     }
+    const source = stored.source ?? 'web'
     const now = Date.now()
     const { token, session } = traeExpiries(stored)
     const tokenExpired = token !== undefined && token <= now + TRAE_EXPIRY_MARGIN_MS
+    const account = traeAccount(stored)
+    if (source === 'client') {
+      // The client owns the refresh loop; when its token dies the user signs in
+      // there again and imports the new state.
+      const signedIn = !tokenExpired
+      return {
+        signedIn,
+        loginSource: 'client',
+        loginAt: stored.loginAt,
+        ...token === undefined ? {} : { expiresAt: token },
+        ...!signedIn ? { possiblyExpired: true } : {},
+        ...Object.keys(account).length === 0 ? {} : { account },
+        ...!signedIn
+          ? { error: `${traeLabel(region)}客户端登录令牌已过期，请先在 Trae 客户端重新登录，再点「复用客户端登录态」。` }
+          : {},
+      }
+    }
     const sessionExpired = session !== undefined && session <= now + TRAE_EXPIRY_MARGIN_MS
     const refreshable = stored.cookies !== undefined && !sessionExpired
     const signedIn = !tokenExpired || refreshable
-    const account = traeAccount(stored)
     // With a renewable session the user cares about the website-session
     // deadline, not the eight-hour JWT the plugin replaces on its own.
     const expiresAt = refreshable ? session ?? token : token
     return {
       signedIn,
+      loginSource: 'web',
       loginAt: stored.loginAt,
       ...expiresAt === undefined ? {} : { expiresAt },
       ...!signedIn ? { possiblyExpired: true } : {},
@@ -315,17 +340,23 @@ export class TraeAuth {
   /**
    * The bearer token, or an actionable error when there is none.
    *
-   * A token near its expiry is renewed first; `force` means the gateway already
-   * rejected it, so the renewal is attempted even if the clock disagrees.
+   * A web token near its expiry is renewed first; `force` means the gateway
+   * already rejected it, so the renewal is attempted even if the clock
+   * disagrees. A client token is returned until its own expiry and then asks
+   * for a fresh import, because only the client can refresh it.
    */
   async accessToken(force = false): Promise<string> {
     const region = this.region()
     const stored = await this.store.trae(region)
     if (stored === undefined) {
-      throw new Error(`${traeLabel(region)}尚未登录。请在设置页点「打开浏览器登录」。`)
+      throw new Error(`${traeLabel(region)}尚未登录。可以点「打开浏览器登录」，或复用本机已登录的 Trae 客户端。`)
     }
     const { token, session } = traeExpiries(stored)
     const expired = token !== undefined && token <= Date.now() + TRAE_EXPIRY_MARGIN_MS
+    if (stored.source === 'client') {
+      if (!force && !expired) return stored.accessToken
+      throw new Error(`${traeLabel(region)}客户端登录令牌已${force ? '失效' : '过期'}，请先在 Trae 客户端重新登录，再点「复用客户端登录态」。`)
+    }
     if (!force && !expired) return stored.accessToken
     if (stored.cookies === undefined) {
       throw new Error(`${traeLabel(region)}登录已${force ? '失效' : '过期'}，请在设置页重新登录。`)
@@ -342,7 +373,7 @@ export class TraeAuth {
     if (existing !== undefined) return existing
     const task = (async () => {
       const stored = await this.store.trae(region)
-      if (stored === undefined || stored.cookies === undefined) {
+      if (stored === undefined || stored.source === 'client' || stored.cookies === undefined) {
         throw new Error(`${traeLabel(region)}登录已失效，请在设置页重新登录。`)
       }
       const profile = TRAE_REGION_PROFILES[region]
@@ -408,7 +439,7 @@ export class TraeAuth {
     const region = this.region()
     const stored = await this.store.trae(region)
     if (stored === undefined) {
-      throw new Error(`${traeLabel(region)}尚未登录。请在设置页点「打开浏览器登录」。`)
+      throw new Error(`${traeLabel(region)}尚未登录。可以点「打开浏览器登录」，或复用本机已登录的 Trae 客户端。`)
     }
     return {
       deviceId: stored.deviceId,

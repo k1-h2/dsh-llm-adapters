@@ -39,12 +39,12 @@ export interface RaccoonAccountRecord {
 }
 
 /**
- * One Trae web login.
+ * One Trae login.
  *
- * `accessToken` is the `Cloud-IDE-JWT` the website itself uses. `deviceId` and
- * `machineId` are the fingerprints captured from that web session — this
- * plugin never reads a desktop install — and are replayed on chat, quota and
- * check-in requests.
+ * `accessToken` is the `Cloud-IDE-JWT` Trae's own clients use. `deviceId` and
+ * `machineId` are replayed on chat, quota and check-in requests. A web login
+ * captures them from its browser session; a `client` login copies the desktop
+ * client's own values, which is the only source the check-in route accepts.
  */
 export interface TraeAccountRecord {
   accessToken: string
@@ -54,6 +54,8 @@ export interface TraeAccountRecord {
   userId?: string
   name?: string
   loginAt: number
+  /** Where the token came from; absent means the plugin's browser login. */
+  source?: 'web' | 'client'
   /** The `Cloud-IDE-JWT` expiry (about 8 hours); absent when the JWT carries none. */
   expiresAt?: number
   /**
@@ -138,9 +140,11 @@ function traeRecord(value: unknown, region: TraeRegion): TraeAccountRecord | und
   const accessToken = text(raw?.accessToken)
   if (raw === undefined || accessToken === undefined) return undefined
   const deviceId = text(raw.deviceId)
+  const source = raw.source === 'web' || raw.source === 'client' ? raw.source : undefined
   return {
     accessToken,
     region,
+    ...source === undefined ? {} : { source },
     deviceId: deviceId ?? `web-${randomBytes(8).toString('hex')}`,
     machineId: text(raw.machineId) ?? `web-${randomBytes(16).toString('hex')}`,
     loginAt: number(raw.loginAt) ?? Date.now(),
