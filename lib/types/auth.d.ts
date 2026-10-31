@@ -1,10 +1,11 @@
 /**
  * Credential state for every provider.
  *
- * Sign-in happens in the provider's own web page, so credentials exist in
- * exactly one place: the plugin's own account store. No desktop client file is
- * discovered, read, or written, and no token leaves this module in errors or
- * display fields.
+ * Sign-in happens in the provider's own web page. Trae additionally offers an
+ * explicit, read-only import of the local desktop client's login state; nothing
+ * is ever written back to that client. Either way credentials end up in exactly
+ * one place, the plugin's own account store, and no token leaves this module in
+ * errors or display fields.
  *
  * @module dsh-llm-adapters/auth
  */
@@ -26,6 +27,8 @@ export interface AuthStatus {
     possiblyExpired?: boolean;
     account?: LocalAccount;
     error?: string;
+    /** Trae only: where the token came from. */
+    loginSource?: 'web' | 'client';
 }
 export declare class LoomyAuth {
     private readonly store;
@@ -58,12 +61,13 @@ export declare class RaccoonAuth {
     logout(): Promise<void>;
 }
 /**
- * Trae's web login, one per region.
+ * Trae's login, one per region.
  *
- * The `Cloud-IDE-JWT` the website issues lives about eight hours, but the
- * website session behind it lives about fourteen days. The cookies captured at
- * sign-in are replayed against `GetUserToken` to renew the short token silently;
- * only when the session itself dies does the user have to sign in again.
+ * A web login stores the `Cloud-IDE-JWT` from the website plus the cookies
+ * behind it, so the short token can be renewed silently until the website
+ * session dies. A client login stores the token the desktop client already
+ * uses; that token has no website session, and the client itself refreshes it.
+ * Only the client source carries the device id the check-in route accepts.
  */
 export declare class TraeAuth {
     private readonly store;
@@ -77,8 +81,10 @@ export declare class TraeAuth {
     /**
      * The bearer token, or an actionable error when there is none.
      *
-     * A token near its expiry is renewed first; `force` means the gateway already
-     * rejected it, so the renewal is attempted even if the clock disagrees.
+     * A web token near its expiry is renewed first; `force` means the gateway
+     * already rejected it, so the renewal is attempted even if the clock
+     * disagrees. A client token is returned until its own expiry and then asks
+     * for a fresh import, because only the client can refresh it.
      */
     accessToken(force?: boolean): Promise<string>;
     /** Renew the eight-hour JWT with the stored website cookies. */

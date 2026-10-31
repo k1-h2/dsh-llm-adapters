@@ -140,6 +140,16 @@ describe('client bundle', () => {
     expect(zh.checkinDevice).not.toBe(zh.checkinClaimed)
   })
 
+  it('has copy for the local Trae client sign-in method', () => {
+    const { zh, en } = exports.__test
+    expect(zh.traeClientUse).toBe('复用客户端登录态')
+    expect(zh.traeClientHint).toContain('签到')
+    expect(zh.traeSourceClient).toBe('本机客户端')
+    expect(en.traeClientUse).toBe('Reuse client sign-in')
+    expect(en.traeClientHint).toContain('check-in')
+    expect(en.traeSourceClient).toBe('Local client')
+  })
+
   it('has the same top-level copy keys in Chinese and English', () => {
     expect(Object.keys(exports.__test.zh).sort()).toEqual(Object.keys(exports.__test.en).sort())
   })
@@ -378,6 +388,41 @@ describe('client bundle', () => {
       if (element.type === 'a') links.push(element)
     })
     expect(links.some(link => (link.props as { href?: string }).href === 'https://xiaohuanxiong.com/work/home')).toBe(true)
+  })
+
+  it('offers the local client sign-in and gates Trae check-in by its source', () => {
+    const tree = loadClient(TREE_REACT)
+    const { writeCache, AccountCard, zh } = tree.__test
+    const props = {
+      t: (key: string) => (zh as Record<string, string>)[key] ?? key,
+      brand: { id: 'trae' },
+      region: 'cn',
+      onRegionChange: () => undefined,
+      reloadSignal: 0,
+      onStatus: () => undefined,
+      onAfterRefresh: () => undefined,
+    }
+    const base = {
+      signedIn: true,
+      loginAt: Date.now(),
+      account: { name: '星喵' },
+      clientLogin: { available: true, signedIn: true, name: '星喵' },
+      quota: { total: 2000, used: 0, at: Date.now() },
+      checkin: { available: true, claimed: false, deviceClaimed: false, reward: 100 },
+    }
+
+    writeCache('trae:cn', 'status', { ...base, loginSource: 'web' })
+    const webText = textOf(AccountCard(props)).join(' ')
+    expect(webText).toContain('复用本机客户端登录')
+    expect(webText).toContain('复用客户端登录态')
+    expect(webText).toContain('网页登录')
+    // The provider returns a check-in field, but a web login must not show it.
+    expect(webText).not.toContain('签到领积分')
+
+    writeCache('trae:cn', 'status', { ...base, loginSource: 'client' })
+    const clientText = textOf(AccountCard(props)).join(' ')
+    expect(clientText).toContain('本机客户端')
+    expect(clientText).toContain('签到领积分')
   })
 
   it('formats dollar quotas without credits and shows the reset date', () => {

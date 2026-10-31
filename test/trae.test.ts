@@ -9,9 +9,11 @@ import { normalizeTraeRegion } from '../src/brand.ts'
 import { ALL_REASONING_EFFORTS } from '../src/catalog.ts'
 import { EMPTY_OPENROUTER_INDEX, buildOpenRouterIndex } from '../src/openrouter.ts'
 import {
-  TraeProvider, mergeTraeModels, normalizeEffort, openTraeStream,
+  TraeProvider, mergeTraeModels, normalizeEffort, openTraeStream, parseTraeCheckin,
   parseTraeGlobalUsage, parseTraeRemoteModels, parseTraeUsage, parseTraeWireModels, traeMessages, traeTools,
 } from '../src/trae.ts'
+import type { TraeProviderOptions } from '../src/trae.ts'
+import type { TraeClientDetection } from '../src/trae-client.ts'
 import { ProviderHttpError } from '../src/wire.ts'
 
 async function collect(stream: AsyncIterable<StreamChunk>): Promise<StreamChunk[]> {
@@ -572,6 +574,28 @@ describe('Trae quota and check-in parsing', () => {
       }],
     })).toMatchObject({ plan: 'Pro plan', total: 5000, used: 1200 })
   })
+
+  it('reads the client check-in state and ignores campaign extras', () => {
+    expect(parseTraeCheckin({
+      enable: true,
+      checked_in: false,
+      did_checked_in: true,
+      credits: 100,
+      extra_credits: 100,
+      message: 'success',
+    })).toEqual({
+      available: true,
+      claimed: false,
+      deviceClaimed: true,
+      reward: 100,
+      message: 'success',
+    })
+    expect(parseTraeCheckin({ enable: false })).toMatchObject({
+      available: false,
+      claimed: false,
+      deviceClaimed: false,
+    })
+  })
 })
 
 describe('TraeAuth', () => {
@@ -662,6 +686,47 @@ describe('TraeAuth', () => {
     await expect(auth.accessToken()).rejects.toThrow('网页会话已失效')
   })
 
+  it('keeps a client token until its own expiry and never uses the cookie refresh', async () => {
+    const { store } = make('cn')
+    const fetchImpl = vi.fn()
+    const auth = new TraeAuth(store, () => 'cn', fetchImpl as unknown as typeof fetch)
+    // The JWT carries whole seconds, and that expiry wins over the stored one.
+    const expiresAt = Math.floor((Date.now() + 24 * 3600_000) / 1000) * 1000
+    await store.saveTrae({
+      ...record,
+      source: 'client',
+      accessToken: token(expiresAt),
+      expiresAt,
+    })
+    expect(await auth.status()).toMatchObject({
+      signedIn: true,
+      loginSource: 'client',
+      expiresAt,
+    })
+    await expect(auth.accessToken()).resolves.toBe(token(expiresAt))
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it('asks for a fresh client import when the client token expires', async () => {
+    const { store } = make('cn')
+    const auth = new TraeAuth(store, () => 'cn')
+    const expired = Date.now() - 1_000
+    await store.saveTrae({
+      ...record,
+      source: 'client',
+      accessToken: token(expired),
+      expiresAt: expired,
+      cookies: 'sid=should-not-be-used',
+    })
+    expect(await auth.status()).toMatchObject({
+      signedIn: false,
+      loginSource: 'client',
+      possiblyExpired: true,
+    })
+    await expect(auth.accessToken()).rejects.toThrow('客户端')
+    await expect(auth.accessToken()).rejects.toThrow('复用客户端登录态')
+  })
+
   it('signs out only the current region', async () => {
     const { store, auth } = make('cn')
     await store.saveTrae(record)
@@ -686,12 +751,15 @@ describe('TraeProvider', () => {
       models: async () => EMPTY_OPENROUTER_INDEX,
       invalidate: () => undefined,
     },
+    authOverrides: Record<string, unknown> = {},
+    extra: Partial<TraeProviderOptions> = {},
   ) {
     const auth = {
       status: async () => ({ signedIn: true }),
       accessToken: async () => 'tok',
       identity: async () => ({ deviceId: 'dev-1', machineId: 'mach-1', userId: 'u-1' }),
       logout: async () => undefined,
+      ...authOverrides,
     }
     const store = { saveTrae: vi.fn(async () => undefined) }
     const provider = new TraeProvider({
@@ -704,6 +772,7 @@ describe('TraeProvider', () => {
       forceVision: () => new Set(),
       openRouter: router,
       fetchImpl,
+      ...extra,
     })
     return { provider, auth, store }
   }
@@ -1032,5 +1101,136 @@ describe('TraeProvider', () => {
     await expect(collect(provider.stream(options, 'gpt-5', undefined, onInvalidate)))
       .rejects.toThrow('网页会话已失效')
     expect(onInvalidate).toHaveBeenCalledOnce()
+  })
+
+  it('offers check-in only for a login imported from the local client', async () => {
+    const fetchMock = vi.fn()
+    const { provider } = make('cn', fetchMock as unknown as typeof fetch, undefined, {
+      status: async () => ({ signedIn: true, loginSource: 'web' }),
+    })
+    expect(await provider.checkinStatus()).toMatchObject({ available: false })
+    await expect(provider.claimCheckin()).rejects.toThrow('仅在复用本机 Trae 客户端登录时可用')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('uses the client device id and machine id for the check-in status', async () => {
+    const calls: { url: string, init?: RequestInit }[] = []
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, init })
+      return json({ enable: true, checked_in: false, did_checked_in: false, credits: 100 })
+    })
+    const { provider } = make(
+      'cn',
+      fetchMock as unknown as typeof fetch,
+      undefined,
+      {
+        status: async () => ({ signedIn: true, loginSource: 'client' }),
+        accessToken: async () => 'client-token',
+        identity: async () => ({ deviceId: '2715142696215459', machineId: 'client-machine' }),
+      },
+    )
+    expect(await provider.checkinStatus()).toMatchObject({
+      available: true, claimed: false, deviceClaimed: false, reward: 100,
+    })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.url).toContain('/trae/api/v2/ug/checkin_credits/status')
+    const headers = calls[0]!.init?.headers as Record<string, string>
+    // The old derived id was rejected with 9074; the client's own id is used.
+    expect(headers['x-device-id']).toBe('2715142696215459')
+    expect(headers['x-machine-id']).toBe('client-machine')
+    expect(JSON.parse(String(calls[0]!.init?.body))).toEqual({ req_source: 1 })
+  })
+
+  it('claims the client check-in and reports its reward', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      expect(url).toContain('/trae/api/v2/ug/checkin_credits/claim')
+      return json({ code: 0, credits: 100, message: 'success' })
+    })
+    const { provider } = make(
+      'cn',
+      fetchMock as unknown as typeof fetch,
+      undefined,
+      {
+        status: async () => ({ signedIn: true, loginSource: 'client' }),
+        identity: async () => ({ deviceId: '2715142696215459', machineId: 'client-machine' }),
+      },
+    )
+    expect(await provider.claimCheckin()).toMatchObject({
+      available: true, claimed: true, deviceClaimed: false, reward: 100,
+    })
+  })
+
+  it('reports the device-level claim separately', async () => {
+    const { provider } = make(
+      'cn',
+      vi.fn(async () => json({ code: 9095, message: '本机今日已签到' })) as unknown as typeof fetch,
+      undefined,
+      {
+        status: async () => ({ signedIn: true, loginSource: 'client' }),
+        identity: async () => ({ deviceId: '2715142696215459', machineId: 'client-machine' }),
+      },
+    )
+    expect(await provider.claimCheckin()).toMatchObject({
+      available: true, claimed: false, deviceClaimed: true,
+    })
+  })
+
+  it('has no check-in on the international deployment', async () => {
+    const { provider } = make('global', vi.fn() as unknown as typeof fetch, undefined, {
+      status: async () => ({ signedIn: true, loginSource: 'client' }),
+    })
+    expect(await provider.checkinStatus()).toMatchObject({
+      available: false,
+      message: expect.stringContaining('国际版'),
+    })
+  })
+
+  it('imports the local client login into the account store', async () => {
+    const detection: TraeClientDetection = {
+      status: { available: true, signedIn: true, name: '星喵', userId: 'u-client', expiresAt: 123 },
+      state: {
+        region: 'cn',
+        token: 'client-token',
+        deviceId: '2715142696215459',
+        machineId: 'client-machine',
+        userId: 'u-client',
+        name: '星喵',
+        expiresAt: 123,
+      },
+    }
+    const { provider, store } = make(
+      'cn',
+      vi.fn() as unknown as typeof fetch,
+      undefined,
+      {},
+      { clientLogin: () => detection },
+    )
+    await provider.importClientLogin()
+    expect(store.saveTrae).toHaveBeenCalledWith({
+      accessToken: 'client-token',
+      region: 'cn',
+      source: 'client',
+      deviceId: '2715142696215459',
+      machineId: 'client-machine',
+      loginAt: expect.any(Number),
+      userId: 'u-client',
+      name: '星喵',
+      expiresAt: 123,
+    })
+  })
+
+  it('refuses to import when the local client is not signed in', async () => {
+    const { provider } = make(
+      'cn',
+      vi.fn() as unknown as typeof fetch,
+      undefined,
+      {},
+      {
+        clientLogin: () => ({
+          status: { available: true, signedIn: false, error: '本机 Trae 客户端尚未登录。' },
+        }),
+      },
+    )
+    await expect(provider.importClientLogin()).rejects.toThrow('尚未登录')
   })
 })

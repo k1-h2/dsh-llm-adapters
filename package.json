@@ -1,7 +1,7 @@
 {
   "name": "dsh-llm-adapters",
   "displayName": "Local LLM Adapters",
-  "description": "DeepSeek Harness adapters for Loomy, SenseTime Raccoon and Trae. Sign in through the provider’s own web page (WeChat QR for Loomy and Raccoon, a dedicated browser window for Trae), then use the account’s models with quota, thinking levels and per-model settings pages.",
+  "description": "DeepSeek Harness adapters for Loomy, SenseTime Raccoon and Trae. Sign in through the provider’s own web page (WeChat QR for Loomy and Raccoon, a dedicated browser window for Trae), or reuse a signed-in local Trae client for the mainland check-in, then use the account’s models with quota, thinking levels and per-model settings pages.",
   "version": "1.2.0",
   "type": "module",
   "license": "MIT",
@@ -19,6 +19,7 @@
     "qr-login",
     "wechat-login",
     "web-login",
+    "client-login",
     "openai-compatible",
     "model-provider",
     "trae",

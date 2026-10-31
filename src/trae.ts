@@ -1,8 +1,10 @@
 /**
- * Trae provider: model directory, SOLO chat and quota.
+ * Trae provider: model directory, SOLO chat, quota and client check-in.
  *
  * Trae's website login yields the same `Cloud-IDE-JWT` its own clients use, so
- * the plugin talks to the same gateways they do. Two catalog sources are merged:
+ * the plugin talks to the same gateways they do. A second sign-in method copies
+ * that token from the local desktop client; only that method carries the device
+ * id the daily check-in route accepts. Two catalog sources are merged:
  *
  *  - the Remote directory (`/api/remote/v1/models`) is the model skeleton —
  *    display name, context window, multiplier, reasoning options, multimodal;
@@ -44,9 +46,11 @@ import {
   TRAE_APP_ID, TRAE_REGION_PROFILES, TRAE_SOLO_CHAT_PATH, TRAE_SOLO_MODELS_PATH, TRAE_VERSION_CODE,
   TRAE_WEB_USER_AGENT,
 } from './trae-endpoints.ts'
+import { readTraeClientLogin } from './trae-client.ts'
+import type { TraeClientDetection } from './trae-client.ts'
 import { TraeWebLogin } from './trae-login.ts'
 import type { TraeLoginAccount } from './trae-login.ts'
-import type { QuotaPack, QuotaSnapshot } from './types.ts'
+import type { CheckinStatus, ClientLoginStatus, QuotaPack, QuotaSnapshot } from './types.ts'
 import { ProviderHttpError, buildMessages } from './wire.ts'
 import type { ReadImage, WireMessage } from './wire.ts'
 
@@ -181,6 +185,8 @@ export interface TraeProviderOptions {
   logger?: (message: string) => void
   /** The shared OpenRouter snapshot; a private one is created when omitted. */
   openRouter?: OpenRouterLookup
+  /** Overridable in tests; defaults to reading this machine's Trae client. */
+  clientLogin?: () => TraeClientDetection
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -895,6 +901,26 @@ export function parseTraeGlobalUsage(payload: unknown): QuotaSnapshot {
   }
 }
 
+/**
+ * The check-in body's `req_source`: 1 is the IDE, 2 is Trae Work. The desktop
+ * client sends 1; the claim route rejects the plugin's former empty body.
+ */
+export const TRAE_CHECKIN_REQ_SOURCE = 1
+
+export function parseTraeCheckin(payload: unknown): CheckinStatus {
+  const root = record(payload) ?? {}
+  // `extra_credits` is a campaign bonus the site does not add to the daily
+  // reward; summing it made the card promise 200 when the check-in pays 100.
+  const reward = num(root.credits) ?? 0
+  return {
+    available: root.enable !== false,
+    claimed: root.checked_in === true,
+    deviceClaimed: root.did_checked_in === true,
+    ...reward === 0 ? {} : { reward },
+    ...text(root.message) === undefined ? {} : { message: text(root.message)! },
+  }
+}
+
 export class TraeProvider {
   private catalogInstance: ModelCatalog
   private catalogRegion: TraeRegion
@@ -1142,6 +1168,167 @@ export class TraeProvider {
     return this.quotaInflight
   }
 
+  /**
+   * The second sign-in method: the desktop client's current state.
+   *
+   * Read-only; the settings page only receives the non-secret status, never
+   * the token.
+   */
+  async localClientLogin(): Promise<ClientLoginStatus> {
+    return this.readClientLogin().status
+  }
+
+  private readClientLogin(): TraeClientDetection {
+    return (this.options.clientLogin ?? (() => readTraeClientLogin(this.options.region())))()
+  }
+
+  /** Import the desktop client's token, device id and machine id. */
+  async importClientLogin(): Promise<void> {
+    const region = this.ensureRegion()
+    const detection = this.readClientLogin()
+    if (!detection.status.available) {
+      throw new Error('本机没有检测到 Trae 客户端。请先安装并登录客户端，或改用网页登录。')
+    }
+    const state = detection.state
+    if (!detection.status.signedIn || state === undefined) {
+      throw new Error(detection.status.error ?? '本机 Trae 客户端尚未登录。请先在客户端完成登录。')
+    }
+    // A browser flow that is still running would save its own account after
+    // this import, so cancel it before replacing the record.
+    await this.loginFlow?.cancel()
+    await this.options.store.saveTrae({
+      accessToken: state.token,
+      region,
+      source: 'client',
+      deviceId: state.deviceId,
+      machineId: state.machineId,
+      loginAt: Date.now(),
+      ...state.userId === undefined ? {} : { userId: state.userId },
+      ...state.name === undefined ? {} : { name: state.name },
+      ...state.expiresAt === undefined ? {} : { expiresAt: state.expiresAt },
+    })
+    this.invalidateModels()
+    this.invalidateQuota()
+  }
+
+  private async checkinContext(): Promise<
+    | { ok: true, profile: TraeRegionProfile, token: string, identity: { deviceId: string, machineId: string } }
+    | { ok: false, status: CheckinStatus }
+  > {
+    this.ensureRegion()
+    const profile = this.profile()
+    if (!profile.checkin) {
+      return {
+        ok: false,
+        status: {
+          available: false, claimed: false, deviceClaimed: false,
+          message: 'Trae 国际版没有签到活动。',
+        },
+      }
+    }
+    const auth = await this.options.auth.status()
+    if (!auth.signedIn) {
+      return {
+        ok: false,
+        status: {
+          available: false, claimed: false, deviceClaimed: false,
+          message: auth.error ?? '尚未登录，无法签到。',
+        },
+      }
+    }
+    if (auth.loginSource !== 'client') {
+      return {
+        ok: false,
+        status: {
+          available: false, claimed: false, deviceClaimed: false,
+          message: '签到仅在复用本机 Trae 客户端登录时可用；网页登录没有客户端设备号。',
+        },
+      }
+    }
+    let token: string
+    let identity: { deviceId: string, machineId: string }
+    try {
+      token = await this.options.auth.accessToken()
+      identity = await this.options.auth.identity()
+    } catch (error) {
+      return {
+        ok: false,
+        status: {
+          available: false, claimed: false, deviceClaimed: false,
+          message: error instanceof Error ? error.message : String(error),
+        },
+      }
+    }
+    if (!/^\d{16}$/.test(identity.deviceId)) {
+      return {
+        ok: false,
+        status: {
+          available: false, claimed: false, deviceClaimed: false,
+          message: '本机 Trae 客户端登录缺少 16 位设备号，请先在客户端重新登录后再复用。',
+        },
+      }
+    }
+    return {
+      ok: true,
+      profile,
+      token,
+      identity: { deviceId: identity.deviceId, machineId: identity.machineId },
+    }
+  }
+
+  async checkinStatus(): Promise<CheckinStatus> {
+    const context = await this.checkinContext()
+    if (!context.ok) return context.status
+    const response = await this.fetchImpl(`${context.profile.apiBase}/trae/api/v2/ug/checkin_credits/status`, {
+      method: 'POST',
+      headers: {
+        ...this.headers(context.token, context.profile),
+        'x-user-region': 'CN',
+        'x-device-id': context.identity.deviceId,
+        'x-machine-id': context.identity.machineId,
+      },
+      body: JSON.stringify({ req_source: TRAE_CHECKIN_REQ_SOURCE }),
+      signal: AbortSignal.timeout(this.options.timeoutMs()),
+    })
+    if (!response.ok) throw new ProviderHttpError(await responseError(response), response.status)
+    return parseTraeCheckin(await response.json())
+  }
+
+  /** Claim today's reward. The only state-changing call in this provider. */
+  async claimCheckin(): Promise<CheckinStatus> {
+    const context = await this.checkinContext()
+    if (!context.ok) throw new Error(context.status.message ?? '当前登录方式不能签到。')
+    const response = await this.fetchImpl(`${context.profile.apiBase}/trae/api/v2/ug/checkin_credits/claim`, {
+      method: 'POST',
+      headers: {
+        ...this.headers(context.token, context.profile),
+        'x-user-region': 'CN',
+        'x-device-id': context.identity.deviceId,
+        'x-machine-id': context.identity.machineId,
+      },
+      body: JSON.stringify({ req_source: TRAE_CHECKIN_REQ_SOURCE }),
+      signal: AbortSignal.timeout(this.options.timeoutMs()),
+    })
+    if (!response.ok) throw new ProviderHttpError(await responseError(response), response.status)
+    const payload = record(await response.json()) ?? {}
+    const code = typeof payload.code === 'number' ? payload.code : 0
+    if (code === 0) {
+      this.invalidateQuota()
+      const reward = num(payload.credits)
+      return {
+        available: true,
+        claimed: true,
+        deviceClaimed: false,
+        ...reward === undefined || reward === 0 ? {} : { reward },
+        ...text(payload.message) === undefined ? {} : { message: text(payload.message)! },
+      }
+    }
+    if (code === 9095) {
+      return { available: true, claimed: false, deviceClaimed: true, message: '本机今日已签到' }
+    }
+    throw new Error(text(payload.message) ?? `签到失败（code ${code}）`)
+  }
+
   async *stream(
     options: GenerateOptions,
     model: string,
@@ -1218,6 +1405,7 @@ export class TraeProvider {
         await this.options.store.saveTrae({
           accessToken: account.accessToken,
           region: target,
+          source: 'web',
           deviceId: account.deviceId,
           machineId: account.machineId,
           loginAt: Date.now(),

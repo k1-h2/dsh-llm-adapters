@@ -117,9 +117,22 @@ window.__ModuleLoader__.load({
       raccoonIntro: '点“打开扫码登录”，用微信扫码登录小浣熊即可使用，无需安装客户端。改动即时生效，无需重启。',
       traeNav: 'Trae',
       traeTitle: 'Trae',
-      traeIntro: '先选国内版或国际版，再点“打开浏览器登录”在 Trae 官网登录。设备指纹由这次网页登录生成，不需要安装桌面客户端。改动即时生效，无需重启。',
-      traeHint: 'Trae 的网页令牌只有约 8 小时，插件会用登录时拿到的网页会话自动续期；网页会话失效后才需重新登录。',
-      traeLoginMissing: 'Trae 尚未登录。请点“打开浏览器登录”。',
+      traeIntro: '先选国内版或国际版，再任选一种登录方式：在 Trae 官网网页登录，或复用本机 Trae 客户端的登录态。网页登录会用网页会话自动续期；只有复用客户端登录态时，国内版才显示签到按钮。改动即时生效，无需重启。',
+      traeHint: '网页登录的令牌约 8 小时，插件会用登录时拿到的网页会话自动续期；复用本机客户端登录态则直接使用客户端令牌，客户端退出登录或令牌过期后重新复用即可。签到仅在国内版、且使用客户端登录态时可用。',
+      traeLoginMissing: 'Trae 尚未登录。可以点“打开浏览器登录”，或复用本机已登录的 Trae 客户端。',
+      traeClientTitle: '复用本机客户端登录',
+      traeClientHint: '检测到本机已安装 Trae 客户端。这里只读取客户端当前的登录态，不会修改或退出客户端；复用后会替换插件里的当前登录态。用这种方式登录后才显示签到按钮。',
+      traeClientReady: '本机客户端已登录，可直接复用。',
+      traeClientNotLoggedIn: '检测到本机 Trae 客户端，但尚未登录。请先打开客户端完成登录，再点“重新读取登录态”。',
+      traeClientAccount: '客户端账号',
+      traeClientUse: '复用客户端登录态',
+      traeClientReuse: '重新读取客户端登录态',
+      traeClientBusy: '正在读取…',
+      traeClientFailed: '读取客户端登录态失败',
+      traeClientSource: '登录方式',
+      traeSourceWeb: '网页登录',
+      traeSourceClient: '本机客户端',
+      traeClientLogoutNote: '退出登录只会清除插件里的登录态，不会退出本机 Trae 客户端。',
       regionLabel: '区域',
       regionCn: '国内版 · trae.cn',
       regionGlobal: '国际版 · trae.ai',
@@ -281,9 +294,22 @@ window.__ModuleLoader__.load({
       raccoonIntro: 'Use “Open QR sign-in” and scan the code in WeChat; no client install needed. Changes apply immediately.',
       traeNav: 'Trae',
       traeTitle: 'Trae',
-      traeIntro: 'Pick the mainland or international edition, then use “Open browser sign-in” to sign in on Trae’s website. The device fingerprint comes from that web session, so no desktop client is needed. Changes apply immediately.',
-      traeHint: 'Trae’s web token lasts about 8 hours; the plugin renews it with the website session captured at sign-in, so you only sign in again when that session dies.',
-      traeLoginMissing: 'Trae is not signed in. Use “Open browser sign-in”.',
+      traeIntro: 'Pick the mainland or international edition, then use either method: sign in on Trae’s website, or reuse the local Trae client’s sign-in state. A browser login renews itself; the mainland check-in button appears only with the client sign-in. Changes apply immediately.',
+      traeHint: 'A browser login uses the website session captured at sign-in; a client login uses the desktop client’s token and is imported again after the client refreshes or signs out. Check-in is mainland-only and client-login-only.',
+      traeLoginMissing: 'Trae is not signed in. Use browser sign-in, or reuse a signed-in local Trae client.',
+      traeClientTitle: 'Reuse the local client sign-in',
+      traeClientHint: 'A Trae desktop client was found. This only reads its current sign-in state and never modifies or signs out the client; reusing it replaces the plugin’s current login. The check-in button appears only after signing in this way.',
+      traeClientReady: 'The local client is signed in and ready to reuse.',
+      traeClientNotLoggedIn: 'A Trae desktop client was found but is not signed in. Sign in there, then re-read the login state.',
+      traeClientAccount: 'Client account',
+      traeClientUse: 'Reuse client sign-in',
+      traeClientReuse: 'Re-read client sign-in',
+      traeClientBusy: 'Reading…',
+      traeClientFailed: 'Could not read the client sign-in',
+      traeClientSource: 'Sign-in method',
+      traeSourceWeb: 'Browser',
+      traeSourceClient: 'Local client',
+      traeClientLogoutNote: 'Signing out only clears the plugin’s login; the local Trae client stays signed in.',
       regionLabel: 'Region',
       regionCn: 'Mainland · trae.cn',
       regionGlobal: 'International · trae.ai',
@@ -627,6 +653,7 @@ window.__ModuleLoader__.load({
       const [actionBusy, setActionBusy] = useState(false)
       const [actionError, setActionError] = useState(undefined)
       const [checkinBusy, setCheckinBusy] = useState(false)
+      const [clientBusy, setClientBusy] = useState(false)
       const [packsExpanded, setPacksExpanded] = useState(false)
       const ticket = useRef(0)
 
@@ -744,6 +771,23 @@ window.__ModuleLoader__.load({
           setActionError(`${t('loginFailedPrefix')}：${String(err?.message ?? err)}`)
         }
       }, [accountRequest, t])
+
+      const importClientLogin = useCallback(async () => {
+        setClientBusy(true)
+        setActionError(undefined)
+        try {
+          const payload = await accountRequest({ action: 'client-login' })
+          setStatus(payload)
+          setBrowser({ running: false, phase: 'idle' })
+          writeCache(cacheId, 'status', { ...payload, cachedAt: Date.now() })
+          onStatus?.(payload)
+          onAfterRefresh?.()
+        } catch (err) {
+          setActionError(`${t('traeClientFailed')}：${String(err?.message ?? err)}`)
+        } finally {
+          setClientBusy(false)
+        }
+      }, [accountRequest, cacheId, onStatus, onAfterRefresh, t])
 
       // Claiming is the only state-changing account action. The reward changes
       // the quota, so the reading is refreshed afterwards instead of guessed.
@@ -887,12 +931,14 @@ window.__ModuleLoader__.load({
         )
       })()
 
-      // CodeArts grants one reward per account per day, but its device flag can
-      // also block the claim; the two reasons are shown apart so "本机已签"
-      // never reads as "this account already claimed".
-      const checkin = brand.id === 'codearts' || brand.id === 'raccoon'
-        ? status?.checkin
-        : undefined
+      // Trae's check-in needs the device id only a client-login import has, so
+      // a web login must not show the panel even though the provider exposes
+      // the method. CodeArts grants one reward per account per day, but its
+      // device flag can also block the claim; the two reasons are shown apart
+      // so "本机已签" never reads as "this account already claimed".
+      const checkin = brand.id === 'trae'
+        ? (status?.loginSource === 'client' ? status?.checkin : undefined)
+        : (brand.id === 'codearts' || brand.id === 'raccoon' ? status?.checkin : undefined)
       const checkinBlocked = checkin === undefined
         || checkin.available === false
         || checkin.claimed === true
@@ -923,7 +969,7 @@ window.__ModuleLoader__.load({
         ? h('div', { style: css.bar },
             h('button', {
               style: { ...css.btn, ...css.btnPrimary },
-              disabled: checkinBlocked || checkinBusy || actionBusy,
+              disabled: checkinBlocked || checkinBusy || clientBusy || actionBusy,
               onClick: () => void claimCheckin(),
             }, checkinBusy ? t('checkinBusy') : checkinLabel),
             checkinNote === undefined ? null : h('span', { style: css.note }, checkinNote),
@@ -986,8 +1032,41 @@ window.__ModuleLoader__.load({
         browser !== undefined && browser.running === false && browser.error !== undefined
           ? h('div', { style: css.err }, browser.error)
           : null,
-        actionError !== undefined ? h('div', { style: css.err }, actionError) : null,
       )
+
+      const clientLogin = brand.id === 'trae' ? status?.clientLogin : undefined
+      const clientAccount = clientLogin?.signedIn === true
+        ? ([clientLogin.name, clientLogin.expiresAt === undefined
+            ? undefined
+            : `${t('expires')} ${dateLabel(clientLogin.expiresAt)}`]
+            .filter(part => typeof part === 'string' && part.length > 0)
+            .join(' · ') || t('accountUnknown'))
+        : undefined
+      const clientPanel = brand.id === 'trae' && clientLogin?.available === true
+        ? h('div', { style: css.loginBox },
+            h('h4', { style: css.h4 }, t('traeClientTitle')),
+            h('div', { style: css.note }, t('traeClientHint')),
+            clientLogin.signedIn === true
+              ? h('div', { style: css.line },
+                  h('span', { style: css.label }, t('traeClientAccount')),
+                  h('span', { style: css.value }, clientAccount),
+                )
+              : h('div', { style: css.note }, clientLogin.error ?? t('traeClientNotLoggedIn')),
+            h('div', { style: css.bar },
+              h('button', {
+                style: { ...css.btn, ...(clientLogin.signedIn === true ? css.btnPrimary : {}) },
+                disabled: clientBusy || checkinBusy || actionBusy || browserRunning || clientLogin.signedIn !== true,
+                onClick: () => void importClientLogin(),
+              }, clientBusy
+                ? t('traeClientBusy')
+                : status?.loginSource === 'client' ? t('traeClientReuse') : t('traeClientUse')),
+              clientLogin.signedIn === true
+                ? h('span', { style: css.note }, t('traeClientReady'))
+                : null,
+            ),
+            h('div', { style: css.note }, t('traeClientLogoutNote')),
+          )
+        : null
 
       // Trae's region is a saved setting, not a tab: the selector writes the
       // same `traeRegion` the provider reads, and the page then re-reads both
@@ -1041,6 +1120,14 @@ window.__ModuleLoader__.load({
               h('span', { style: css.value }, dateLabel(status?.expiresAt)),
             )
           : null,
+        signedIn && brand.id === 'trae'
+          ? h('div', { style: css.line },
+              h('span', { style: css.label }, t('traeClientSource')),
+              h('span', { style: css.value }, status?.loginSource === 'client'
+                ? t('traeSourceClient')
+                : t('traeSourceWeb')),
+            )
+          : null,
         signedIn && brand.id === 'raccoon'
           ? h('div', { style: css.line },
               h('span', { style: css.label }, t('raccoonOwner')),
@@ -1068,6 +1155,8 @@ window.__ModuleLoader__.load({
             )
           : null,
         !signedIn || status?.possiblyExpired === true ? browserPanel : null,
+        clientPanel,
+        actionError !== undefined ? h('div', { style: css.err }, actionError) : null,
         error !== undefined ? h('div', { style: css.err }, `${t('loadFailed')}：${error}`) : null,
       )
     }

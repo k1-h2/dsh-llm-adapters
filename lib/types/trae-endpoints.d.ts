@@ -33,6 +33,8 @@ export interface TraeRegionProfile {
      * the dollar allowance instead.
      */
     usageV2: boolean;
+    /** Daily check-in exists only on the mainland deployment. */
+    checkin: boolean;
 }
 export declare const TRAE_REGION_PROFILES: Record<TraeRegion, TraeRegionProfile>;
 /** The app id Trae's own clients send; not account-specific. */

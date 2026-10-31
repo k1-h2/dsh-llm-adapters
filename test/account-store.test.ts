@@ -119,4 +119,12 @@ describe('AccountStore Trae regions', () => {
     expect(await store.trae('global')).toBeUndefined()
     expect(await fs.readdir(root)).toEqual(['accounts.json'])
   })
+
+  it('round-trips the login source', async () => {
+    const { store } = makeStore()
+    await store.saveTrae({ ...trae, source: 'client' })
+    expect(await store.trae('cn')).toMatchObject({ source: 'client' })
+    await store.saveTrae({ ...trae, source: 'web' })
+    expect(await store.trae('cn')).toMatchObject({ source: 'web' })
+  })
 })

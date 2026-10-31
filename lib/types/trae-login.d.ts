@@ -1,15 +1,17 @@
 /**
  * Trae sign-in through the provider's own website.
  *
- * The plugin does not read a desktop install: it opens a dedicated browser
+ * This flow does not read a desktop install: it opens a dedicated browser
  * profile, lets the user sign in on trae.cn / trae.ai, and then takes the
  * session the website itself created. Two things come out of that session:
  *
  *  - the `Cloud-IDE-JWT` token, fetched with the page's own cookies through
  *    `/cloudide/api/v3/common/GetUserToken` — the same call the site makes;
  *  - the device fingerprint (`__msuuid__` from the page, or one generated in
- *    the page), which Trae's check-in route requires and which therefore must
- *    belong to this web session rather than to a machine install.
+ *    the page), stored with the web login.
+ *
+ * The check-in route does not accept this web fingerprint, so check-in is
+ * enabled only for the separate client-login import in `trae-client.ts`.
  *
  * Cookies are captured over the DevTools protocol and kept in the plugin's own
  * account store so the short-lived JWT can be renewed later; the dedicated

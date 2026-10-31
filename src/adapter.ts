@@ -22,7 +22,7 @@ import { LoomyProvider } from './loomy.ts'
 import { RaccoonProvider } from './raccoon.ts'
 import { TraeProvider } from './trae.ts'
 import type { AuthStatus } from './auth.ts'
-import type { CheckinStatus, ProviderStatus, QuotaSnapshot } from './types.ts'
+import type { CheckinStatus, ClientLoginStatus, ProviderStatus, QuotaSnapshot } from './types.ts'
 import type { ReadImage } from './wire.ts'
 
 export interface AdapterOptions {
@@ -41,7 +41,7 @@ export interface AdapterOptions {
  *
  * Declared as an interface rather than a union so a new provider only has to
  * implement the behaviour, not edit the adapter's type list. The optional
- * check-in methods exist only on Trae.
+ * client-login and check-in methods exist only on Trae.
  */
 export interface ProviderClient {
   status(): Promise<AuthStatus>
@@ -64,6 +64,10 @@ export interface ProviderClient {
   invalidateModels(): void
   invalidateQuota(): void
   close(): void
+  /** Trae only: the local desktop client's current sign-in state. */
+  localClientLogin?(): Promise<ClientLoginStatus>
+  /** Trae only: copy that state into the plugin's own account store. */
+  importClientLogin?(): Promise<void>
   checkinStatus?(): Promise<CheckinStatus>
   claimCheckin?(): Promise<CheckinStatus>
 }
@@ -154,6 +158,17 @@ export abstract class LocalAdapter extends LlmAdapter {
     return result
   }
 
+  /** Import a local client login and return the refreshed account reading. */
+  async importClientLogin(): Promise<ProviderStatus> {
+    if (this.client.importClientLogin === undefined) {
+      throw new Error('该供应商不支持复用本机客户端登录')
+    }
+    await this.client.importClientLogin()
+    this.invalidateCatalog()
+    this.invalidateUsage()
+    return this.usageInfo(true)
+  }
+
   invalidateCatalog(): void {
     this.client.invalidateModels()
   }
@@ -165,7 +180,20 @@ export abstract class LocalAdapter extends LlmAdapter {
   /** Login state plus quota, shaped for the settings page. */
   async usageInfo(fresh = false): Promise<ProviderStatus> {
     const auth = await this.client.status()
-    const base: ProviderStatus = { brand: this.brand, ...auth }
+    // Detection is part of the reading even while signed out: that is what
+    // offers the second sign-in method. Only Trae implements it.
+    const clientLogin = this.client.localClientLogin === undefined
+      ? undefined
+      : await this.client.localClientLogin().catch(error => ({
+          available: false,
+          signedIn: false,
+          error: error instanceof Error ? error.message : String(error),
+        }))
+    const base: ProviderStatus = {
+      brand: this.brand,
+      ...auth,
+      ...clientLogin === undefined ? {} : { clientLogin },
+    }
     // Trae's check-in state is part of the account reading; the other two
     // providers do not implement it, so this costs them nothing.
     const checkin = this.client.checkinStatus === undefined

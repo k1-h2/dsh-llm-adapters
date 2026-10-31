@@ -1,8 +1,10 @@
 /**
- * Trae provider: model directory, SOLO chat and quota.
+ * Trae provider: model directory, SOLO chat, quota and client check-in.
  *
  * Trae's website login yields the same `Cloud-IDE-JWT` its own clients use, so
- * the plugin talks to the same gateways they do. Two catalog sources are merged:
+ * the plugin talks to the same gateways they do. A second sign-in method copies
+ * that token from the local desktop client; only that method carries the device
+ * id the daily check-in route accepts. Two catalog sources are merged:
  *
  *  - the Remote directory (`/api/remote/v1/models`) is the model skeleton —
  *    display name, context window, multiplier, reasoning options, multimodal;
@@ -29,7 +31,8 @@ import { ModelCatalog } from './catalog.ts';
 import type { ProviderModel } from './catalog.ts';
 import type { LoginStatus } from './login-page.ts';
 import type { OpenRouterIndex, OpenRouterLookup } from './openrouter.ts';
-import type { QuotaSnapshot } from './types.ts';
+import type { TraeClientDetection } from './trae-client.ts';
+import type { CheckinStatus, ClientLoginStatus, QuotaSnapshot } from './types.ts';
 import type { ReadImage, WireMessage } from './wire.ts';
 /** Chat functions, in the order Trae itself prefers them. */
 export declare const TRAE_CHAT_FUNCTIONS: readonly string[];
@@ -103,6 +106,8 @@ export interface TraeProviderOptions {
     logger?: (message: string) => void;
     /** The shared OpenRouter snapshot; a private one is created when omitted. */
     openRouter?: OpenRouterLookup;
+    /** Overridable in tests; defaults to reading this machine's Trae client. */
+    clientLogin?: () => TraeClientDetection;
 }
 /**
  * The persistent browser profile used for one region.
@@ -154,6 +159,12 @@ export declare function parseTraeUsage(payload: unknown): QuotaSnapshot;
  * dollars and must not be printed as credits.
  */
 export declare function parseTraeGlobalUsage(payload: unknown): QuotaSnapshot;
+/**
+ * The check-in body's `req_source`: 1 is the IDE, 2 is Trae Work. The desktop
+ * client sends 1; the claim route rejects the plugin's former empty body.
+ */
+export declare const TRAE_CHECKIN_REQ_SOURCE = 1;
+export declare function parseTraeCheckin(payload: unknown): CheckinStatus;
 export declare class TraeProvider {
     private readonly options;
     private catalogInstance;
@@ -185,6 +196,7 @@ export declare class TraeProvider {
         possiblyExpired?: boolean;
         account?: import("./auth.ts").LocalAccount;
         error?: string;
+        loginSource?: "web" | "client";
     }>;
     signedIn(): Promise<boolean>;
     models(fresh?: boolean): Promise<readonly ProviderModel[]>;
@@ -199,6 +211,20 @@ export declare class TraeProvider {
     private fetchWire;
     private fetchCatalog;
     quota(fresh?: boolean): Promise<QuotaSnapshot>;
+    /**
+     * The second sign-in method: the desktop client's current state.
+     *
+     * Read-only; the settings page only receives the non-secret status, never
+     * the token.
+     */
+    localClientLogin(): Promise<ClientLoginStatus>;
+    private readClientLogin;
+    /** Import the desktop client's token, device id and machine id. */
+    importClientLogin(): Promise<void>;
+    private checkinContext;
+    checkinStatus(): Promise<CheckinStatus>;
+    /** Claim today's reward. The only state-changing call in this provider. */
+    claimCheckin(): Promise<CheckinStatus>;
     stream(options: GenerateOptions, model: string, readImage: ReadImage | undefined, onInvalidate: () => void): AsyncGenerator<StreamChunk>;
     startBrowserLogin(region?: TraeRegion): Promise<LoginStatus>;
     browserLoginStatus(): LoginStatus;

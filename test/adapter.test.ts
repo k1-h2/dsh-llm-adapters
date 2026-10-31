@@ -550,4 +550,47 @@ describe('Check-in', () => {
     expect(captured.status).toBe(400)
     expect(String(captured.body.error)).toContain('9004')
   })
+
+  it('attaches the local client state and imports it', async () => {
+    const localClientLogin = vi.fn(async () => ({
+      available: true,
+      signedIn: true,
+      name: '星喵',
+    }))
+    const importClientLogin = vi.fn(async () => undefined)
+    const { adapter } = makeAdapter(
+      { localClientLogin, importClientLogin },
+      { brand: 'trae', provider: 'trae' },
+    )
+    expect(await adapter.usageInfo()).toMatchObject({
+      clientLogin: { available: true, signedIn: true, name: '星喵' },
+    })
+    const status = await adapter.importClientLogin()
+    expect(importClientLogin).toHaveBeenCalledOnce()
+    expect(status.clientLogin).toMatchObject({ signedIn: true })
+  })
+
+  it('rejects the client import on a provider without one', async () => {
+    const { adapter } = makeAdapter()
+    await expect(adapter.importClientLogin()).rejects.toThrow('不支持')
+  })
+
+  it('serves the client-login action and returns the account reading', async () => {
+    const localClientLogin = vi.fn(async () => ({ available: true, signedIn: true }))
+    const importClientLogin = vi.fn(async () => undefined)
+    const { adapter } = makeAdapter(
+      { localClientLogin, importClientLogin },
+      { brand: 'trae', provider: 'trae' },
+    )
+    const { res, captured } = response()
+    await handleApi(jsonRequest(`${API_PREFIX}/account`, {
+      brand: 'trae', action: 'client-login',
+    }), res, { loomy: adapter, raccoon: adapter, trae: adapter })
+    expect(captured.status).toBe(200)
+    expect(captured.body).toMatchObject({
+      brand: 'trae',
+      clientLogin: { available: true, signedIn: true },
+    })
+    expect(importClientLogin).toHaveBeenCalledOnce()
+  })
 })
