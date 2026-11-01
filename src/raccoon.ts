@@ -9,8 +9,9 @@
  */
 
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
+import { createHash } from 'node:crypto'
 import type { AccountStore } from './account-store.ts'
-import { RaccoonAuth } from './auth.ts'
+import { RaccoonAuth, decodeJwtFacts } from './auth.ts'
 import { RaccoonQrLogin } from './raccoon-login.ts'
 import type { LoginStatus } from './login-page.ts'
 import {
@@ -47,6 +48,8 @@ export interface RaccoonProviderOptions {
   fetchImpl?: typeof fetch
   /** Injectable OpenRouter lookup for tests; defaults to the live catalog. */
   openRouter?: OpenRouterLookup
+  /** Injectable session-id bookkeeping for tests; defaults to the real one. */
+  sessionIds?: RaccoonSessionIds
 }
 
 function numeric(value: unknown): number | undefined {
@@ -96,6 +99,118 @@ function raccoonHeaders(token: string): Record<string, string> {
     'x-client-platform': raccoonClientPlatform(),
     'x-client-version': RACCOON_CLIENT_VERSION,
   }
+}
+
+/**
+ * The upstream code for the account's token-throughput wall.
+ *
+ * It reads like a request-rate complaint (`您的模型请求频率超限`) and is not
+ * one: measured on a live account, ten large requests in ten seconds hit it
+ * while fifty small ones did not, and the window refills by throughput rather
+ * than by request count. The gateway sends no `Retry-After` and no
+ * `x-ratelimit-*` header, so nothing here can compute a wait either.
+ */
+export const RACCOON_RATE_LIMIT_CODE = 'user_model_rate_limited'
+
+/** Wording the gateway has used alongside that code. */
+const RATE_LIMIT_WORDS = ['user_model_rate_limited', 'rate_limit', '频率超限']
+
+/**
+ * Whether a rejection is the token wall rather than a generic failure.
+ *
+ * Matched on the status, the code and the wording, because the same condition
+ * arrives as an HTTP 429 and as an error frame inside a 200 stream.
+ */
+export function isRaccoonRateLimited(status: number | undefined, text: string): boolean {
+  if (status === 429) return true
+  const lower = text.toLowerCase()
+  return RATE_LIMIT_WORDS.some(word => lower.includes(word.toLowerCase()))
+}
+
+/**
+ * The wall, as an error the caller can tell apart from a generic 429.
+ *
+ * A subclass rather than a flag: the in-band path and the HTTP path would
+ * otherwise both be caught by the same handler, and the second pass would wrap
+ * the message the first pass had already rewritten.
+ */
+export class RaccoonRateLimitedError extends ProviderHttpError {
+  constructor(message: string) {
+    super(message, 429)
+    this.name = 'RaccoonRateLimitedError'
+  }
+}
+
+/**
+ * The message a user sees once the wall is hit.
+ *
+ * The raw text says "retry later" and gives no reason, which is why this reads
+ * as the plugin being broken. The honest answer names the cause and the one
+ * lever the user actually has on this side.
+ */
+function raccoonRateLimited(detail: string): RaccoonRateLimitedError {
+  return new RaccoonRateLimitedError(
+    '小浣熊账号的模型吞吐已达上限（不是每分钟请求数，而是按账号的 token 速率）。'
+    + '一轮对话带的上下文越大越快撞到，撞到后额度按吞吐缓慢回血，上游也没有给恢复时间。'
+    + '稍等一会儿再发；把该模型的上下文窗口调小，同一会话能撑得更久。'
+    + `上游原文：${detail}`,
+  )
+}
+
+/** The `error` object a compatible gateway puts in an SSE frame. */
+function frameFailure(frame: Record<string, unknown>): { code?: string, message?: string } | undefined {
+  const error = frame.error
+  if (error === undefined) return undefined
+  if (typeof error === 'string') return { message: error }
+  if (error === null || typeof error !== 'object') return undefined
+  const record = error as Record<string, unknown>
+  const code = typeof record.code === 'string' ? record.code : undefined
+  const message = typeof record.message === 'string' ? record.message : undefined
+  return {
+    ...code === undefined ? {} : { code },
+    ...message === undefined ? {} : { message },
+  }
+}
+
+/**
+ * One conversation's session id, stable across the turns of that conversation.
+ *
+ * The official client never opens a session per request — measured on its own
+ * logs, 125 calls over 26 minutes all carried one `sess-0-53927d74` — while an
+ * implementation that mints a fresh id per request tells the gateway that one
+ * account opened hundreds of sessions within minutes.
+ *
+ * The id is a pure function of (account, model) rather than a random value, so a
+ * restarted or hot-reloaded process continues the same conversation instead of
+ * presenting a new session, and two models stay two conversations. The principal
+ * itself never leaves the process — only a truncated digest of it does.
+ */
+export class RaccoonSessionIds {
+  /**
+   * @param principal - a value that is stable for one account and identifies it
+   *   without being the token itself (the JWT's `sub`).
+   */
+  constructor(private readonly principal: () => Promise<string | undefined>) {}
+
+  async for(model: string): Promise<string | undefined> {
+    const principal = await this.principal()
+    if (principal === undefined) return undefined
+    return raccoonSessionId(principal, model)
+  }
+}
+
+/**
+ * `sess-<sequence>-<8 hex>`, the shape the official client sends.
+ *
+ * The sequence is the official client's process-local counter and is pinned to 0
+ * here on purpose: an incrementing value would make one conversation look like a
+ * different session after a restart, which is the one thing this id exists to
+ * prevent. Identity lives in the digest, which is truncated on purpose — the id
+ * must separate accounts without naming them on the wire.
+ */
+export function raccoonSessionId(principal: string, model: string): string {
+  const digest = createHash('sha256').update(`${principal}\0${model}`).digest('hex').slice(0, 8)
+  return `sess-0-${digest}`
 }
 
 /** Whether the gateway accepts a token harvested from the browser. */
@@ -159,9 +274,14 @@ export class RaccoonProvider {
   private checkinInflight: Promise<CheckinStatus> | undefined
   private loginFlow: RaccoonQrLogin | undefined
   private readonly openRouter: OpenRouterLookup
+  private readonly sessionIds: RaccoonSessionIds
 
   constructor(private readonly options: RaccoonProviderOptions) {
     this.openRouter = options.openRouter ?? new OpenRouterCatalog(options.fetchImpl ?? fetch)
+    this.sessionIds = options.sessionIds ?? new RaccoonSessionIds(async () => {
+      const stored = await options.store.raccoon()
+      return stored === undefined ? undefined : decodeJwtFacts(stored.accessToken).subject
+    })
     this.catalog = new ModelCatalog(
       () => this.fetchModels(),
       options.ttlMs,
@@ -223,6 +343,19 @@ export class RaccoonProvider {
 
   private headers(token: string): Record<string, string> {
     return raccoonHeaders(token)
+  }
+
+  /**
+   * The chat headers, including the session id the gateway counts sessions by.
+   *
+   * Only chat carries it: the catalogue, quota and check-in routes are plain
+   * business calls the official client sends outside any session, so leaving
+   * them alone keeps this change to the one route it was measured on.
+   */
+  private async chatHeaders(token: string, model: string): Promise<Record<string, string>> {
+    const base = raccoonHeaders(token)
+    const sessionId = await this.sessionIds.for(model).catch(() => undefined)
+    return sessionId === undefined ? base : { ...base, 'x-raccoon-session-id': sessionId }
   }
 
   /** Run one JSON call; a rejected token means this login needs a new scan. */
@@ -439,7 +572,6 @@ export class RaccoonProvider {
       this.checkinInflight = undefined
     }
   }
-
   async *stream(
     options: GenerateOptions,
     model: string,
@@ -465,7 +597,7 @@ export class RaccoonProvider {
     try {
       yield* openAiStream({
         url: `${RACCOON_BASE}/llm/v2/chat/completions`,
-        headers: this.headers(token),
+        headers: await this.chatHeaders(token, model),
         body,
         signal: options.signal,
         fetchImpl: this.options.fetchImpl,
@@ -474,10 +606,29 @@ export class RaccoonProvider {
           this.invalidateQuota()
           onUnauthorized?.()
         },
+        // The same wall arrives inside a 200 stream as an error frame. Without
+        // this hook it would surface as a generic 502 and read as a plugin bug.
+        onFrame: (frame) => {
+          const failure = frameFailure(frame)
+          if (failure === undefined) return
+          const detail = failure.message ?? failure.code ?? '上游返回错误'
+          throw isRaccoonRateLimited(undefined, `${failure.code ?? ''} ${detail}`)
+            ? raccoonRateLimited(detail)
+            : new ProviderHttpError(detail, 502)
+        },
       })
     } catch (error) {
       if (error instanceof ProviderHttpError && (error.status === 401 || error.status === 403)) {
         throw new Error('小浣熊登录已失效，请在设置页点「打开扫码登录」。')
+      }
+      // The HTTP path: `openAiStream` throws the status before any frame is read.
+      // The in-band path already rewrote its own error, so it is left alone.
+      // Only the status is trusted here: matching on the wording would re-wrap a
+      // 502 that the in-band hook deliberately classified as a gateway failure.
+      if (error instanceof ProviderHttpError
+        && !(error instanceof RaccoonRateLimitedError)
+        && error.status === 429) {
+        throw raccoonRateLimited(error.message)
       }
       throw error
     }

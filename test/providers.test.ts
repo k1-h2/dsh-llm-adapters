@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { LoomyProvider } from '../src/loomy.ts'
-import { RaccoonProvider } from '../src/raccoon.ts'
+import { RaccoonProvider, raccoonSessionId } from '../src/raccoon.ts'
 import { EMPTY_OPENROUTER_INDEX } from '../src/openrouter.ts'
 import type { OpenRouterLookup } from '../src/openrouter.ts'
 
@@ -121,10 +121,14 @@ describe('LoomyProvider', () => {
 })
 
 describe('RaccoonProvider', () => {
-  function make(fetchImpl: typeof fetch, openRouter: OpenRouterLookup = {
-    models: async () => EMPTY_OPENROUTER_INDEX,
-    invalidate: () => {},
-  }) {
+  function make(
+    fetchImpl: typeof fetch,
+    openRouter: OpenRouterLookup = {
+      models: async () => EMPTY_OPENROUTER_INDEX,
+      invalidate: () => {},
+    },
+    storeOverrides: Record<string, unknown> = {},
+  ) {
     const accessToken = vi.fn(async (force?: boolean) => force === true ? 'token-2' : 'token-1')
     const auth = {
       status: async () => ({ signedIn: true }),
@@ -134,6 +138,8 @@ describe('RaccoonProvider', () => {
       saveRaccoon: vi.fn(async () => undefined),
       saveLoomy: vi.fn(async () => undefined),
       loomyDeviceId: vi.fn(async () => 'web-test'),
+      raccoon: async () => undefined,
+      ...storeOverrides,
     }
     const provider = new RaccoonProvider({
       auth: auth as never,
@@ -146,6 +152,12 @@ describe('RaccoonProvider', () => {
       openRouter,
     })
     return { provider, accessToken, store }
+  }
+
+  /** A token whose `sub` is the stable account identity the session id seeds from. */
+  function raccoonToken(subject: string): string {
+    const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url')
+    return `${encode({ alg: 'HS256', typ: 'JWT' })}.${encode({ sub: subject, sid: 'ses-1', exp: 4_102_444_800 })}.sig`
   }
 
   it('reads the chat category with desktop headers', async () => {
@@ -391,5 +403,122 @@ describe('RaccoonProvider', () => {
     await expect(collect(provider.stream(options, 'sn-glm-5-3-flash', undefined))).rejects.toThrow('gateway died')
     expect(calls).toBe(1)
     expect(accessToken).not.toHaveBeenCalledWith(true)
+  })
+
+  it('keeps one session id across the turns of a conversation', async () => {
+    const seen: (string | undefined)[] = []
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      seen.push((init.headers as Record<string, string>)['x-raccoon-session-id'])
+      return sse()
+    })
+    const { provider } = make(fetchMock as unknown as typeof fetch, undefined, {
+      raccoon: async () => ({ accessToken: raccoonToken('pu-account-a') }),
+    })
+    for (let i = 0; i < 3; i++) {
+      await collect(provider.stream(options, 'sn-glm-5-3-flash', undefined))
+    }
+    expect(seen).toHaveLength(3)
+    // One session for the conversation, in the shape the official client sends.
+    expect(seen[0]).toMatch(/^sess-\d+-[0-9a-f]{8}$/)
+    expect(new Set(seen).size).toBe(1)
+  })
+
+  it('separates accounts and models into different sessions', async () => {
+    const seen: (string | undefined)[] = []
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      seen.push((init.headers as Record<string, string>)['x-raccoon-session-id'])
+      return sse()
+    })
+    const { provider } = make(fetchMock as unknown as typeof fetch, undefined, {
+      raccoon: async () => ({ accessToken: raccoonToken('pu-account-a') }),
+    })
+    await collect(provider.stream(options, 'sn-glm-5-3-flash', undefined))
+    await collect(provider.stream(options, 'sn-kimi-k3', undefined))
+    // Two models are two conversations, so they must not share a session.
+    expect(seen[0]).not.toBe(seen[1])
+  })
+
+  it('never puts the account identity itself on the wire', async () => {
+    const raw: string[] = []
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      raw.push(JSON.stringify(init.headers))
+      return sse()
+    })
+    const { provider } = make(fetchMock as unknown as typeof fetch, undefined, {
+      raccoon: async () => ({ accessToken: raccoonToken('pu-secret-principal') }),
+    })
+    await collect(provider.stream(options, 'sn-glm-5-3-flash', undefined))
+    // The id is a digest of the principal, never the principal.
+    expect(raw.join(' ')).not.toContain('pu-secret-principal')
+  })
+
+  it('derives the session id from the account, not from process state', () => {
+    // A restart must not present a new session: the whole point of the id is
+    // that one conversation keeps looking like one conversation. A per-process
+    // counter would break exactly this, so the value is pinned here.
+    expect(raccoonSessionId('pu-account-a', 'sn-glm-5-3-flash')).toBe('sess-0-743a3433')
+    // Two accounts and two models are four different conversations.
+    const ids = new Set([
+      raccoonSessionId('pu-account-a', 'sn-glm-5-3-flash'),
+      raccoonSessionId('pu-account-b', 'sn-glm-5-3-flash'),
+      raccoonSessionId('pu-account-a', 'sn-kimi-k3'),
+    ])
+    expect(ids.size).toBe(3)
+    expect(raccoonSessionId('pu-account-a', 'sn-glm-5-3-flash')).toMatch(/^sess-0-[0-9a-f]{8}$/)
+  })
+
+  it('leaves the session header off the business routes', async () => {
+    const seen: Record<string, string>[] = []
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      seen.push(init.headers as Record<string, string>)
+      if (String(url).includes('model_catalog')) return json({ code: 0, data: { categories: [] } })
+      return json({ code: 0, data: {} })
+    })
+    const { provider } = make(fetchMock as unknown as typeof fetch, undefined, {
+      raccoon: async () => ({ accessToken: raccoonToken('pu-account-a') }),
+    })
+    await provider.catalog.models().catch(() => undefined)
+    expect(seen.length).toBeGreaterThan(0)
+    for (const headers of seen) expect(headers['x-raccoon-session-id']).toBeUndefined()
+  })
+
+  it('explains the token-throughput wall instead of surfacing a bare 429', async () => {
+    const fetchMock = vi.fn(async () => json({
+      error: { code: 'user_model_rate_limited', message: '您的模型请求频率超限，请稍后重试', type: 'rate_limit_error' },
+    }, 429))
+    const { provider } = make(fetchMock as unknown as typeof fetch)
+    const error = await collect(provider.stream(options, 'sn-glm-5-3-flash', undefined))
+      .catch((caught: unknown) => caught)
+    expect(error).toBeInstanceOf(Error)
+    expect((error as { status?: number }).status).toBe(429)
+    // The vendor wording is kept, and the cause is named: it is not a rate limit.
+    expect((error as Error).message).toContain('您的模型请求频率超限')
+    expect((error as Error).message).toContain('token 速率')
+    expect((error as Error).message).not.toMatch(/^HTTP 429$/)
+  })
+
+  it('catches the same wall when it arrives inside a 200 stream', async () => {
+    const fetchMock = vi.fn(async () => new Response([
+      'data: {"error":{"code":"user_model_rate_limited","message":"您的模型请求频率超限，请稍后重试","type":"rate_limit_error"}}',
+      '',
+    ].join('\n'), { status: 200, headers: { 'content-type': 'text/event-stream' } }))
+    const { provider } = make(fetchMock as unknown as typeof fetch)
+    const error = await collect(provider.stream(options, 'sn-glm-5-3-flash', undefined))
+      .catch((caught: unknown) => caught)
+    // Without the in-band hook this reads as a generic 502, i.e. a plugin bug.
+    expect((error as { status?: number }).status).toBe(429)
+    expect((error as Error).message).toContain('token 速率')
+  })
+
+  it('still reports an unrelated in-band error as a gateway failure', async () => {
+    const fetchMock = vi.fn(async () => new Response([
+      'data: {"error":{"message":"gateway died"}}',
+      '',
+    ].join('\n'), { status: 200, headers: { 'content-type': 'text/event-stream' } }))
+    const { provider } = make(fetchMock as unknown as typeof fetch)
+    const error = await collect(provider.stream(options, 'sn-glm-5-3-flash', undefined))
+      .catch((caught: unknown) => caught)
+    expect((error as { status?: number }).status).toBe(502)
+    expect((error as Error).message).toBe('gateway died')
   })
 })

@@ -114,6 +114,13 @@ export interface JwtFacts {
   phone?: string
   ownerType?: string
   sessionId?: string
+  /**
+   * The `sub` claim, which is what an account is called on the Raccoon gateway.
+   *
+   * Unlike the token itself it survives a re-sign, so it is the seed a stable
+   * per-account session id is derived from.
+   */
+  subject?: string
 }
 
 /** Normalize seconds, milliseconds, and ISO strings to epoch milliseconds. */
@@ -145,6 +152,7 @@ export function decodeJwtFacts(token: string): JwtFacts {
       ...typeof record.phone === 'string' ? { phone: record.phone } : {},
       ...typeof record.owner_type === 'string' ? { ownerType: record.owner_type } : {},
       ...typeof record.sid === 'string' ? { sessionId: record.sid } : {},
+      ...typeof record.sub === 'string' ? { subject: record.sub } : {},
     }
   } catch {
     return {}

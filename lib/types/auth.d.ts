@@ -44,6 +44,13 @@ export interface JwtFacts {
     phone?: string;
     ownerType?: string;
     sessionId?: string;
+    /**
+     * The `sub` claim, which is what an account is called on the Raccoon gateway.
+     *
+     * Unlike the token itself it survives a re-sign, so it is the seed a stable
+     * per-account session id is derived from.
+     */
+    subject?: string;
 }
 /** Read non-secret JWT claims; malformed tokens simply yield no facts. */
 export declare function decodeJwtFacts(token: string): JwtFacts;
