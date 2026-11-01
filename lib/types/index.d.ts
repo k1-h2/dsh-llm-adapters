@@ -71,11 +71,10 @@ export { CodeArtsProvider, CODEARTS_DEFAULT_EFFORT, CODEARTS_EFFORTS, clampMaxTo
 export type { CodeArtsActivity, CodeArtsModelRow, CodeArtsPackageInfo, CodeArtsProviderOptions, } from './codearts.ts';
 export { CODEARTS_BENEFIT_FALLBACK, CODEARTS_CHAT_URL, CODEARTS_CONTEXT_WINDOWS, CODEARTS_EFFORT_LEVELS, CODEARTS_FALLBACK_CONTEXT_WINDOW, CODEARTS_MAX_OUTPUT_TOKENS, CODEARTS_SNAP_BASE, CODEARTS_VISION_MODELS, codeartsContextWindow, } from './codearts-endpoints.ts';
 export { headersForFetch, signRequestHuawei } from './codearts-sign.ts';
-export { RefreshTokenExpiredError, buildAuthorizeUrl, exchangeAuthorizationCode, exchangeRefreshToken, generateDpopKeyPair, generatePkcePair, readJwtExpiry, signDpopJws, } from './codearts-oauth.ts';
+export { RefreshTokenExpiredError, buildAuthorizeUrl, exchangeAuthorizationCode, exchangeRefreshToken, generateDpopKeyPair, generatePkcePair, otSessionIdOf, readJwtExpiry, signDpopJws, } from './codearts-oauth.ts';
 export type { CodeArtsCredential, DpopKeyPair, DpopPrivateJwk, PkcePair } from './codearts-oauth.ts';
 export { CodeArtsLogin } from './codearts-login.ts';
 export type { CodeArtsLoginAccount, CodeArtsLoginOptions } from './codearts-login.ts';
-export { CODEARTS_SESSION_LIMIT, CODEARTS_SESSION_WINDOW_MS, CodeArtsSessionWindow, sharedSessionWindow, } from './codearts-window.ts';
 export { ProviderHttpError, buildMessages, buildTools, consumeOpenAiStream, openAiStream, sseEvents } from './wire.ts';
 export type { WireMessage } from './wire.ts';
 export { API_PREFIX, buildRows } from './api.ts';

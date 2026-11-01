@@ -46,7 +46,6 @@ import {
 } from './codearts-endpoints.ts'
 import { CodeArtsLogin } from './codearts-login.ts'
 import { headersForFetch, sha256Hex, signRequestHuawei } from './codearts-sign.ts'
-import { CodeArtsSessionWindow, sharedSessionWindow } from './codearts-window.ts'
 import type { CodeArtsCredential } from './codearts-oauth.ts'
 import type { LoginStatus } from './login-page.ts'
 import { parseModelName } from './model-name.ts'
@@ -115,8 +114,6 @@ export interface CodeArtsProviderOptions {
   loginTimeoutMs?: number
   /** Injectable OpenRouter lookup for tests; defaults to the live catalog. */
   openRouter?: OpenRouterLookup
-  /** Chat budget; defaults to the process-wide window (survives hot reloads). */
-  window?: CodeArtsSessionWindow
 }
 
 /** One roster entry before it becomes a model row. */
@@ -306,20 +303,22 @@ const sleep = (ms: number, signal?: AbortSignal): Promise<void> => new Promise((
   signal?.addEventListener('abort', onAbort, { once: true })
 })
 
-/** Retries for a gateway that is busy for reasons the window cannot predict. */
+/** Retries for a gateway that is busy for reasons the caller cannot predict. */
 const QUEUE_ATTEMPTS = 3
-/** Minimum pause before retrying a rejected call; the window adds its own. */
+/** Pause before retrying a rejected call. */
 const QUEUE_BACKOFF_MS = 20_000
 
 /**
  * The message a user sees once waiting is hopeless.
  *
- * The raw gateway text (`TM.00001041`) reads like a bug; the limit is the
- * trial plan's, and the only fix on this side is to say so.
+ * The raw gateway text (`TM.00001041`) reads like a bug. The three concurrent
+ * sessions are the trial plan's, and one plugin chatting under a single session
+ * id is not meant to reach them: the slots are being held by something else on
+ * the same account.
  */
 function queueExhausted(): ProviderHttpError {
   return new ProviderHttpError(
-    'CodeArts 体验版每分钟只允许 3 个会话，当前已被占满。请稍等片刻再发，或关闭其它 CodeArts 会话。',
+    'CodeArts 这个账号的 3 个并发会话已被占满（通常是码道 IDE 或另一台设备），请稍后再发，或关闭其它 CodeArts 会话。',
     429,
   )
 }
@@ -356,7 +355,6 @@ export class CodeArtsProvider {
   /** Models that answered `InferHub.4004.200`: no allowance pack to bill. */
   private readonly noBenefit = new Set<string>()
   private noBenefitLoaded = false
-  private readonly window: CodeArtsSessionWindow
   private readonly openRouter: OpenRouterLookup
   private readonly sessionId = randomUUID()
   /**
@@ -371,7 +369,6 @@ export class CodeArtsProvider {
   private imageCacheWrite: Promise<void> = Promise.resolve()
 
   constructor(private readonly options: CodeArtsProviderOptions) {
-    this.window = options.window ?? sharedSessionWindow()
     this.openRouter = options.openRouter ?? new OpenRouterCatalog(options.fetchImpl ?? fetch)
     this.catalog = new ModelCatalog(() => this.loadModels(), options.ttlMs)
     this.login = new CodeArtsLogin({
@@ -380,9 +377,7 @@ export class CodeArtsProvider {
       ...options.logger === undefined ? {} : { logger: options.logger },
       save: async (account) => {
         await options.store.saveCodearts(account as CodeArtsAccountRecord)
-        // A different account starts with a clean budget: the slots the gateway
-        // remembers belong to the old one.
-        this.window.reset()
+        // A different account has different verdicts about what it may bill.
         this.noBenefit.clear()
         this.invalidateModels()
         this.invalidateQuota()
@@ -784,7 +779,7 @@ export class CodeArtsProvider {
     }
   }
 
-  /** Ask the vision model to describe one image, within the same chat budget. */
+  /** Ask the vision model to describe one image; another turn on the same session. */
   private async describeImage(dataUrl: string, signal?: AbortSignal): Promise<string> {
     const payload = JSON.stringify({
       model: CODEARTS_VISION_MODEL,
@@ -802,8 +797,6 @@ export class CodeArtsProvider {
     let authRefreshed = false
     let queueAttempts = 0
     for (;;) {
-      // The vision model is another chat session, so it spends the same budget.
-      const slot = await this.window.open(signal)
       let response: Response
       try {
         response = await this.send(chatId, payload, CODEARTS_VISION_MODEL, false, signal)
@@ -814,10 +807,9 @@ export class CodeArtsProvider {
           continue
         }
         if (error instanceof CodeArtsRetry && error.kind === 'queue') {
-          slot.release()
           if (queueAttempts < QUEUE_ATTEMPTS) {
             queueAttempts++
-            await sleep(Math.max(this.window.waitMs(), QUEUE_BACKOFF_MS), signal)
+            await sleep(QUEUE_BACKOFF_MS, signal)
             continue
           }
           throw queueExhausted()
@@ -842,10 +834,9 @@ export class CodeArtsProvider {
         }
       } catch (error) {
         if (error instanceof CodeArtsRetry && error.kind === 'queue') {
-          slot.release()
           if (queueAttempts < QUEUE_ATTEMPTS) {
             queueAttempts++
-            await sleep(Math.max(this.window.waitMs(), QUEUE_BACKOFF_MS), signal)
+            await sleep(QUEUE_BACKOFF_MS, signal)
             continue
           }
           throw queueExhausted()
@@ -906,10 +897,6 @@ export class CodeArtsProvider {
     let benefitDropped = false
     let queueAttempts = 0
     for (;;) {
-      // The plan allows three sessions a minute for the whole account, and a
-      // rejected call spends one just like a served one. Wait for a slot here
-      // instead of firing into `TM.00001041` and hoping a retry lands later.
-      const slot = await this.window.open(options.signal)
       let response: Response
       try {
         response = await this.send(chatId, payload, model, benefitDropped, options.signal)
@@ -933,8 +920,7 @@ export class CodeArtsProvider {
           }
           if (error.kind === 'queue' && queueAttempts < QUEUE_ATTEMPTS) {
             queueAttempts++
-            slot.release()
-            await sleep(Math.max(this.window.waitMs(), QUEUE_BACKOFF_MS), options.signal)
+            await sleep(QUEUE_BACKOFF_MS, options.signal)
             continue
           }
           if (error.kind === 'queue') throw queueExhausted()
@@ -966,8 +952,7 @@ export class CodeArtsProvider {
         // safe while nothing has been emitted, or the answer would repeat.
         if (!produced && error instanceof CodeArtsRetry && error.kind === 'queue' && queueAttempts < QUEUE_ATTEMPTS) {
           queueAttempts++
-          slot.release()
-          await sleep(Math.max(this.window.waitMs(), QUEUE_BACKOFF_MS), options.signal)
+          await sleep(QUEUE_BACKOFF_MS, options.signal)
           continue
         }
         if (error instanceof CodeArtsRetry && error.kind === 'queue') throw queueExhausted()
@@ -997,6 +982,9 @@ export class CodeArtsProvider {
   ): Promise<Response> {
     const credential = await this.credential()
     const benefit = !benefitDropped && this.isBenefitModel(model)
+    // A credential whose token carries no identity falls back to this process's
+    // own id: still one session for the account, never one per request.
+    const otSessionId = credential.otSessionId ?? this.sessionId.replace(/-/g, '')
     const signed = await signRequestHuawei(
       credential.accessKeyId,
       credential.secretAccessKey,
@@ -1015,6 +1003,14 @@ export class CodeArtsProvider {
       'chat-id': chatId,
       'session-id': this.sessionId,
       lang: 'en',
+      // Measured on a real account: the gateway counts the account's concurrent
+      // sessions by `x-ot-session-id`, not by `chat-id` / `session-id`. One stable
+      // value is why the trial plan stops charging its own history for every
+      // turn; the trace id stays per request, as the IDE sends it. These join the
+      // unsigned set — `chat-id` and `session-id` already do.
+      'x-ot-session-id': otSessionId,
+      'user-session-id': otSessionId,
+      'x-ot-trace-id': randomUUID().replace(/-/g, ''),
     }
     const timeout = AbortSignal.timeout(Math.max(this.options.timeoutMs(), 60_000))
     const response = await this.fetcher(CODEARTS_CHAT_URL, {
@@ -1052,7 +1048,6 @@ export class CodeArtsProvider {
 
   async logoutAccount(): Promise<void> {
     await this.options.auth.logout()
-    this.window.reset()
     this.invalidateModels()
     this.invalidateQuota()
   }

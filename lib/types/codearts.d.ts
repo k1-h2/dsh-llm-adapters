@@ -19,7 +19,6 @@ import type { AccountStore } from './account-store.ts';
 import { CodeArtsAuth } from './auth.ts';
 import type { AuthStatus } from './auth.ts';
 import type { ProviderModel } from './catalog.ts';
-import { CodeArtsSessionWindow } from './codearts-window.ts';
 import type { LoginStatus } from './login-page.ts';
 import type { OpenRouterLookup } from './openrouter.ts';
 import type { CheckinStatus, QuotaPack, QuotaSnapshot } from './types.ts';
@@ -72,8 +71,6 @@ export interface CodeArtsProviderOptions {
     loginTimeoutMs?: number;
     /** Injectable OpenRouter lookup for tests; defaults to the live catalog. */
     openRouter?: OpenRouterLookup;
-    /** Chat budget; defaults to the process-wide window (survives hot reloads). */
-    window?: CodeArtsSessionWindow;
 }
 /** One roster entry before it becomes a model row. */
 export interface CodeArtsModelRow {
@@ -110,7 +107,6 @@ export declare class CodeArtsProvider {
     /** Models that answered `InferHub.4004.200`: no allowance pack to bill. */
     private readonly noBenefit;
     private noBenefitLoaded;
-    private readonly window;
     private readonly openRouter;
     private readonly sessionId;
     /**
@@ -159,7 +155,7 @@ export declare class CodeArtsProvider {
      * so a conversation pays for the description once.
      */
     private relayImages;
-    /** Ask the vision model to describe one image, within the same chat budget. */
+    /** Ask the vision model to describe one image; another turn on the same session. */
     private describeImage;
     stream(options: GenerateOptions, model: string, readImage: ReadImage | undefined, onInvalidate: () => void): AsyncGenerator<StreamChunk>;
     private send;

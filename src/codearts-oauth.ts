@@ -35,6 +35,17 @@ export interface CodeArtsCredential {
   dpopPrivateJwk?: DpopPrivateJwk
   /** Display only, from the refresh token's profile; never used for signing. */
   userName?: string
+  /**
+   * The id the gateway counts concurrent sessions against (`x-ot-session-id`).
+   *
+   * Measured on a real account: the three-session cap is keyed by this header,
+   * not by `Chat-Id` / `Session-Id`. A per-request value makes every call a new
+   * session, so the account spends its own budget on its own history and the
+   * fourth call of the minute comes back `TM.00001041`. Derived from the account
+   * identity instead of stored at random: the same value in every process, and
+   * one that survives a token renewal.
+   */
+  otSessionId?: string
 }
 
 /** Who the credential belongs to, as the portal encoded it in the token. */
@@ -180,6 +191,19 @@ export function readUserProfile(token: string | undefined): CodeArtsUserProfile 
   }
 }
 
+/**
+ * The session id this account should chat under, derived from who the account is.
+ *
+ * 32 lowercase hex, the shape the IDE's own kernel sends. Nothing but stability
+ * matters here — the gateway uses the value as a key, not as an identity — so it
+ * is hashed from the principal id rather than kept in a file.
+ */
+export function otSessionIdOf(profile: CodeArtsUserProfile | undefined): string | undefined {
+  const seed = profile?.userId ?? profile?.userName
+  if (seed === undefined) return undefined
+  return createHash('sha256').update(`codearts-ot-session:${seed}`).digest('hex').slice(0, 32)
+}
+
 /** The portal URL the browser opens; the callback is on loopback. */
 export function buildAuthorizeUrl(port: number, pkce: PkcePair, ticketId: string): string {
   return `${CODEARTS_PORTAL_AUTHORIZE}?theme=2&locale=zh-cn`
@@ -263,13 +287,18 @@ export async function exchangeRefreshToken(
   }, keyPair, fetcher)
   const credential = credentialFrom(token, codeVerifier, keyPair)
   // A refresh response may omit the rotated refresh token; keep the old one so
-  // the next refresh is still possible. The name rides on that token, so it has
-  // to be read from whichever one this credential ends up carrying.
-  const userName = credential.userName ?? readUserProfile(refreshToken)?.userName
+  // the next refresh is still possible. The name and the account identity ride on
+  // that token, so both are read from whichever one this credential ends up
+  // carrying: a response without a profile must not hand the account a new
+  // session id, or every renewal would cost it a slot again.
+  const previous = readUserProfile(refreshToken)
+  const userName = credential.userName ?? previous?.userName
+  const otSessionId = credential.otSessionId ?? otSessionIdOf(previous)
   return {
     ...credential,
     refreshToken: credential.refreshToken ?? refreshToken,
     ...userName === undefined ? {} : { userName },
+    ...otSessionId === undefined ? {} : { otSessionId },
   }
 }
 
@@ -277,14 +306,16 @@ function credentialFrom(token: TokenResponse, codeVerifier: string, keyPair: Dpo
   const credentials = token.credentials ?? {}
   const expiration = credentials.expiration
   const expiresAt = expiration === undefined ? undefined : Date.parse(expiration)
-  const userName = readUserProfile(token.refresh_token)?.userName
+  const profile = readUserProfile(token.refresh_token)
+  const otSessionId = otSessionIdOf(profile)
   return {
     accessKeyId: credentials.access_key_id ?? '',
     secretAccessKey: credentials.secret_access_key ?? '',
     securityToken: credentials.security_token ?? '',
     ...expiresAt === undefined || Number.isNaN(expiresAt) ? {} : { expiresAt },
     ...token.refresh_token === undefined ? {} : { refreshToken: token.refresh_token },
-    ...userName === undefined ? {} : { userName },
+    ...profile?.userName === undefined ? {} : { userName: profile.userName },
+    ...otSessionId === undefined ? {} : { otSessionId },
     codeVerifier,
     dpopPrivateJwk: keyPair.privateKeyJwk,
   }

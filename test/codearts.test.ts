@@ -12,12 +12,11 @@ import {
   CODEARTS_EFFORT_LEVELS, CODEARTS_FALLBACK_CONTEXT_WINDOW, codeartsContextWindow,
 } from '../src/codearts-endpoints.ts'
 import { headersForFetch, sdkDateStamp, sha256Hex, signRequestHuawei } from '../src/codearts-sign.ts'
-import { CodeArtsSessionWindow } from '../src/codearts-window.ts'
 import { EMPTY_OPENROUTER_INDEX, buildOpenRouterIndex } from '../src/openrouter.ts'
 import type { OpenRouterIndex } from '../src/openrouter.ts'
 import {
   RefreshTokenExpiredError, buildAuthorizeUrl, exchangeRefreshToken, generateDpopKeyPair, generatePkcePair,
-  readJwtExpiry, readUserProfile, signDpopJws,
+  otSessionIdOf, readJwtExpiry, readUserProfile, signDpopJws,
 } from '../src/codearts-oauth.ts'
 import { ProviderHttpError } from '../src/wire.ts'
 
@@ -218,6 +217,36 @@ describe('CodeArts identity', () => {
     )
     expect(credential.userName).toBe('alice')
   })
+
+  it('derives one session id per account and none without an identity', () => {
+    const token = refreshToken({
+      account_id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      account_name: 'alice',
+      principal_id: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    })
+    const profile = readUserProfile(token)
+    const id = otSessionIdOf(profile)
+    expect(id).toMatch(/^[0-9a-f]{32}$/)
+    // Same account, same id in every process: a restart must not open a second
+    // session against the plan's three.
+    expect(otSessionIdOf(readUserProfile(token))).toBe(id)
+    expect(otSessionIdOf({ userName: 'a-renamed-account', userId: profile?.userId })).toBe(id)
+    expect(otSessionIdOf({ userName: 'bob' })).toMatch(/^[0-9a-f]{32}$/)
+    expect(otSessionIdOf({ userName: 'bob' })).not.toBe(id)
+    expect(otSessionIdOf({})).toBeUndefined()
+    expect(otSessionIdOf(undefined)).toBeUndefined()
+  })
+
+  it('keeps the session id when a renewal answers without a profile', async () => {
+    const previous = refreshToken({ principal_id: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', account_name: 'alice' })
+    const fetcher = vi.fn(async () => json({
+      credentials: { access_key_id: 'AK', secret_access_key: 'SK', security_token: 'ST' },
+    }))
+    const credential = await exchangeRefreshToken(
+      previous, 'verifier', generateDpopKeyPair(), fetcher as unknown as typeof fetch,
+    )
+    expect(credential.otSessionId).toBe(otSessionIdOf(readUserProfile(previous)))
+  })
 })
 
 describe('CodeArts quota', () => {
@@ -310,7 +339,6 @@ describe('CodeArts provider', () => {
   function make(
     auth: Record<string, unknown>,
     fetchImpl: typeof fetch,
-    window = new CodeArtsSessionWindow(),
     openRouter: OpenRouterIndex = EMPTY_OPENROUTER_INDEX,
   ): CodeArtsProvider {
     return new CodeArtsProvider({
@@ -326,7 +354,6 @@ describe('CodeArts provider', () => {
       forceVision: () => new Set(),
       openRouter: { models: async () => openRouter, invalidate: () => {} },
       fetchImpl,
-      window,
     })
   }
 
@@ -491,6 +518,62 @@ describe('CodeArts provider', () => {
       max_tokens: 65_536,
     })
     expect(body.tools).toBeUndefined()
+  })
+
+  it('keeps every turn on one account session, and the trace id on one per request', async () => {
+    const OT_ID = '0123456789abcdef0123456789abcdef'
+    const seen: Record<string, string>[] = []
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      seen.push(init.headers as Record<string, string>)
+      return sse([
+        JSON.stringify({ choices: [{ delta: { content: 'hi' }, finish_reason: 'stop' }] }),
+        '[DONE]',
+      ])
+    })
+    const credential = async () => ({
+      accessKeyId: 'AK', secretAccessKey: 'SK', securityToken: 'ST', otSessionId: OT_ID,
+    })
+    const provider = make({
+      status: async () => ({ signedIn: true }),
+      credential,
+      refresh: credential,
+      logout: async () => undefined,
+    }, fetchMock as unknown as typeof fetch)
+
+    for (let i = 0; i < 3; i++) {
+      await collect(provider.stream(options, 'glm-5.3', undefined, () => undefined))
+    }
+    // The gateway counts the account's concurrent sessions by this header, so
+    // three turns must look like one session, not three slots.
+    expect(seen).toHaveLength(3)
+    for (const headers of seen) {
+      expect(headers['x-ot-session-id']).toBe(OT_ID)
+      expect(headers['user-session-id']).toBe(OT_ID)
+    }
+    expect(new Set(seen.map(headers => headers['x-ot-trace-id'])).size).toBe(3)
+    // Unsigned, like `chat-id`: putting these in the canonical request breaks the HMAC.
+    const authorization = (seen[0]!.Authorization ?? seen[0]!.authorization) as string
+    const signed = /SignedHeaders=([^,]+)/.exec(authorization)?.[1] ?? ''
+    expect(signed).not.toContain('x-ot-session-id')
+    expect(signed).not.toContain('chat-id')
+  })
+
+  it('still sends one stable session id when the credential carries no account identity', async () => {
+    const seen: Record<string, string>[] = []
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      seen.push(init.headers as Record<string, string>)
+      return sse([
+        JSON.stringify({ choices: [{ delta: { content: 'hi' }, finish_reason: 'stop' }] }),
+        '[DONE]',
+      ])
+    })
+    const provider = make(signedIn(), fetchMock as unknown as typeof fetch)
+
+    await collect(provider.stream(options, 'glm-5.3', undefined, () => undefined))
+    await collect(provider.stream(options, 'glm-5.3', undefined, () => undefined))
+    const first = seen[0]!['x-ot-session-id'] as string
+    expect(first).toMatch(/^[0-9a-f]{32}$/)
+    expect(seen[1]!['x-ot-session-id']).toBe(first)
   })
 
   it('forwards a reasoning level without disturbing the two-state switch', async () => {
@@ -668,7 +751,7 @@ describe('CodeArts provider', () => {
       credential: async () => ({ accessKeyId: 'AK', secretAccessKey: 'SK', securityToken: 'ST' }),
       refresh: async () => ({ accessKeyId: 'AK', secretAccessKey: 'SK', securityToken: 'ST' }),
       logout: async () => undefined,
-    }, fetchMock as unknown as typeof fetch, new CodeArtsSessionWindow(), buildOpenRouterIndex([
+    }, fetchMock as unknown as typeof fetch, buildOpenRouterIndex([
       {
         id: 'deepseek/deepseek-v4.1-flash',
         name: 'DeepSeek V4.1 Flash',
@@ -794,13 +877,12 @@ describe('CodeArts provider', () => {
         JSON.stringify({ error_code: 'TM.00001041', error_msg: '并发会话数已达上限(3个)' }),
         { status: 429, headers: { 'content-type': 'application/json' } },
       ))
-      // A wide window keeps this test about the retry budget, not the wait.
       const provider = make({
         status: async () => ({ signedIn: true }),
         credential: async () => ({ accessKeyId: 'AK', secretAccessKey: 'SK', securityToken: 'ST' }),
         refresh: async () => ({ accessKeyId: 'AK', secretAccessKey: 'SK', securityToken: 'ST' }),
         logout: async () => undefined,
-      }, fetchMock as unknown as typeof fetch, new CodeArtsSessionWindow(100, 60_000))
+      }, fetchMock as unknown as typeof fetch)
 
       const pending = collect(provider.stream(options, 'glm-5.3', undefined, () => undefined))
         .catch((caught: unknown) => caught)
@@ -808,7 +890,7 @@ describe('CodeArts provider', () => {
       const error = await pending
       expect(error).toBeInstanceOf(ProviderHttpError)
       expect((error as ProviderHttpError).status).toBe(429)
-      expect((error as ProviderHttpError).message).toContain('3 个会话')
+      expect((error as ProviderHttpError).message).toContain('并发会话')
       expect(fetchMock).toHaveBeenCalledTimes(4)
     } finally {
       vi.useRealTimers()

@@ -84,11 +84,18 @@ export interface CodeArtsAccountRecord {
     };
     userName?: string;
     /**
+     * The `x-ot-session-id` this account chats under: one stable value instead of
+     * one per request, because the gateway counts concurrent sessions by it.
+     *
+     * A record written before the field existed derives the same value from the
+     * refresh token's profile, so an existing sign-in needs no new login.
+     */
+    otSessionId?: string;
+    /**
      * Models the account answered `InferHub.4004.200` for.
      *
-     * The verdict is worth persisting: asking with `maas_type: benefit` spends
-     * one of the three chat slots the plan allows per minute, even though the
-     * call cannot succeed.
+     * Worth persisting: the account has no allowance pack for them, so without the
+     * verdict every call would pay for a request that cannot succeed.
      */
     noBenefit?: string[];
     loginAt: number;

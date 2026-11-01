@@ -27,7 +27,6 @@ src/
   codearts-sign.ts   华为 SDK-HMAC-SHA256 请求签名
   codearts-endpoints.ts 网关基址、窗口静态表、benefit 与 VL 清单
   codearts.ts        CodeArts 双目录合并 / 签名流式调用 / 额度 / 签到
-  codearts-window.ts CodeArts 会话预算：每 60 秒 3 次的排队窗口
   catalog.ts         目录解析、模型缓存、能力来源合并
   model-name.ts      公共名称规则：括号标签、倍率、连字符归一化、匹配 key
   openrouter.ts      OpenRouter 模型表：原子同步、磁盘缓存、通配匹配档位与模态
@@ -258,8 +257,8 @@ IDE 自身 provider 配置的 `limit.context`（`codearts-endpoints.ts` 的静�
 4. 转述结果按 `sha256(data URL)` 缓存到 `$DSH_HOME/llm-adapters/codearts-image-cache.json`（最多
    64 条，`tmp → rename` 原子写）。同一张图在后续轮次、甚至重启后都直接复用，不再占会话额度。
 
-每张**新**图是一次独立的 chat 请求，和主请求共用 `CodeArtsSessionWindow` 的 3 次/分钟额度，所以
-`describeImage` 也排队、也会在 `TM.00001041` 时退名额重试。`hasImageParts` 先做一次纯内存检查，
+每张**新**图是一次独立的 chat 请求，但它和主请求共用同一个会话（同一个 `x-ot-session-id`），所以
+不再额外占一个名额；`describeImage` 只在 `TM.00001041` 时退避重试。`hasImageParts` 先做一次纯内存检查，
 没有图片的请求完全不碰缓存文件。
 
 思考只有两档：`off` / `on`。网关切的是**顶层** `thinking: { type: 'disabled' }`，不是
@@ -294,18 +293,31 @@ IDE 自身 provider 配置的 `limit.context`（`codearts-endpoints.ts` 的静�
 `wire.ts` 的 SSE 消费被拆成 `consumeOpenAiStream`：CodeArts 要自己签名 fetch，但帧处理与
 `openAiStream` 完全相同；`onFrame` 钩子用来抓「HTTP 200 + SSE 内嵌 `error_code`」的排队/额度错误。
 
-### CodeArts 的会话预算（`codearts-window.ts`）
+### CodeArts 的会话计数键（`x-ot-session-id`）
 
-体验版按账号限制会话：**每滚动 60 秒 3 次**，全模型共用，与并发无关，换 `session-id` 不加额度。
-实网连续 6 次串行请求的结果是 `OK OK OK` 后整批被 `TM.00001041` 拒绝，约 61 秒后一起恢复；被拒的
-请求**不**延长锁定（第 4 次在 72.9s 被拒、93.0s 与 113.2s 再被拒，133.4s 就恢复了，而不是
-113.2 + 60）。反过来说，`InferHub.4004.200`（缺 benefit 包）是**会**占额度的，所以那条路径靠
-`noBenefit` 记住结论，而不是每次重猜。
+体验版按账号限制的是**并发会话**，不是每分钟请求数：3 个名额，一个会话在请求结束后仍占位约 60 秒。
+决定占哪个名额的是 `x-ot-session-id`，不是 `chat-id` / `session-id` / `prompt_cache_key`（后三者只管
+前缀缓存亲和）。实网对照，同一账号、同一个 `glm-5.3-flash`、每条 `max_tokens: 16`，臂间排空 78 秒：
 
-`CodeArtsSessionWindow` 因此做两件事：发请求前排队拿名额（满了就等最老的滑出窗口，`MARGIN_MS`
-留 1.5 秒吸收「本地开始 → 网关计数」之间的网络时延），以及在被 `TM.00001041` 明确拒绝时把名额
-**退回**（`slot.release()`）——占着拒绝请求的名额，会把下一分钟拖成每 20 秒一次，而网关根本没记这
-一笔。窗口是进程内单例：热重载重置计数只会让下一次请求撞上网关还记得的额度。
+| 会话头 | 6 条串行 | 3 条并发 | 12 条串行 |
+| --- | --- | --- | --- |
+| 不发（每请求一个新会话） | 3 成功 + 3 × `TM.00001041` | — | — |
+| 账号级稳定值 | 6/6，共 15.8 秒 | 3/3，1.5–1.7 秒 | 12/12，一条不排队 |
+
+「复用 id 挡不住撞线」的旧结论测的是 `session-id`，与这里不冲突；早期那个 3 次/60 秒的排队窗口
+（`codearts-window.ts`）也因此删掉了——留着它，插件自己就还在按分钟限自己。
+
+这个值是**派生**的，不是随机生成的：对 refresh token 里的 `principal_id`（缺身份时退到
+`account_name`）加固定前缀做 SHA-256，取 32 位 hex。好处是同一个账号在任何进程、任何一次续期之后
+都是同一个值，老记录不用重新登录也能补上；解析出来的那份同时存进 `accounts.json`（`otSessionId`，
+续期写回时保留）。令牌里解不出身份时退到本进程的 id——仍然是一个会话，不会退回每请求一个会话。
+
+这不是绕过计费：稳定会话与逐请求新会话两条臂的计量完全一致（每条 944 token、0.12 积分，SSE 长度也
+一样），上游的 token 计数器同步增长。这一点和「非流式请求返回 token 却不扣分」不同——后者是计费漏洞，
+不采用。上游也没有释放会话的接口（`/api/v2/chat/stop`、`/session/close`、`/sessions` 实测全部 404），
+所以被 `TM.00001041` 拒绝时只有退避重试（`QUEUE_ATTEMPTS` × `QUEUE_BACKOFF_MS`），用尽后给可读错误。
+带 `maas_type: benefit` 的失败（`InferHub.4004.200`）在过去每请求一会话的口径下确实各占一个名额，
+现在共用一个会话，但结论仍由 `noBenefit` 记住：没人该为一场注定失败的请求付一整轮时间。
 
 ### 公共的名称与能力规则
 

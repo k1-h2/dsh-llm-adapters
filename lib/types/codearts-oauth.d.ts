@@ -28,6 +28,17 @@ export interface CodeArtsCredential {
     dpopPrivateJwk?: DpopPrivateJwk;
     /** Display only, from the refresh token's profile; never used for signing. */
     userName?: string;
+    /**
+     * The id the gateway counts concurrent sessions against (`x-ot-session-id`).
+     *
+     * Measured on a real account: the three-session cap is keyed by this header,
+     * not by `Chat-Id` / `Session-Id`. A per-request value makes every call a new
+     * session, so the account spends its own budget on its own history and the
+     * fourth call of the minute comes back `TM.00001041`. Derived from the account
+     * identity instead of stored at random: the same value in every process, and
+     * one that survives a token renewal.
+     */
+    otSessionId?: string;
 }
 /** Who the credential belongs to, as the portal encoded it in the token. */
 export interface CodeArtsUserProfile {
@@ -75,6 +86,14 @@ export declare function readJwtExpiry(token: string): number | undefined;
  * request; without it the field stays empty and the page says so.
  */
 export declare function readUserProfile(token: string | undefined): CodeArtsUserProfile | undefined;
+/**
+ * The session id this account should chat under, derived from who the account is.
+ *
+ * 32 lowercase hex, the shape the IDE's own kernel sends. Nothing but stability
+ * matters here — the gateway uses the value as a key, not as an identity — so it
+ * is hashed from the principal id rather than kept in a file.
+ */
+export declare function otSessionIdOf(profile: CodeArtsUserProfile | undefined): string | undefined;
 /** The portal URL the browser opens; the callback is on loopback. */
 export declare function buildAuthorizeUrl(port: number, pkce: PkcePair, ticketId: string): string;
 /** Where the browser lands after a successful or failed exchange. */

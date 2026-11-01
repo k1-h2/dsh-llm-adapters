@@ -14,7 +14,7 @@ import type {
   AccountStore, CodeArtsAccountRecord, LoomyAccountRecord, RaccoonAccountRecord, TraeAccountRecord,
 } from './account-store.ts'
 import type { TraeRegion } from './brand.ts'
-import { RefreshTokenExpiredError, exchangeRefreshToken, keyPairFromStoredJwk, readUserProfile } from './codearts-oauth.ts'
+import { RefreshTokenExpiredError, exchangeRefreshToken, keyPairFromStoredJwk, otSessionIdOf, readUserProfile } from './codearts-oauth.ts'
 import type { CodeArtsCredential } from './codearts-oauth.ts'
 import { responseError } from './http.ts'
 import { TRAE_REGION_PROFILES, TRAE_WEB_USER_AGENT } from './trae-endpoints.ts'
@@ -546,6 +546,7 @@ export class CodeArtsAuth {
           ...next.expiresAt === undefined ? {} : { expiresAt: next.expiresAt },
           ...next.refreshToken === undefined ? {} : { refreshToken: next.refreshToken },
           ...next.userName === undefined ? {} : { userName: next.userName },
+          ...next.otSessionId === undefined ? {} : { otSessionId: next.otSessionId },
         })
         this.lastError = undefined
         return next
@@ -570,6 +571,10 @@ export class CodeArtsAuth {
 }
 
 function credentialOf(record: CodeArtsAccountRecord): CodeArtsCredential {
+  // A record written before `otSessionId` existed derives the very value the
+  // login would have stored, so an account that is already signed in gets its
+  // single session without a new login.
+  const otSessionId = record.otSessionId ?? otSessionIdOf(readUserProfile(record.refreshToken))
   return {
     accessKeyId: record.accessKeyId,
     secretAccessKey: record.secretAccessKey,
@@ -578,5 +583,6 @@ function credentialOf(record: CodeArtsAccountRecord): CodeArtsCredential {
     ...record.refreshToken === undefined ? {} : { refreshToken: record.refreshToken },
     ...record.codeVerifier === undefined ? {} : { codeVerifier: record.codeVerifier },
     ...record.dpopPrivateJwk === undefined ? {} : { dpopPrivateJwk: record.dpopPrivateJwk },
+    ...otSessionId === undefined ? {} : { otSessionId },
   }
 }
