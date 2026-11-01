@@ -208,8 +208,16 @@ SHA-512 摘要 + JSON。插件从解密结果取 `Cloud-IDE-JWT`，从
 没有独立的签到端点：积分由服务端在当天首次网页访问时发放，`setting_info` 的
 `point_grant_popups` 只是通知，`/points/v2/bills` 里 `biz_type=daily_grant` 的记录才是可核对的
 凭据。插件只把 `grant_at` 属于今天（北京时间）的记录算作今日签到，并把 `created_at` 作为到账时间
-显示；`ensureDailyCheckin()` 先读流水，未到账才以 web 身份调用 `setting_info`。宿主按
-`raccoonCheckinMinutes`（0 关闭）定时跑这一遍，卡片上的网页入口始终保留。
+显示；这条路径是**只读**的：`checkinStatus()` 只读 `/points/v2/bills`，卡片上的按钮是「检测今日积分」，
+不实现 `claimCheckin()`。
+
+上游确实存在一条能主动触发发放的路径——`POST /office/v3/setting_info` 就是网页当日首次加载时发的那个
+请求，重放它即可让服务端下发积分。插件**刻意不做**这件事，两个原因：一是那是在用户没要求的那一刻替账号
+做状态变更；二是 harness 每轮重发上下文的场景下，把「顺带触发一次网页访问」藏进「看一眼到账没有」里，
+等于让观察动作带副作用。领取交给官网，「打开网页签到」链接始终保留。
+
+自动监测同样不做：按间隔定时跑一遍意味着每个间隔都花掉一次真实请求（无论积分是否迟到），并且会在用户
+不知情时消耗账号额度。没有 `raccoonCheckinMinutes` 这个配置项，也没有定时器。
 
 ### 小浣熊的吞吐墙与会话 id（`raccoon.ts`）
 

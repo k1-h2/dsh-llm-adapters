@@ -45,8 +45,6 @@ export interface Config {
     catalogFetchTimeoutSeconds?: number;
     /** Minutes between automatic OpenRouter syncs; 0 disables the schedule. */
     openRouterSyncMinutes?: number;
-    /** Minutes between Raccoon daily-point checks; 0 disables the monitor. */
-    raccoonCheckinMinutes?: number;
 }
 export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     loomyEnabled: z<boolean, boolean, "volatile-defined">;
@@ -82,7 +80,6 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     modelCacheTtlSeconds: z<number, number, "volatile-defined">;
     catalogFetchTimeoutSeconds: z<number, number, "volatile-defined">;
     openRouterSyncMinutes: z<number, number, "volatile-defined">;
-    raccoonCheckinMinutes: z<number, number, "volatile-defined">;
 }>>, Schemastery.ObjectT<NoInfer<{
     loomyEnabled: z<boolean, boolean, "volatile-defined">;
     raccoonEnabled: z<boolean, boolean, "volatile-defined">;
@@ -117,7 +114,6 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     modelCacheTtlSeconds: z<number, number, "volatile-defined">;
     catalogFetchTimeoutSeconds: z<number, number, "volatile-defined">;
     openRouterSyncMinutes: z<number, number, "volatile-defined">;
-    raccoonCheckinMinutes: z<number, number, "volatile-defined">;
 }>>, "plain">;
 export interface ResolvedConfig {
     loomyEnabled: boolean;
@@ -153,7 +149,6 @@ export interface ResolvedConfig {
     modelCacheTtlMs: number;
     catalogFetchTimeoutMs: number;
     openRouterSyncMinutes: number;
-    raccoonCheckinMinutes: number;
 }
 export type ParsedConfig = {
     readonly [K in keyof Config]?: unknown;

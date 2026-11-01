@@ -271,7 +271,6 @@ export class RaccoonProvider {
   readonly catalog: ModelCatalog
   private quotaCache: { at: number, value: QuotaSnapshot } | undefined
   private quotaInflight: Promise<QuotaSnapshot> | undefined
-  private checkinInflight: Promise<CheckinStatus> | undefined
   private loginFlow: RaccoonQrLogin | undefined
   private readonly openRouter: OpenRouterLookup
   private readonly sessionIds: RaccoonSessionIds
@@ -504,6 +503,15 @@ export class RaccoonProvider {
     return undefined
   }
 
+  /**
+   * Read today's grant. **Read-only on purpose.**
+   *
+   * The gateway has no claim endpoint: points are issued on the day's first
+   * website visit. Replaying that visit (`setting_info`) can trigger the grant
+   * from here, but doing so takes a state-changing action on the account without
+   * the user asking for it in that moment, so the plugin only reports. Claiming
+   * is the website's job, and the card links there.
+   */
   async checkinStatus(): Promise<CheckinStatus> {
     const grant = await this.dailyGrant()
     if (grant !== undefined) {
@@ -526,52 +534,6 @@ export class RaccoonProvider {
     }
   }
 
-  async claimCheckin(): Promise<CheckinStatus> {
-    // `setting_info` is the call the website makes on load; it is also the one
-    // that carries the point-grant popups. Ask as the web client so the server
-    // treats it as a normal page visit rather than a desktop API call.
-    await this.authorizedJson('/office/v3/setting_info', {}, {
-      'x-client-platform': 'web',
-      'x-client-version': '131.0.0.0',
-    })
-    const grant = await this.dailyGrant()
-    if (grant === undefined) {
-      return {
-        available: true,
-        claimed: false,
-        deviceClaimed: false,
-        message: '每日积分尚未到账；请打开网页签到',
-        url: RACCOON_CHECKIN_URL,
-      }
-    }
-    this.invalidateQuota()
-    return {
-      available: true,
-      claimed: true,
-      deviceClaimed: false,
-      ...grant.points === undefined ? {} : { reward: grant.points },
-      ...grant.grantedAt === undefined ? {} : { grantedAt: grant.grantedAt },
-      message: '每日积分已到账',
-      url: RACCOON_CHECKIN_URL,
-    }
-  }
-
-  /**
-   * One automatic check-in pass: report today's grant, or ask the website path
-   * to issue it. Shared so overlapping timers cannot spend two call slots.
-   */
-  async ensureDailyCheckin(): Promise<CheckinStatus> {
-    if (this.checkinInflight !== undefined) return this.checkinInflight
-    this.checkinInflight = (async () => {
-      const status = await this.checkinStatus()
-      return status.claimed ? status : this.claimCheckin()
-    })()
-    try {
-      return await this.checkinInflight
-    } finally {
-      this.checkinInflight = undefined
-    }
-  }
   async *stream(
     options: GenerateOptions,
     model: string,

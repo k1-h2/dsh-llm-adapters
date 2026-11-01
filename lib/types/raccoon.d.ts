@@ -105,7 +105,6 @@ export declare class RaccoonProvider {
     readonly catalog: ModelCatalog;
     private quotaCache;
     private quotaInflight;
-    private checkinInflight;
     private loginFlow;
     private readonly openRouter;
     private readonly sessionIds;
@@ -147,12 +146,15 @@ export declare class RaccoonProvider {
      * `point_grant_popups` on `setting_info`; the bills list is the durable proof.
      */
     private dailyGrant;
-    checkinStatus(): Promise<CheckinStatus>;
-    claimCheckin(): Promise<CheckinStatus>;
     /**
-     * One automatic check-in pass: report today's grant, or ask the website path
-     * to issue it. Shared so overlapping timers cannot spend two call slots.
+     * Read today's grant. **Read-only on purpose.**
+     *
+     * The gateway has no claim endpoint: points are issued on the day's first
+     * website visit. Replaying that visit (`setting_info`) can trigger the grant
+     * from here, but doing so takes a state-changing action on the account without
+     * the user asking for it in that moment, so the plugin only reports. Claiming
+     * is the website's job, and the card links there.
      */
-    ensureDailyCheckin(): Promise<CheckinStatus>;
+    checkinStatus(): Promise<CheckinStatus>;
     stream(options: GenerateOptions, model: string, readImage: ReadImage | undefined, onUnauthorized?: () => void): AsyncGenerator<StreamChunk>;
 }

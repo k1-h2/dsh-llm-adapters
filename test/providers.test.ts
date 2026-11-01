@@ -268,33 +268,11 @@ describe('RaccoonProvider', () => {
     })
   })
 
-  it('reuses an existing grant instead of calling the website again', async () => {
+  it('never triggers the grant: no claim path and no setting_info call', async () => {
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date())
-    let settingCalls = 0
+    const calls: string[] = []
     const fetchMock = vi.fn(async (url: string) => {
-      if (url.endsWith('/office/v3/setting_info')) {
-        settingCalls++
-        return json({ code: 0, data: {} })
-      }
-      return json({
-        code: 0,
-        data: { items: [{ biz_type: 'daily_grant', points: 300, grant_at: `${today}T00:00:00+08:00` }] },
-      })
-    })
-    const { provider } = make(fetchMock as unknown as typeof fetch)
-    expect(await provider.ensureDailyCheckin()).toMatchObject({ claimed: true, reward: 300 })
-    expect(settingCalls).toBe(0)
-  })
-
-  it('tries the web setting call before reporting a missing grant', async () => {
-    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date())
-    const seen: { setting: boolean, platform?: string } = { setting: false }
-    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
-      if (url.endsWith('/office/v3/setting_info')) {
-        seen.setting = true
-        seen.platform = (init.headers as Record<string, string>)['x-client-platform']
-        return json({ code: 0, data: { point_grant_popups: [] } })
-      }
+      calls.push(url)
       if (url.includes('/points/v2/bills')) {
         return json({
           code: 0,
@@ -304,22 +282,26 @@ describe('RaccoonProvider', () => {
       throw new Error(`unexpected ${url}`)
     })
     const { provider } = make(fetchMock as unknown as typeof fetch)
-    expect(await provider.claimCheckin()).toMatchObject({
+    // The claim action is gone, so the settings page has nothing to trigger with.
+    expect('claimCheckin' in provider).toBe(false)
+    // Detection still reports what arrived, from the ledger only.
+    expect(await provider.checkinStatus()).toMatchObject({
       claimed: true,
       reward: 300,
       url: 'https://xiaohuanxiong.com/work/home',
     })
-    expect(seen).toEqual({ setting: true, platform: 'web' })
+    // `setting_info` is the page-visit call that issues points; it must not be
+    // spent as a side effect of merely looking.
+    expect(calls.some(url => url.includes('setting_info'))).toBe(false)
   })
 
   it('points at the web page when the grant did not arrive', async () => {
     const fetchMock = vi.fn(async (url: string) => {
-      if (url.endsWith('/office/v3/setting_info')) return json({ code: 0, data: {} })
       if (url.includes('/points/v2/bills')) return json({ code: 0, data: { items: [] } })
       throw new Error(`unexpected ${url}`)
     })
     const { provider } = make(fetchMock as unknown as typeof fetch)
-    expect(await provider.claimCheckin()).toMatchObject({
+    expect(await provider.checkinStatus()).toMatchObject({
       claimed: false,
       url: 'https://xiaohuanxiong.com/work/home',
     })

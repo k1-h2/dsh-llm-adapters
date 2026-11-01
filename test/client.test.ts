@@ -13,7 +13,8 @@ interface ClientExports {
     en: Record<string, unknown>
     css: Record<string, Record<string, unknown>>
     OPENROUTER_INTERVALS: { value: number, labelKey: string }[]
-    CHECKIN_INTERVALS: { value: number, labelKey: string }[]
+    /** Removed with the check-in monitor; asserted absent so it cannot come back. */
+    CHECKIN_INTERVALS: undefined
     windowLabel: (value: number) => string
     creditsOf: (value: number) => string
     meterPercentOf: (quota: Record<string, unknown> | undefined) => number | undefined
@@ -174,13 +175,20 @@ describe('client bundle', () => {
     expect(en.openRouterSyncFailed).toBe('Sync failed')
   })
 
-  it('offers a switchable Raccoon check-in monitor interval', () => {
+  it('keeps the Raccoon check-in manual: a button and the web link, no schedule', () => {
     const { zh, en, CHECKIN_INTERVALS } = exports.__test
-    expect(CHECKIN_INTERVALS.map(option => option.value)).toEqual([0, 15, 30, 60, 120])
-    expect(zh.checkinMonitorOff).toContain('关闭')
-    expect(zh.checkinEvery30).toContain('30')
-    expect(en.checkinMonitorOff).toBe('Monitor off')
-    expect(en.checkinEvery30).toContain('30')
+    // The monitor interval selector is gone; nothing may reintroduce a schedule.
+    expect(CHECKIN_INTERVALS).toBeUndefined()
+    for (const key of ['checkinMonitorOff', 'checkinInterval', 'checkinEvery15', 'checkinEvery30', 'checkinEvery60', 'checkinEvery120']) {
+      expect(zh[key]).toBeUndefined()
+      expect(en[key]).toBeUndefined()
+    }
+    // The two manual entries the user keeps are still translated.
+    expect(zh.checkinClaim).toBe('签到领积分')
+    expect(zh.checkinOpenWeb).toBe('打开网页签到')
+    expect(en.checkinClaim).toBe('Check in for credits')
+    expect(en.checkinOpenWeb).toBe('Open check-in page')
+    expect(zh.checkinMonitorHint).not.toContain('定时')
   })
 
   it('keeps the primary button dark with white text on both themes', () => {
@@ -340,7 +348,9 @@ describe('client bundle', () => {
       onAfterRefresh: () => undefined,
     })
     const text = textOf(rendered).join(' ')
-    expect(text).toContain('签到领积分')
+    // Detect-only: the button reads the ledger, it does not claim for the user.
+    expect(text).toContain('检测今日积分')
+    expect(text).not.toContain('签到领积分')
     expect(text).toContain('每日积分在当天首次打开网页时发放')
     expect(text).toContain('打开网页签到')
     const links: Element[] = []
@@ -383,6 +393,19 @@ describe('client bundle', () => {
     expect(text).toContain('到账时间')
     // Claimed or not, the web page stays one click away.
     expect(text).toContain('打开网页签到')
+    // Raccoon has no claim path, so a credited day must not say "领取".
+    expect(text).not.toContain('签到领积分')
+    // Detection stays pressable after the points arrived: this button carries the
+    // check-in label, so it is identified by its own accessible text rather than
+    // by "some button on the card is enabled".
+    const buttons: Element[] = []
+    walk(rendered, element => {
+      if (element.type !== 'button') return
+      const label = textOf((element.props as { children?: unknown }).children).join('')
+      if (label.includes('今日已签到')) buttons.push(element)
+    })
+    expect(buttons).toHaveLength(1)
+    expect((buttons[0]!.props as { disabled?: boolean }).disabled).toBe(false)
     const links: Element[] = []
     walk(rendered, element => {
       if (element.type === 'a') links.push(element)

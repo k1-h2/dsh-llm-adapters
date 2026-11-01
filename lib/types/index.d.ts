@@ -117,7 +117,6 @@ export declare const Config: import("@deepseek-ai/schemastery").default<Schemast
     modelCacheTtlSeconds: import("@deepseek-ai/schemastery").default<number, number, "volatile-defined">;
     catalogFetchTimeoutSeconds: import("@deepseek-ai/schemastery").default<number, number, "volatile-defined">;
     openRouterSyncMinutes: import("@deepseek-ai/schemastery").default<number, number, "volatile-defined">;
-    raccoonCheckinMinutes: import("@deepseek-ai/schemastery").default<number, number, "volatile-defined">;
 }>>, Schemastery.ObjectT<NoInfer<{
     loomyEnabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "volatile-defined">;
     raccoonEnabled: import("@deepseek-ai/schemastery").default<boolean, boolean, "volatile-defined">;
@@ -152,6 +151,5 @@ export declare const Config: import("@deepseek-ai/schemastery").default<Schemast
     modelCacheTtlSeconds: import("@deepseek-ai/schemastery").default<number, number, "volatile-defined">;
     catalogFetchTimeoutSeconds: import("@deepseek-ai/schemastery").default<number, number, "volatile-defined">;
     openRouterSyncMinutes: import("@deepseek-ai/schemastery").default<number, number, "volatile-defined">;
-    raccoonCheckinMinutes: import("@deepseek-ai/schemastery").default<number, number, "volatile-defined">;
 }>>, "plain">;
 export declare function apply(ctx: Context, config: ParsedConfig): void;
