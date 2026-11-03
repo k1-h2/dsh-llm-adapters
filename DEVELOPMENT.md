@@ -485,6 +485,13 @@ DSH 的原生适配器会在图片旁附上 `requestImageHandleText()`：附件�
 `offloadedImageText()`。适配器还会记住每个模型上一次验证过的 `vision` 能力：目录某次读不到时不再
 谎报 text-only——那会让 DSH 在适配器之前就把像素换成占位符。
 
+**工具结果的图片不在 tool 行里发。** `read_image` 把图片作为 tool 消息里的 image block 返回；
+OpenAI 的 `tool` content 只接受字符串或文本分段，严格的网关会拒绝 `image_url`，而旧代码在
+`buildMessages` 里直接只取文本，把像素整块丢掉——模型因此对 `C:\pictures\9.png` 这类本地路径
+一直回「看不到图片」。现在 tool 行保留文本与图片句柄，像素在一段连续的 tool 结果结束后合并成
+一条 user 消息发出：既不打乱 assistant 的 tool_call 与结果配对，也复用各家已经验证可用的 user
+图片通道。CodeArts 的转述同样覆盖这条消息，文本模型收到的是转述而不是被丢弃的图片。
+
 - 上游只给 `[DONE]`、不给 `finish_reason` 时（Loomy 会这样截断），标记为 `max-tokens`。
 - usage 全部向上取整并保证 `reasoningTokens <= outputTokens`；DSH 的持久化校验不接受小数。
 - OpenAI 规范的流会在中间帧带 `"usage": null`（CodeArts 的 VL 模型就是这样），`usageOf` 必须同时

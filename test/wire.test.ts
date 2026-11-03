@@ -160,6 +160,86 @@ describe('buildMessages', () => {
       { role: 'tool', tool_call_id: 'c1', content: 'ok' },
     ])
   })
+
+  it('lifts an image from a tool result into the following user turn', async () => {
+    // `read_image` returns its picture as a tool result. A strict OpenAI tool
+    // row only accepts text, so the pixels used to be dropped entirely and the
+    // model answered that it could not see the local file.
+    const messages = await buildMessages({
+      ...baseOptions,
+      system: undefined,
+      messages: [
+        {
+          role: 'assistant',
+          id: 'a1' as never,
+          source: { kind: 'model', provider: 'x', model: 'm' },
+          content: [
+            { type: 'text', text: 'reading' },
+            { type: 'tool-call', id: 'c1' as never, name: 'read_image', arguments: '{"file_path":"C:/pictures/9.png"}' },
+          ],
+        },
+        {
+          role: 'tool',
+          id: 't1' as never,
+          source: { kind: 'tool', callId: 'c1' as never },
+          toolCallId: 'c1' as never,
+          content: [
+            { type: 'text', text: '<path>C:/pictures/9.png</path>' },
+            {
+              type: 'image',
+              attachment: { attachmentId: 'sha256:abcd', mediaType: 'image/png', bytes: 3, width: 2, height: 2, name: '9.png' },
+            },
+          ],
+        },
+      ],
+    }, async () => ({
+      data: new Uint8Array([1, 2, 3]),
+      mediaType: 'image/png',
+      path: 'C:/pictures/9.png',
+    }))
+
+    expect(messages).toHaveLength(3)
+    const tool = messages[1] as { role: string, content: string }
+    expect(tool.role).toBe('tool')
+    expect(tool.content).toContain('<path>C:/pictures/9.png</path>')
+    expect(tool.content).toContain('C:/pictures/9.png')
+    expect(messages[2]).toEqual({
+      role: 'user',
+      content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } }],
+    })
+  })
+
+  it('coalesces images from a run of tool results without splitting the run', async () => {
+    const messages = await buildMessages({
+      ...baseOptions,
+      system: undefined,
+      messages: [
+        {
+          role: 'tool',
+          id: 't1' as never,
+          source: { kind: 'tool', callId: 'c1' as never },
+          toolCallId: 'c1' as never,
+          content: [{
+            type: 'image',
+            attachment: { attachmentId: 'sha256:aa', mediaType: 'image/png', bytes: 3, width: 1, height: 1 },
+          }],
+        },
+        {
+          role: 'tool',
+          id: 't2' as never,
+          source: { kind: 'tool', callId: 'c2' as never },
+          toolCallId: 'c2' as never,
+          content: [{
+            type: 'image',
+            attachment: { attachmentId: 'sha256:bb', mediaType: 'image/png', bytes: 3, width: 1, height: 1 },
+          }],
+        },
+      ],
+    }, async () => ({ data: new Uint8Array([1, 2, 3]), mediaType: 'image/png' }))
+
+    expect(messages.map(message => message.role)).toEqual(['tool', 'tool', 'user'])
+    expect(messages[2]!.content).toHaveLength(2)
+  })
 })
 
 describe('sseEvents', () => {

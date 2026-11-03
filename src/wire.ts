@@ -88,46 +88,91 @@ function filePlaceholder(block: Extract<ContentBlock, { type: 'file' }>): string
   return `[附件：${block.attachment.name}（${block.attachment.bytes} 字节）]`
 }
 
+interface ProjectedImage {
+  /** The model-facing handle, always present. */
+  text: string
+  /** The data URL, absent when the image cannot be sent with this request. */
+  part?: Record<string, unknown>
+}
+
+async function projectImage(
+  block: Extract<ContentBlock, { type: 'image' }>,
+  readImage: ReadImage | undefined,
+  signal?: AbortSignal,
+): Promise<ProjectedImage> {
+  if (block.offloaded === true) {
+    // Dropped to fit the request image limits: the harness's own handle
+    // says so, and repeating the pixels is exactly what was avoided.
+    return { text: offloadedImageText(block.attachment) }
+  }
+  if (readImage === undefined) {
+    return { text: imageRefText(block.attachment, undefined) }
+  }
+  let image: Awaited<ReturnType<ReadImage>>
+  try {
+    image = await readImage(block.attachment, signal)
+  } catch {
+    image = undefined
+  }
+  if (image === undefined) return { text: '[图片读取失败]' }
+  return {
+    text: imageRefText(block.attachment, image.path),
+    part: {
+      type: 'image_url',
+      image_url: { url: `data:${image.mediaType};base64,${Buffer.from(image.data).toString('base64')}` },
+    },
+  }
+}
+
 async function userContent(blocks: readonly ContentBlock[], readImage: ReadImage | undefined, signal?: AbortSignal): Promise<string | Record<string, unknown>[]> {
   const parts: Record<string, unknown>[] = []
   let hasImage = false
   for (const block of blocks) {
     if (block.type === 'text') parts.push({ type: 'text', text: block.text })
     else if (block.type === 'image') {
-      if (block.offloaded === true) {
-        // Dropped to fit the request image limits: the harness's own handle
-        // says so, and repeating the pixels is exactly what was avoided.
-        parts.push({ type: 'text', text: offloadedImageText(block.attachment) })
-        continue
-      }
-      if (readImage === undefined) {
-        parts.push({ type: 'text', text: imageRefText(block.attachment, undefined) })
-        continue
-      }
-      let image: Awaited<ReturnType<ReadImage>>
-      try {
-        image = await readImage(block.attachment, signal)
-      } catch {
-        image = undefined
-      }
-      if (image === undefined) {
-        parts.push({ type: 'text', text: '[图片读取失败]' })
-        continue
-      }
       // Handle first, pixels second: the text names the file the model may
       // copy and edit, and the data URL lets it read the picture.
-      parts.push({ type: 'text', text: imageRefText(block.attachment, image.path) })
-      parts.push({
-        type: 'image_url',
-        image_url: { url: `data:${image.mediaType};base64,${Buffer.from(image.data).toString('base64')}` },
-      })
-      hasImage = true
+      const image = await projectImage(block, readImage, signal)
+      parts.push({ type: 'text', text: image.text })
+      if (image.part !== undefined) {
+        parts.push(image.part)
+        hasImage = true
+      }
     } else if (block.type === 'file') {
       parts.push({ type: 'text', text: filePlaceholder(block) })
     }
   }
   if (!hasImage) return parts.filter(part => part.type === 'text').map(part => String(part.text)).join('')
   return parts.filter(part => part.type === 'text' ? String(part.text).length > 0 : true)
+}
+
+/**
+ * A tool result that carries an image.
+ *
+ * OpenAI's `tool` content is string-or-text-parts, so an `image_url` part in a
+ * tool row is rejected by strict gateways. The handle also has to stay next to
+ * the tool's own output; the pixels are lifted into the user turn that follows
+ * the tool-result run, where every route here already accepts them. Without
+ * this, `read_image` on a local path answered with text only and the model
+ * reported it could not see the picture.
+ */
+async function toolContent(
+  blocks: readonly ContentBlock[],
+  readImage: ReadImage | undefined,
+  signal?: AbortSignal,
+): Promise<{ content: string, images: Record<string, unknown>[] }> {
+  const texts: string[] = []
+  const images: Record<string, unknown>[] = []
+  for (const block of blocks) {
+    if (block.type === 'text') texts.push(block.text)
+    else if (block.type === 'file') texts.push(filePlaceholder(block))
+    else if (block.type === 'image') {
+      const image = await projectImage(block, readImage, signal)
+      texts.push(image.text)
+      if (image.part !== undefined) images.push(image.part)
+    }
+  }
+  return { content: texts.join(''), images }
 }
 
 /** One OpenAI wire message. Tool calls are kept at their raw JSON strings. */
@@ -149,7 +194,17 @@ export async function buildMessages(options: GenerateOptions, readImage?: ReadIm
   const system: string[] = []
   if (options.system !== undefined && options.system.trim().length > 0) system.push(options.system)
 
+  // Tool images wait here until the contiguous tool-result run ends, so the
+  // lifted user turn never splits an assistant call from its results.
+  let liftedImages: Record<string, unknown>[] = []
+  const flushImages = (): void => {
+    if (liftedImages.length === 0) return
+    out.push({ role: 'user', content: liftedImages })
+    liftedImages = []
+  }
+
   for (const message of options.messages) {
+    if (message.role !== 'tool') flushImages()
     if (message.role === 'system') {
       const text = textOf(message.content)
       if (text.length > 0) system.push(text)
@@ -165,11 +220,13 @@ export async function buildMessages(options: GenerateOptions, readImage?: ReadIm
       continue
     }
     if (message.role === 'tool') {
+      const projected = await toolContent(message.content, readImage, options.signal)
       out.push({
         role: 'tool',
         tool_call_id: String(message.toolCallId),
-        content: textOf(message.content),
+        content: projected.content,
       })
+      liftedImages.push(...projected.images)
       continue
     }
     const text = textOf(message.content)
@@ -187,6 +244,7 @@ export async function buildMessages(options: GenerateOptions, readImage?: ReadIm
     })
   }
 
+  flushImages()
   if (system.length > 0) out.unshift({ role: 'system', content: system.join('\n\n') })
   return out
 }

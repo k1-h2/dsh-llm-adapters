@@ -400,6 +400,74 @@ describe('CodeArts provider', () => {
     expect(chunks.some(chunk => chunk.type === 'text-delta')).toBe(true)
   })
 
+  it('transcribes an image returned by a tool for a text model', async () => {
+    // `read_image` delivers the picture in a tool result. The wire lifts it
+    // into the following user turn; the relay must pick that up too, or a text
+    // model is told about a local file it still cannot see.
+    const bodies: Record<string, unknown>[] = []
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>
+      bodies.push(body)
+      if (body.model === 'kimi-k2.6-vl') {
+        return sse([
+          JSON.stringify({ choices: [{ delta: { content: '工具读到的图片：一匹黑色的马。' } }] }),
+          '[DONE]',
+        ])
+      }
+      return sse([JSON.stringify({ choices: [{ delta: { content: 'ok' } }] }), '[DONE]'])
+    })
+    const provider = make(signedIn(), fetchMock as unknown as typeof fetch)
+    const bytes = new Uint8Array([9, 9, 9, 9])
+    const options: GenerateOptions = {
+      provider: 'codearts',
+      model: 'glm-5.3',
+      messages: [
+        {
+          role: 'assistant',
+          id: 'a' as never,
+          source: { kind: 'model', provider: 'codearts', model: 'glm-5.3' },
+          content: [{
+            type: 'tool-call',
+            id: 'c1' as never,
+            name: 'read_image',
+            arguments: '{"file_path":"C:/pictures/9.png"}',
+          }],
+        },
+        {
+          role: 'tool',
+          id: 't' as never,
+          source: { kind: 'tool', callId: 'c1' as never },
+          toolCallId: 'c1' as never,
+          content: [
+            { type: 'text', text: '<path>C:/pictures/9.png</path>' },
+            {
+              type: 'image',
+              attachment: {
+                attachmentId: 'attachment-tool-1',
+                mediaType: 'image/png',
+                bytes: bytes.length,
+                width: 1,
+                height: 1,
+              },
+            },
+          ],
+        },
+      ],
+      maxTokens: 1024,
+    }
+
+    await collect(provider.stream(options, 'glm-5.3', readImageOf(bytes), () => undefined))
+
+    expect(bodies).toHaveLength(2)
+    expect(bodies[0]!.model).toBe('kimi-k2.6-vl')
+    expect(JSON.stringify(bodies[0]!.messages)).toContain('image_url')
+    expect(bodies[1]!.model).toBe('glm-5.3')
+    const relayed = JSON.stringify(bodies[1]!.messages)
+    expect(relayed).not.toContain('image_url')
+    expect(relayed).toContain('工具读到的图片')
+    expect(relayed).toContain('C:/pictures/9.png')
+  })
+
   it('reuses a transcript instead of spending another session on the same image', async () => {
     let visionCalls = 0
     let mainCalls = 0
