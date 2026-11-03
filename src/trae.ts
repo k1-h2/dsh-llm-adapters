@@ -1259,12 +1259,12 @@ export class TraeProvider {
         },
       }
     }
-    if (!/^\d{16}$/.test(identity.deviceId)) {
+    if (!/^\d{1,40}$/.test(identity.deviceId)) {
       return {
         ok: false,
         status: {
           available: false, claimed: false, deviceClaimed: false,
-          message: '本机 Trae 客户端登录缺少 16 位设备号，请先在客户端重新登录后再复用。',
+          message: '本机 Trae 客户端登录缺少设备号，请先在客户端重新登录后再复用。',
         },
       }
     }

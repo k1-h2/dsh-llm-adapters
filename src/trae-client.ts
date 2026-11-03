@@ -6,7 +6,7 @@
  * signed in, the plugin can reuse that state instead:
  *
  *  - the `Cloud-IDE-JWT` stored under `iCubeAuthInfo://icube.cloudide`;
- *  - the 16-digit device id encoded in the `iCubeAuthInfo://icube-dc:<id>` key;
+ *  - the device id encoded in the `iCubeAuthInfo://icube-dc:<id>` key;
  *  - `telemetry.machineId`, the value the client sends as `x-machine-id`.
  *
  * The stored value uses the client's own AES-CBC envelope: six magic bytes, a
@@ -70,7 +70,7 @@ const AES_PRIVATE_SALT = Buffer.from(
   + '9c7166efab232807390da78a8b91e49c44b49a43feb941a1e46f2656e613e47b',
   'hex',
 )
-const DEVICE_RE = /^\d{16}$/
+const DEVICE_RE = /^\d{1,40}$/
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -270,7 +270,7 @@ export function parseTraeClientStorage(
   }
   const deviceId = deviceIdOf(storage)
   if (deviceId === undefined) {
-    return unavailable('本机 Trae 客户端登录缺少 16 位设备号，请先在客户端重新登录。')
+    return unavailable('本机 Trae 客户端登录缺少设备号，请先在客户端重新登录。')
   }
   const machineId = text(storage[MACHINE_KEY]) ?? text(storage[SERVICE_MACHINE_KEY])
   if (machineId === undefined) {

@@ -195,7 +195,11 @@ Trae 的每日签到只在“复用本机客户端登录态”时开放。网页
 `User/globalStorage/storage.json` 里的 `iCubeAuthInfo://icube.cloudide`：密文头部是 6 字节
 magic + 32 字节密钥材料，AES-128-CBC 的 key/IV 由两级 SHA-512 与固定 salt 派生，明文是
 SHA-512 摘要 + JSON。插件从解密结果取 `Cloud-IDE-JWT`，从
-`iCubeAuthInfo://icube-dc:<16 位设备号>` 取设备号，从 `telemetry.machineId` 取机器码；
+`iCubeAuthInfo://icube-dc:<设备号>` 取设备号，从 `telemetry.machineId` 取机器码；
+设备号长度不是常量：国内版 2.3.x 实际注册的是 15 位数字串，
+所以校验只要求“非空数字串”，不能按固定 16 位拦截——早期版本按 16 位卡，导致已登录的客户端
+在设置页仍报「缺少设备号」。15 位设备号提交 `checkin_credits/status` 实测直接回
+`200 {code:0}`，补零成 16 位反而返回 `did_checked_in:false`，因此必须原样使用客户端值。
 只读、不回写，客户端退出或令牌过期后重新复用。`checkinStatus` / `claimCheckin` 只在该来源下
 调用 `/trae/api/v2/ug/checkin_credits/{status,claim}`，body 为 `{ req_source: 1 }`，并直接
 使用客户端设备号（不做派生）。数据目录按区域默认取 `%APPDATA%\Trae CN` / `%APPDATA%\Trae`

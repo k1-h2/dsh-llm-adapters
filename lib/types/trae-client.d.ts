@@ -6,7 +6,7 @@
  * signed in, the plugin can reuse that state instead:
  *
  *  - the `Cloud-IDE-JWT` stored under `iCubeAuthInfo://icube.cloudide`;
- *  - the 16-digit device id encoded in the `iCubeAuthInfo://icube-dc:<id>` key;
+ *  - the device id encoded in the `iCubeAuthInfo://icube-dc:<id>` key;
  *  - `telemetry.machineId`, the value the client sends as `x-machine-id`.
  *
  * The stored value uses the client's own AES-CBC envelope: six magic bytes, a

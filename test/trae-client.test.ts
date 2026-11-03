@@ -110,12 +110,23 @@ describe('Trae client login state', () => {
     expect(parseTraeClientStorage('global', other('CN')).status.error).toContain('国内版')
   })
 
-  it('requires the 16-digit client device id the check-in route accepts', () => {
+  it('requires a client device id for the check-in route', () => {
     const value = storage()
     delete value[`iCubeAuthInfo://icube-dc:${DEVICE}`]
     const result = parseTraeClientStorage('cn', value)
     expect(result.state).toBeUndefined()
     expect(result.status.error).toContain('设备号')
+  })
+
+  it('accepts a 15-digit device id, which real clients register', () => {
+    // Trae CN registers 15-digit ids; the old 16-digit rule refused them.
+    const device = '123456789012345'
+    expect(device).toHaveLength(15)
+    const result = parseTraeClientStorage('cn', storage({
+      [`iCubeAuthInfo://icube-dc:${device}`]: 'ignored',
+    }))
+    expect(result.status).toMatchObject({ signedIn: true })
+    expect(result.state?.deviceId).toBe(device)
   })
 
   it('distinguishes a missing login from an unreadable one', () => {

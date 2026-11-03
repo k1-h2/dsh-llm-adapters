@@ -1141,6 +1141,28 @@ describe('TraeProvider', () => {
     expect(JSON.parse(String(calls[0]!.init?.body))).toEqual({ req_source: 1 })
   })
 
+  it('accepts a 15-digit device id, which real client installs register', async () => {
+    const calls: { url: string, init?: RequestInit }[] = []
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, init })
+      return json({ enable: true, checked_in: false, did_checked_in: false, credits: 100 })
+    })
+    const { provider } = make(
+      'cn',
+      fetchMock as unknown as typeof fetch,
+      undefined,
+      {
+        status: async () => ({ signedIn: true, loginSource: 'client' }),
+        accessToken: async () => 'client-token',
+        identity: async () => ({ deviceId: '123456789012345', machineId: 'client-machine' }),
+      },
+    )
+    // Trae CN stores a 15-digit id; a strict 16-digit rule blocked check-in.
+    expect(await provider.checkinStatus()).toMatchObject({ available: true })
+    const headers = calls[0]!.init?.headers as Record<string, string>
+    expect(headers['x-device-id']).toBe('123456789012345')
+  })
+
   it('claims the client check-in and reports its reward', async () => {
     const fetchMock = vi.fn(async (url: string) => {
       expect(url).toContain('/trae/api/v2/ug/checkin_credits/claim')
