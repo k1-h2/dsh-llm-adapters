@@ -88,6 +88,30 @@ function filePlaceholder(block: Extract<ContentBlock, { type: 'file' }>): string
   return `[附件：${block.attachment.name}（${block.attachment.bytes} 字节）]`
 }
 
+/**
+ * Model-facing note for one mid-conversation tool change.
+ *
+ * OpenAI-compatible gateways have no `defer_loading` / `tool_addition`
+ * vocabulary: the request's `tools` array is the only declaration, and it is
+ * re-sent in full every turn. Swapping entries there tells the model what it
+ * *may* call, but nothing tells it that the set changed — an agent that had
+ * already planned around the previous set kept reaching for tools that were
+ * gone, and never tried the ones that had just appeared. The words have to
+ * come from the message stream, which is what this note carries.
+ *
+ * It sits at the position of the change rather than in the leading system
+ * prompt so the cached prefix survives a tool install or removal.
+ */
+function toolChangeNotice(
+  added: readonly string[],
+  removed: readonly string[],
+): string {
+  const parts: string[] = []
+  if (added.length > 0) parts.push(`新增可用工具：${added.join('、')}`)
+  if (removed.length > 0) parts.push(`已移除工具：${removed.join('、')}`)
+  return `[工具变更] ${parts.join('；')}。本次请求的 tools 列表即当前可用集合，请按它调用。`
+}
+
 interface ProjectedImage {
   /** The model-facing handle, always present. */
   text: string
@@ -211,8 +235,22 @@ export async function buildMessages(options: GenerateOptions, readImage?: ReadIm
       continue
     }
     if (message.role === 'developer') {
+      // Free-form developer text is a system-level instruction; the tool-change
+      // blocks are not. They describe one moment in the conversation, so they
+      // go out as a user turn at that point: hoisting them into the leading
+      // system prompt would both lose the ordering and invalidate the cached
+      // prefix every time a tool is installed.
       const text = textOf(message.content)
       if (text.length > 0) system.push(text)
+      const added = message.content
+        .filter((block): block is Extract<ContentBlock, { type: 'tool-addition' }> => block.type === 'tool-addition')
+        .map(block => block.toolName)
+      const removed = message.content
+        .filter((block): block is Extract<ContentBlock, { type: 'tool-removal' }> => block.type === 'tool-removal')
+        .map(block => block.toolName)
+      if (added.length > 0 || removed.length > 0) {
+        out.push({ role: 'user', content: toolChangeNotice(added, removed) })
+      }
       continue
     }
     if (message.role === 'user') {

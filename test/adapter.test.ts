@@ -96,6 +96,17 @@ describe('LocalAdapter', () => {
     })
   })
 
+  it('declares addition-only tool updates on every route', async () => {
+    // Without this DSH treats the route as unable to follow a tool change: it
+    // starts a new request series, rewrites the system prompt, and drops
+    // developer tool-change blocks — so the model never hears that a tool
+    // appeared. Every route here speaks an OpenAI-compatible dialect, where an
+    // added tool is immediately callable but a removal has no wire vocabulary.
+    const { adapter } = makeAdapter()
+    expect((await adapter.resolveModel('loomy', 'alias')).toolUpdate).toBe('addition-only')
+    expect((await adapter.resolveModel('loomy', 'missing-model')).toolUpdate).toBe('addition-only')
+  })
+
   it('resolves from the cached catalog instead of waiting for a refresh', async () => {
     // DSH re-resolves a model on every switch and level change. Waiting on a
     // catalog refresh there froze the picker whenever the TTL had just expired.

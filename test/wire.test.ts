@@ -240,6 +240,76 @@ describe('buildMessages', () => {
     expect(messages.map(message => message.role)).toEqual(['tool', 'tool', 'user'])
     expect(messages[2]!.content).toHaveLength(2)
   })
+
+  it('tells the model when the tool set changed mid-conversation', async () => {
+    // The request's `tools` array is the only declaration these gateways get,
+    // and it is re-sent in full every turn. Swapping entries there never told
+    // the model something changed, so it kept calling tools that were gone.
+    const messages = await buildMessages({
+      ...baseOptions,
+      system: undefined,
+      messages: [
+        {
+          role: 'user',
+          id: 'u1' as never,
+          source: { kind: 'user' },
+          content: [{ type: 'text', text: 'install the plugin' }],
+        },
+        {
+          role: 'developer',
+          id: 'd1' as never,
+          source: { kind: 'tool-registry' },
+          content: [
+            { type: 'tool-addition', toolName: 'dshm_install' },
+            { type: 'tool-addition', toolName: 'dshm_search' },
+          ],
+        } as never,
+      ],
+    })
+    expect(messages.map(message => message.role)).toEqual(['user', 'user'])
+    expect(messages[1]!.content).toBe(
+      '[工具变更] 新增可用工具：dshm_install、dshm_search。本次请求的 tools 列表即当前可用集合，请按它调用。',
+    )
+  })
+
+  it('records a removal alongside the additions in one notice', async () => {
+    const messages = await buildMessages({
+      ...baseOptions,
+      system: undefined,
+      messages: [
+        {
+          role: 'developer',
+          id: 'd1' as never,
+          source: { kind: 'tool-registry' },
+          content: [
+            { type: 'tool-addition', toolName: 'ops_read_files' },
+            { type: 'tool-removal', toolName: 'ops_glob' },
+          ],
+        } as never,
+      ],
+    })
+    expect(messages[0]!.content).toBe(
+      '[工具变更] 新增可用工具：ops_read_files；已移除工具：ops_glob。本次请求的 tools 列表即当前可用集合，请按它调用。',
+    )
+  })
+
+  it('keeps free-form developer text in the system prompt', async () => {
+    // Only the tool-change blocks describe a moment; any prose a developer
+    // message carries is still an instruction and belongs with the system text.
+    const messages = await buildMessages({
+      ...baseOptions,
+      system: 'global rule',
+      messages: [
+        {
+          role: 'developer',
+          id: 'd1' as never,
+          source: { kind: 'runtime-context' },
+          content: [{ type: 'text', text: 'workspace is read-only' }],
+        } as never,
+      ],
+    })
+    expect(messages).toEqual([{ role: 'system', content: 'global rule\n\nworkspace is read-only' }])
+  })
 })
 
 describe('sseEvents', () => {

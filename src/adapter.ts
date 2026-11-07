@@ -296,6 +296,17 @@ export abstract class LocalAdapter extends LlmAdapter {
       name: live?.name ?? target,
       ...live?.description === undefined ? {} : { description: live.description },
       inputModalities: vision ? ['text', 'image'] : ['text'],
+      // OpenAI-compatible gateways re-send the whole `tools` array every turn,
+      // so an added tool is already callable; what the model never learned was
+      // that the set changed. Declaring `addition-only` keeps DSH from
+      // recreating the request series on every tool add — which rewrote the
+      // system prompt and threw away the cached prefix — and delivers the
+      // change in band as a `tool-addition` block that `wire.ts` renders as a
+      // visible notice. Removals are not representable here: these gateways
+      // have no removal vocabulary, and the tool simply stops being declared;
+      // `in-history` would instead keep the dead tool declared and invite a
+      // call the gateway then rejects.
+      toolUpdate: 'addition-only',
       context: { contextWindow },
       defaultMaxTokens: Math.max(1, Math.floor(maxTokens)),
       ...live?.reasoningEfforts === undefined || live.reasoningEfforts.length === 0
