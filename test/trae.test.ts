@@ -486,6 +486,38 @@ describe('Trae stream', () => {
     const chunks = await collect(openTraeStream(stream(['event: output\ndata: {}']), 'x'))
     expect(chunks).toEqual([{ type: 'finish', reason: { kind: 'max-tokens' } }])
   })
+
+  it('keeps the whitespace between streamed fragments', async () => {
+    // Trae splits a sentence at arbitrary byte offsets. Trimming each fragment
+    // ate the joining space ("The" + "user" → "Theuser") and dropped pure
+    // whitespace frames, which glued a ```dsh-ui fence to its JSON payload and
+    // ate the newlines inside it. The model's answer was unreadable and its own
+    // tool result could not be used.
+    const chunks = await collect(openTraeStream(stream([
+      'event: output\ndata: {"response":"The user asks "}',
+      'event: output\ndata: {"response":"who are you"}',
+      'event: output\ndata: {"response":".\\n"}',
+      'event: output\ndata: {"response":"\\n"}',
+      'event: output\ndata: {"response":"```dsh-ui{"}',
+    ]), 'x'))
+    const text = chunks
+      .filter(chunk => chunk.type === 'text-delta')
+      .map(chunk => (chunk as { text: string }).text)
+      .join('')
+    expect(text).toBe('The user asks who are you.\n\n```dsh-ui{')
+  })
+
+  it('keeps the whitespace between streamed reasoning fragments', async () => {
+    const chunks = await collect(openTraeStream(stream([
+      'event: output\ndata: {"reasoning_content":"the user "}',
+      'event: output\ndata: {"reasoning_content":"wants a list"}',
+    ]), 'x'))
+    const reasoning = chunks
+      .filter(chunk => chunk.type === 'reasoning-delta')
+      .map(chunk => (chunk as { text: string }).text)
+      .join('')
+    expect(reasoning).toBe('the user wants a list')
+  })
 })
 
 describe('Trae quota and check-in parsing', () => {

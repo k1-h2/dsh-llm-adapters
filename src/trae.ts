@@ -199,6 +199,22 @@ function text(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined
 }
 
+/**
+ * One streamed text fragment, returned exactly as the wire carried it.
+ *
+ * {@link text} trims, which is right for a whole field read once (a model name,
+ * a sign-in message) and wrong for a delta: Trae splits a sentence across
+ * fragments at arbitrary byte offsets, so trimming each one ate the space that
+ * belonged between two words and dropped pure-whitespace fragments (newlines)
+ * outright. A turn then arrived as `Theuser asks` / ```` ```dsh-ui{ ```` — the
+ * fence marker glued to its JSON — and the model's own tool result was
+ * unusable. Whitespace between fragments is content; only a fragment that is
+ * entirely absent or empty is nothing.
+ */
+function fragment(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
 function num(value: unknown): number | undefined {
   if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value
   if (typeof value === 'string' && /^\d+(?:\.\d+)?$/.test(value.trim())) return Number(value)
@@ -731,7 +747,7 @@ export async function* openTraeStream(body: ReadableStream<Uint8Array>, model: s
       if (typeof root.finish_reason === 'string') finish = root.finish_reason
       continue
     }
-    const reasoning = text(root.reasoning_content)
+    const reasoning = fragment(root.reasoning_content)
     if (reasoning !== undefined) {
       if (current?.kind !== 'reasoning') {
         const ended = close()
@@ -742,7 +758,7 @@ export async function* openTraeStream(body: ReadableStream<Uint8Array>, model: s
       sawContent = true
       yield { type: 'reasoning-delta', index: current!.index, text: reasoning }
     }
-    const response = text(root.response)
+    const response = fragment(root.response)
     if (response !== undefined) {
       if (current?.kind !== 'text') {
         const ended = close()

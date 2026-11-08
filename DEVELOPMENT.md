@@ -154,7 +154,7 @@ assistant 的工具调用放在 `function_call`，工具的 `parameters` 是 JSO
 介于默认窗口与 Max 之间时才出现，落盘值不是该模型可选窗口时会被忽略，不会把模型撑到它没有
 的窗口。
 
-工具调用的流有三条必须遵守的细节，都是实测出来的：
+工具调用的流有四条必须遵守的细节，都是实测出来的：
 
 1. **id 只在首帧出现。** 参数分片的 `tool_calls[]` 会重复 `index`，但 `id` 与 `type` 是空串。
    把空串当成值写入会把真实 id 覆盖掉，宿主随后就会报
@@ -165,6 +165,13 @@ assistant 的工具调用放在 `function_call`，工具的 `parameters` 是 JSO
    `param is invalid`。工具没有文本时补一个空 text block。
 3. **一次响应可以带多个工具调用**，`index` 0/1/… 各自独立；`finish_reason` 仍是 `stop`，
    所以有工具调用时按 `tool-calls` 收尾，否则宿主不会执行它们。
+4. **流式分片不能 `trim()`。** Trae 按任意字节边界切句，分片之间的空白属于内容本身：
+   逐片 `trim()` 会吃掉两词之间的空格（`The` + `user` → `Theuser`），纯空白分片（换行）
+   则被整片丢弃——于是 ```` ```dsh-ui ```` 和它后面的 JSON 粘成一行，围栏失效、正文换行全部丢失。
+   实测同一份对照里 Trae 的 2 条回复全部粘连，而走 `wire.ts` 的 Loomy / 小浣熊 / CodeArts 是 0 条。
+   整字段读取（模型名、登录提示）仍可用会 trim 的 `text()`，只有 `reasoning_content` /
+   `response` 这种逐分片下发的内容必须走不做任何处理的 `fragment()`。
+   症状容易误判成「工具调用结果没出来」：结果是有的，只是模型拿到的正文坏了。
 
 `max_tokens` 会被透传（上游接受）；图片走 `image_url` 的 data URL，实测被网关正常识别。
 高级设置里的 `traeVisionModelIds` / `traeTextOnlyModelIds` 在目录合并后生效，`textOnly` 优先。
