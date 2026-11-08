@@ -309,6 +309,26 @@ const QUEUE_ATTEMPTS = 3
 const QUEUE_BACKOFF_MS = 20_000
 
 /**
+ * Wall-clock limit for the wait for response headers (connect + first byte).
+ *
+ * The streamed body is deliberately NOT on this clock: `fetch` keeps its
+ * signal attached to the whole response, so a fixed `AbortSignal.timeout`
+ * there aborts a healthy, slow answer mid-stream with the native
+ * "The operation was aborted due to timeout". A reasoning model or a long
+ * answer can run for many minutes; only the caller's own signal should be
+ * able to stop it while it is still making progress.
+ */
+const CODEARTS_CONNECT_TIMEOUT_MS = 120_000
+
+/** Turn Node's native timeout DOMException into an actionable provider error. */
+function translateTimeout(error: unknown): unknown {
+  if (error instanceof DOMException && error.name === 'TimeoutError') {
+    return new ProviderHttpError('CodeArts 响应超时，请稍后重试或换一个模型。', 504)
+  }
+  return error
+}
+
+/**
  * The message a user sees once waiting is hopeless.
  *
  * The raw gateway text (`TM.00001041`) reads like a bug. The three concurrent
@@ -841,7 +861,7 @@ export class CodeArtsProvider {
           }
           throw queueExhausted()
         }
-        throw error
+        throw translateTimeout(error)
       }
       const trimmed = transcript.trim()
       if (trimmed.length === 0) throw new Error('识图模型没有返回内容')
@@ -968,7 +988,7 @@ export class CodeArtsProvider {
           onInvalidate()
           throw new Error('CodeArts 登录已失效，请在设置页重新登录。')
         }
-        throw error
+        throw translateTimeout(error)
       }
     }
   }
@@ -1012,13 +1032,37 @@ export class CodeArtsProvider {
       'user-session-id': otSessionId,
       'x-ot-trace-id': randomUUID().replace(/-/g, ''),
     }
-    const timeout = AbortSignal.timeout(Math.max(this.options.timeoutMs(), 60_000))
-    const response = await this.fetcher(CODEARTS_CHAT_URL, {
-      method: 'POST',
-      headers,
-      body: payload,
-      signal: signal === undefined ? timeout : AbortSignal.any([signal, timeout]),
-    })
+    // A wall-clock deadline belongs only on the wait for the response headers.
+    // Once they arrive the timer is cleared, so undici no longer has a fixed
+    // deadline tied to the streaming body; the caller's signal is then the only
+    // thing that can stop a long answer. A manual controller (rather than
+    // AbortSignal.timeout) is what lets us disarm the deadline after headers.
+    const controller = new AbortController()
+    let timedOut = false
+    const connectTimer = setTimeout(() => {
+      timedOut = true
+      controller.abort()
+    }, CODEARTS_CONNECT_TIMEOUT_MS)
+    connectTimer.unref?.()
+    const requestSignal = signal === undefined
+      ? controller.signal
+      : AbortSignal.any([controller.signal, signal])
+    let response: Response
+    try {
+      response = await this.fetcher(CODEARTS_CHAT_URL, {
+        method: 'POST',
+        headers,
+        body: payload,
+        signal: requestSignal,
+      })
+    } catch (error) {
+      if (timedOut) {
+        throw new ProviderHttpError('CodeArts 长时间没有开始响应，请检查网络/代理或稍后重试。', 504)
+      }
+      throw translateTimeout(error)
+    } finally {
+      clearTimeout(connectTimer)
+    }
     if (response.ok) return response
     const text = await response.text().catch(() => '')
     throw classifyFailure(response.status, text)
