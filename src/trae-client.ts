@@ -202,6 +202,21 @@ function deviceIdOf(storage: Record<string, unknown>): string | undefined {
   return undefined
 }
 
+/**
+ * The account id to send as `x-uid`, after Trae's server-side id merger.
+ *
+ * Newer clients carry `uidFusionInfo` beside `userId`: the old business id is
+ * still what the JWT claims, while `newUid` is the identity the account was
+ * migrated onto. Both answer today, so preferring the new one costs nothing and
+ * keeps the request on the id the client itself now considers current; when the
+ * field is missing — every client before the merger — the plain `userId` is
+ * still exactly right.
+ */
+function accountIdOf(userInfo: Record<string, unknown>): string | undefined {
+  const fusion = record(userInfo.uidFusionInfo)
+  return text(fusion?.newUid) ?? text(fusion?.businessUid) ?? text(userInfo.userId)
+}
+
 function regionMismatch(region: TraeRegion, userInfo: Record<string, unknown>): boolean {
   const account = record(userInfo.account)
   const userRegion = record(userInfo.userRegion)
@@ -250,7 +265,7 @@ export function parseTraeClientStorage(
   }
   const account = record(userInfo.account)
   const name = text(account?.username) ?? text(account?.name)
-  const userId = text(userInfo.userId)
+  const userId = accountIdOf(userInfo)
   const expiresAt = epochMs(userInfo.expiredAt) ?? jwtExpiry(token)
   const identity = {
     ...name === undefined ? {} : { name },

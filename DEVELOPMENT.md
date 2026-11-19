@@ -214,6 +214,13 @@ SHA-512 摘要 + JSON。插件从解密结果取 `Cloud-IDE-JWT`，从
 `DSH_TRAE_CN_CLIENT_DIR` 与 `DSH_TRAE_GLOBAL_CLIENT_DIR` 可覆盖它，测试与便携安装都走这组
 环境变量。
 
+**账号 id 会和服务端融合（`uidFusionInfo`）。** 客户端 3.4.x 起，解密结果的 `userId` 旁边多了一段
+`uidFusionInfo`：`businessUid` / `oldUid` 是旧号（JWT 的 `id` 也仍是它），`newUid` 是账号被迁移到
+的新身份。实测（2026-11，国内版 3.4.22）旧号、新号、不带 `x-uid` 三种都能正常对话，所以这不是
+一个「不补就会失败」的字段——但客户端自己已经按新号行动，插件继续报旧号迟早会在上游收紧时踩空。
+`accountIdOf()` 因此按 `newUid` → `businessUid` → `userId` 取值，前一个取不到才退到下一个：
+老客户端没有这段字段时行为与以前完全一致，字段存在但为空时也不会把空串当账号写进账号文件。
+
 ### 小浣熊的每日积分（`raccoon.ts`）
 
 没有独立的签到端点：积分由服务端在当天首次网页访问时发放，`setting_info` 的

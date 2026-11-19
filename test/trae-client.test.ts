@@ -85,6 +85,39 @@ describe('Trae client login state', () => {
     expect(JSON.stringify(result.status)).not.toContain('client-token')
   })
 
+  it('prefers the merged account id over the id the JWT still claims', () => {
+    // Newer clients add `uidFusionInfo` after Trae migrated accounts onto a new
+    // id: `userId` and the JWT keep naming the old business id, while `newUid`
+    // is the identity the client now considers current.
+    const result = parseTraeClientStorage('cn', storage({
+      'iCubeAuthInfo://icube.cloudide': encode(userInfo({
+        userId: '1320960634914284',
+        uidFusionInfo: {
+          businessUid: '1320960634914284',
+          oldUid: '1320960634914284',
+          newUid: '2916366537729300',
+          businessStatus: 0,
+        },
+      })),
+    }))
+    expect(result.status).toMatchObject({ signedIn: true, userId: '2916366537729300' })
+    expect(result.state).toMatchObject({ userId: '2916366537729300' })
+  })
+
+  it('falls back to the plain userId when no merger record is present', () => {
+    const result = parseTraeClientStorage('cn', storage())
+    expect(result.state).toMatchObject({ userId: '700000000000001' })
+  })
+
+  it('ignores an incomplete merger record instead of importing a blank id', () => {
+    const result = parseTraeClientStorage('cn', storage({
+      'iCubeAuthInfo://icube.cloudide': encode(userInfo({
+        uidFusionInfo: { businessUid: '', businessStatus: 0 },
+      })),
+    }))
+    expect(result.state).toMatchObject({ userId: '700000000000001' })
+  })
+
   it('reports an expired client token instead of importing it', () => {
     const result = parseTraeClientStorage('cn', storage({
       'iCubeAuthInfo://icube.cloudide': encode(userInfo({
